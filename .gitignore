@@ -1,0 +1,9 @@
+.DS_Store
+node_modules/
+.env
+.env.*
+*.log
+dist/
+# Runtime file store at plugin root (see getAttachmentsDir), not src/attachments/*.ts
+/attachments/
+.claude/settings.local.json

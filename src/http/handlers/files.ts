@@ -1,0 +1,361 @@
+/**
+ * File manager for Friday channel attachments.
+ *
+ * Files are copied under the plugin root `attachments/` and served at
+ * GET /friday/files/{token} so the app can use stable gateway URLs after restarts.
+ */
+
+import crypto from "node:crypto";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+
+function getPluginRootDir(): string {
+  return path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
+}
+
+/** Plugin-root `attachments/` directory; created on first use. */
+export function getAttachmentsDir(): string {
+  const dir = path.join(getPluginRootDir(), "attachments");
+  try {
+    fs.mkdirSync(dir, { recursive: true });
+  } catch {
+    // Already exists or permission denied
+  }
+  return dir;
+}
+
+export interface StoredFile {
+  id: string;
+  /** Path segment for /friday/files/{urlToken} (on-disk basename under attachments/). */
+  urlToken: string;
+  filename: string;
+  mimeType: string;
+  size: number;
+  path: string;
+  createdAt: number;
+}
+
+/** In-memory index of stored files (keys: uuid id and urlToken / disk basename). */
+const fileIndex = new Map<string, StoredFile>();
+const fileTokenIndex = new Map<string, StoredFile>();
+const externalFileSourceIndex = new Map<string, string>();
+
+function registerStoredFile(file: StoredFile): void {
+  fileIndex.set(file.id, file);
+  fileIndex.set(file.urlToken, file);
+  fileTokenIndex.set(file.id, file);
+  fileTokenIndex.set(file.urlToken, file);
+}
+
+function resolveStoredFile(key: string): StoredFile | undefined {
+  return fileIndex.get(key) ?? fileTokenIndex.get(key);
+}
+
+/**
+ * Read a file from `attachments/` by URL path token (disk basename).
+ * Used when the in-memory index was cleared after a gateway restart.
+ */
+export function readAttachmentFileFromDisk(fileToken: string): {
+  buffer: Buffer;
+  mimeType: string;
+  filename: string;
+} | null {
+  const safe = path.basename(fileToken);
+  if (!safe || safe === "." || safe === "..") return null;
+  const dir = getAttachmentsDir();
+  const full = path.join(dir, safe);
+  if (!fs.existsSync(full) || !fs.statSync(full).isFile()) return null;
+  try {
+    const buffer = fs.readFileSync(full);
+    return { buffer, mimeType: guessMimeType(safe), filename: safe };
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Copy a local file into `attachments/` and register it (no full-buffer read for the copy path).
+ */
+/** Expand ~, file://, etc. for paths coming from the agent / message tool. */
+export function normalizeAgentMediaPath(raw: string): string {
+  const s = raw.trim();
+  if (!s) return s;
+  try {
+    if (/^file:/i.test(s)) {
+      return fileURLToPath(s);
+    }
+  } catch {
+    // ignore malformed file URL
+  }
+  if (s.startsWith("~/") || s.startsWith("~\\")) {
+    return path.join(os.homedir(), s.slice(2));
+  }
+  if (s === "~") {
+    return os.homedir();
+  }
+  return s;
+}
+
+function copyLocalFileToAttachments(sourcePath: string): StoredFile | null {
+  const resolvedPath = normalizeAgentMediaPath(sourcePath);
+  const filename = path.basename(resolvedPath);
+  if (!filename) return null;
+  try {
+    if (!fs.existsSync(resolvedPath) || !fs.statSync(resolvedPath).isFile()) return null;
+    const id = crypto.randomUUID();
+    const ext = path.extname(filename);
+    const urlToken = ext ? `${id}${ext}` : id;
+    const storedPath = path.join(getAttachmentsDir(), urlToken);
+    try {
+      fs.copyFileSync(resolvedPath, storedPath);
+    } catch (copyErr) {
+      // macOS Desktop/iCloud files may fail copyFile with unknown errno (-11).
+      // Fallback to read+write so attachment persistence still works.
+      const raw = fs.readFileSync(resolvedPath);
+      fs.writeFileSync(storedPath, raw);
+      console.error(`[files] copyLocalFileToAttachments copy fallback used for "${resolvedPath}": ${String(copyErr)}`);
+    }
+    const stat = fs.statSync(storedPath);
+    const mimeType = guessMimeType(filename);
+    const file: StoredFile = {
+      id,
+      urlToken,
+      filename,
+      mimeType,
+      size: stat.size,
+      path: storedPath,
+      createdAt: Date.now(),
+    };
+    registerStoredFile(file);
+    return file;
+  } catch (err) {
+    console.error(`[files] copyLocalFileToAttachments failed for "${resolvedPath}": ${String(err)}`);
+    return null;
+  }
+}
+
+/**
+ * Store a file buffer and return its ID and metadata.
+ */
+export function storeFile(buffer: Buffer, filename: string, mimeType: string): StoredFile {
+  const id = crypto.randomUUID();
+  const safeFilename = path.basename(filename) || "file";
+  const ext = path.extname(safeFilename);
+  const urlToken = ext ? `${id}${ext}` : id;
+  const storedPath = path.join(getAttachmentsDir(), urlToken);
+
+  try {
+    fs.writeFileSync(storedPath, buffer);
+  } catch (err) {
+    throw new Error(`Failed to store file: ${String(err)}`);
+  }
+
+  const file: StoredFile = {
+    id,
+    urlToken,
+    filename: safeFilename,
+    mimeType,
+    size: buffer.length,
+    path: storedPath,
+    createdAt: Date.now(),
+  };
+
+  registerStoredFile(file);
+  return file;
+}
+
+/**
+ * Retrieve file metadata by ID or url token.
+ */
+export function getFile(id: string): StoredFile | undefined {
+  return resolveStoredFile(id);
+}
+
+/** Retrieve file metadata by URL token (basename under attachments/). */
+export function getFileByUrlToken(token: string): StoredFile | undefined {
+  return resolveStoredFile(token);
+}
+
+/**
+ * Path segment for lookup: raw uuid / urlToken, or token extracted from `/friday/files/...`.
+ */
+export function fridayAttachmentLookupKey(ref: string): string {
+  const s = ref.trim();
+  if (!s) return s;
+  if (s.startsWith("/friday/files/")) {
+    return decodeURIComponent(s.slice("/friday/files/".length));
+  }
+  return s;
+}
+
+/**
+ * Canonical gateway URL `/friday/files/{urlToken}` with extension when stored (for history, MediaUrls).
+ */
+export function fridayFilesPublicUrl(ref: string): string {
+  const lookupKey = fridayAttachmentLookupKey(ref);
+  if (!lookupKey) return ref.trim();
+
+  const file = resolveStoredFile(lookupKey);
+  if (file) {
+    return `/friday/files/${encodeURIComponent(file.urlToken)}`;
+  }
+
+  const disk = readAttachmentFileFromDisk(lookupKey);
+  if (disk) {
+    return `/friday/files/${encodeURIComponent(disk.filename)}`;
+  }
+
+  const trimmed = ref.trim();
+  if (trimmed.startsWith("/friday/files/")) {
+    return `/friday/files/${encodeURIComponent(lookupKey)}`;
+  }
+  return `/friday/files/${encodeURIComponent(lookupKey)}`;
+}
+
+export function getExternalFileSourceByUrlToken(token: string): string | undefined {
+  return externalFileSourceIndex.get(token);
+}
+
+/**
+ * Read a file as a Buffer with its MIME type (by id or urlToken).
+ */
+export function readFile(id: string): { buffer: Buffer | null; mimeType: string } {
+  const file = resolveStoredFile(id);
+  if (!file) return { buffer: null, mimeType: "application/octet-stream" };
+  try {
+    return { buffer: fs.readFileSync(file.path), mimeType: file.mimeType };
+  } catch {
+    return { buffer: null, mimeType: file.mimeType };
+  }
+}
+
+/** Read a file by URL token (basename). */
+export function readFileByUrlToken(token: string): { buffer: Buffer | null; mimeType: string } {
+  return readFile(token);
+}
+
+/**
+ * Copy a file from a local filesystem path into the Friday channel file store
+ * and return its /friday/files/{token} URL. If the path is already a Friday channel
+ * file URL (i.e. starts with "/friday/files/"), return it as-is.
+ */
+export function resolveMediaUrl(localPath: string): string {
+  if (localPath.startsWith("/friday/files/")) {
+    return localPath;
+  }
+
+  const stored = copyLocalFileToAttachments(localPath);
+  if (!stored) {
+    console.error(`[files] resolveMediaUrl: file not found or unreadable: ${localPath}`);
+    return localPath;
+  }
+  console.log(`[files] resolveMediaUrl: copied "${stored.filename}" → ${stored.urlToken}`);
+  return `/friday/files/${encodeURIComponent(stored.urlToken)}`;
+}
+
+export interface ResolvedAttachment {
+  fileName: string;
+  url: string;
+}
+
+/**
+ * Resolve a local path into a Friday-served attachment descriptor.
+ * Returns null when source file is missing or cannot be copied.
+ */
+export function resolveMediaAttachment(localPath: string): ResolvedAttachment | null {
+  if (localPath.startsWith("/friday/files/")) {
+    const token = decodeURIComponent(localPath.slice("/friday/files/".length));
+    const file = resolveStoredFile(token);
+    if (file) {
+      return {
+        fileName: file.filename,
+        url: `/friday/files/${encodeURIComponent(file.urlToken)}`,
+      };
+    }
+    const disk = readAttachmentFileFromDisk(token);
+    if (disk) {
+      return {
+        fileName: disk.filename,
+        url: `/friday/files/${encodeURIComponent(token)}`,
+      };
+    }
+    const fallback = path.basename(token);
+    return { fileName: fallback, url: localPath };
+  }
+
+  const filename = path.basename(localPath);
+  if (!filename) return null;
+
+  const stored = copyLocalFileToAttachments(localPath);
+  if (!stored) {
+    // Best-effort fallback: still return a Friday URL so app can receive attachment event.
+    // Download handler will try reading external source path lazily by token.
+    const id = crypto.randomUUID();
+    const ext = path.extname(filename);
+    const token = ext ? `${id}${ext}` : id;
+    externalFileSourceIndex.set(token, normalizeAgentMediaPath(localPath));
+    return {
+      fileName: filename,
+      url: `/friday/files/${encodeURIComponent(token)}`,
+    };
+  }
+  return {
+    fileName: stored.filename,
+    url: `/friday/files/${encodeURIComponent(stored.urlToken)}`,
+  };
+}
+
+/** Best-effort original display filename (with extension) for a URL/id/token/path ref. */
+export function resolveMediaFileName(ref: string): string {
+  const key = fridayAttachmentLookupKey(ref);
+  if (!key) return "";
+
+  const file = resolveStoredFile(key);
+  if (file) return file.filename;
+
+  const disk = readAttachmentFileFromDisk(key);
+  if (disk) return disk.filename;
+
+  const external = externalFileSourceIndex.get(key);
+  if (external) return path.basename(external);
+
+  return path.basename(key);
+}
+
+/**
+ * Guess MIME type from filename extension.
+ */
+export function guessMimeType(filename: string): string {
+  const ext = path.extname(filename).toLowerCase();
+  const mimeTypes: Record<string, string> = {
+    ".png": "image/png",
+    ".jpg": "image/jpeg",
+    ".jpeg": "image/jpeg",
+    ".gif": "image/gif",
+    ".webp": "image/webp",
+    ".heic": "image/heic",
+    ".pdf": "application/pdf",
+    ".mp4": "video/mp4",
+    ".mov": "video/quicktime",
+    ".mp3": "audio/mpeg",
+    ".wav": "audio/wav",
+    ".ogg": "audio/ogg",
+    ".opus": "audio/opus",
+    ".m4a": "audio/mp4",
+    ".aac": "audio/aac",
+    ".flac": "audio/flac",
+    ".zip": "application/zip",
+    ".txt": "text/plain",
+    ".md": "text/markdown",
+    ".markdown": "text/markdown",
+    ".doc": "application/msword",
+    ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    ".xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    ".pptx": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+    ".csv": "text/csv",
+    ".json": "application/json",
+  };
+  return mimeTypes[ext] ?? "application/octet-stream";
+}

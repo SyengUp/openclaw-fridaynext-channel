@@ -1,0 +1,11 @@
+{
+  "id": "friday",
+  "channels": ["friday"],
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "mode": { "type": "string" }
+    }
+  }
+}

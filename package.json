@@ -1,0 +1,27 @@
+{
+  "name": "@openclaw/friday-channel",
+  "version": "0.0.1",
+  "private": true,
+  "description": "OpenClaw Friday iOS channel plugin",
+  "type": "module",
+  "dependencies": {},
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ],
+    "channel": {
+      "id": "friday",
+      "label": "Friday",
+      "selectionLabel": "Friday (iOS)",
+      "detailLabel": "Friday iOS App",
+      "docsPath": "/channels/friday",
+      "docsLabel": "friday",
+      "blurb": "Native iOS app channel with full streaming support.",
+      "systemImage": "iphone",
+      "markdownCapable": true
+    },
+    "bundle": {
+      "stageRuntimeDependencies": true
+    }
+  }
+}
