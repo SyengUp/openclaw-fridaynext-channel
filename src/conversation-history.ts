@@ -436,6 +436,29 @@ function isAssistantMediaHistoryType(t: string): boolean {
   return t === "attachment" || t === "tts";
 }
 
+function fridayFilesUrlToken(url: string): string | null {
+  const s = url.trim();
+  const mAbs = s.match(/^https?:\/\/[^/]+\/friday\/files\/([^/?#]+)/i);
+  const mRel = s.match(/\/friday\/files\/([^/?#]+)/i);
+  const enc = mAbs?.[1] ?? mRel?.[1];
+  if (!enc) return null;
+  try {
+    return decodeURIComponent(enc);
+  } catch {
+    return enc;
+  }
+}
+
+/** Same Friday-served file may appear under slightly different URL strings; dedupe by path token. */
+function roundAlreadyHasFridayMediaToken(round: ConversationRound, url: string): boolean {
+  const tok = fridayFilesUrlToken(url);
+  if (!tok) return false;
+  return round.messages.some((m) => {
+    if (m.role !== "assistant" || !isAssistantMediaHistoryType(m.type)) return false;
+    return m.mediaUrls?.some((u) => fridayFilesUrlToken(u) === tok) ?? false;
+  });
+}
+
 function roundHasSameMediaAttachmentUrl(round: ConversationRound, urls: string[]): boolean {
   if (urls.length !== 1) return false;
   const only = urls[0];
@@ -490,17 +513,25 @@ export function appendAssistantBlock(params: {
     for (const item of params.attachments ?? []) {
       attachmentFileNameMap.set(item.url, item.fileName);
     }
-    for (const url of params.mediaUrls) {
-      if (roundHasSameMediaAttachmentUrl(round, [url])) continue;
-      round.messages.push({
-        role: "assistant",
-        type: mediaRowType,
-        runId: params.runId,
-        mediaUrls: [url],
-        fileName: attachmentFileNameMap.get(url) ?? fallbackFileNameFromUrl(url),
-        isError: params.isError,
-        timestamp: now,
-      });
+    // One TTS clip per user round: `deliver(block)` + `deliver(final)` often carry the same audio
+    // under different URL shapes; `flushTtsToolAttachments` may also write after tool end.
+    const skipAllTtsMedia =
+      mediaRowType === "tts" &&
+      round.messages.some((m) => m.role === "assistant" && m.type === "tts");
+    if (!skipAllTtsMedia) {
+      for (const url of params.mediaUrls) {
+        if (roundHasSameMediaAttachmentUrl(round, [url])) continue;
+        if (roundAlreadyHasFridayMediaToken(round, url)) continue;
+        round.messages.push({
+          role: "assistant",
+          type: mediaRowType,
+          runId: params.runId,
+          mediaUrls: [url],
+          fileName: attachmentFileNameMap.get(url) ?? fallbackFileNameFromUrl(url),
+          isError: params.isError,
+          timestamp: now,
+        });
+      }
     }
   }
   round.updatedAt = now;
@@ -748,7 +779,15 @@ function normalizeRound(round: ConversationRound): ConversationRound {
     if (msg.role === "assistant" && msg.type === "final") {
       flushReasoningSegment();
       if (typeof msg.text === "string" && msg.text.length > 0) {
-        finalText = msg.text;
+        // Stored rows may be cumulative snapshots (each `text` extends the previous) or
+        // incremental SSE tails; merge both into one assistant line for history export.
+        if (finalText.length === 0) {
+          finalText = msg.text;
+        } else if (msg.text.startsWith(finalText)) {
+          finalText = msg.text;
+        } else {
+          finalText += msg.text;
+        }
         finalTs = msg.timestamp;
       }
       continue;

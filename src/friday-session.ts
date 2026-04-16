@@ -225,6 +225,8 @@ export function forwardAgentEventToFridaySse(evt: {
     const text = pickText();
     if (!text) return;
     const phase = typeof d.phase === "string" ? d.phase : "delta";
+    // Keep full `text` here: the same run may also stream via `onPartialReply`, which shares
+    // `takeFinalSseDelta(runId)` state — applying delta twice would race and drop chunks.
     sseEmitter.broadcastToRun(targetRunId, {
       type: "final",
       data: {

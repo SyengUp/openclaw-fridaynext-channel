@@ -9,7 +9,7 @@ import {
   collectMediaPathsFromToolResult,
   extractLocalPathsFromToolTextBlob,
 } from "../collect-message-media-paths.js";
-import { tryClaimOutboundMediaSource } from "../outbound-media-source-dedupe.js";
+import { tryClaimOutboundMediaGroup } from "../outbound-media-source-dedupe.js";
 
 type LogFn = (detail: string) => void;
 
@@ -79,23 +79,24 @@ export function flushMessageToolAttachments(params: {
     return;
   }
 
-  const claimedSources = [...candidates].filter((p) => tryClaimOutboundMediaSource(runId, p));
-  if (claimedSources.length === 0) {
-    params.logLine("ATTACHMENT_SOURCE_DEDUPE_SKIP all_paths_seen_by_sendMedia_or_prior");
-    return;
+  const unresolved: string[] = [];
+  const resolved: Array<{ fileName: string; url: string }> = [];
+  for (const p of candidates) {
+    const r = resolveMediaAttachment(p);
+    if (!r) {
+      unresolved.push(p);
+      continue;
+    }
+    if (!tryClaimOutboundMediaGroup(runId, [p, r.url])) continue;
+    resolved.push(r);
   }
 
-  const unresolved: string[] = [];
-  const resolved = claimedSources
-    .map((p) => {
-      const r = resolveMediaAttachment(p);
-      if (!r) unresolved.push(p);
-      return r;
-    })
-    .filter((x): x is { fileName: string; url: string } => x !== null);
-
   if (resolved.length === 0) {
-    params.logLine(`ATTACHMENT_UNRESOLVED paths=${JSON.stringify(unresolved)}`);
+    if (unresolved.length > 0) {
+      params.logLine(`ATTACHMENT_UNRESOLVED paths=${JSON.stringify(unresolved)}`);
+    } else {
+      params.logLine("ATTACHMENT_SOURCE_DEDUPE_SKIP all_paths_seen_by_sendMedia_or_prior");
+    }
     return;
   }
 

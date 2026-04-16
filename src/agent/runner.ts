@@ -18,6 +18,7 @@ import {
   completeRound,
   errorRound,
 } from "../conversation-history.js";
+import { computeStreamDelta, takeFinalSseDelta, resetFinalStream } from "../stream-text-delta.js";
 
 const log = (action: string, runId: string, detail?: string) => {
   const ts = new Date().toISOString();
@@ -77,7 +78,7 @@ export function createFridayReplyCallbacks(
       }
 
       if (text) {
-        const delta = text.startsWith(lastReasoningText) ? text.slice(lastReasoningText.length) : text;
+        const { delta, patchPrefixChars } = computeStreamDelta(lastReasoningText, text);
         lastReasoningText = text;
         if (delta) {
           sseEmitter.broadcastToRun(
@@ -89,6 +90,7 @@ export function createFridayReplyCallbacks(
                 phase: "delta",
                 seq: reasoningSeq,
                 text: delta,
+                ...(patchPrefixChars !== undefined ? { reasoningPrefixChars: patchPrefixChars } : {}),
                 ...(mediaUrls.length > 0 ? { mediaUrls } : {}),
               },
             },
@@ -127,12 +129,18 @@ export function createFridayReplyCallbacks(
     onPartialReply: (payload: ReplyPayload) => {
       const text = payload.text ?? "";
       if (!text) return;
-      log("PARTIAL_REPLY", runId, `textLen=${text.length}`);
+      const { delta, patchPrefixChars } = takeFinalSseDelta(runId, text);
+      if (!delta) return;
+      log("PARTIAL_REPLY", runId, `fullLen=${text.length} deltaLen=${delta.length}`);
       sseEmitter.broadcastToRun(runId, {
         type: "final",
-        data: { text, runId },
+        data: {
+          text: delta,
+          runId,
+          ...(patchPrefixChars !== undefined ? { patchPrefixChars } : {}),
+        },
       });
-      appendFinalDelta({ sessionKey, runId, text });
+      appendFinalDelta({ sessionKey, runId, text: delta });
     },
   };
 }
@@ -156,6 +164,7 @@ export function notifyRunComplete(sessionKey: string, runId: string): void {
   setImmediate(() => {
     sseEmitter.untrackRun(runId);
     completeRound({ sessionKey, runId });
+    resetFinalStream(runId);
   });
 }
 
@@ -176,5 +185,6 @@ export function notifyRunError(sessionKey: string, runId: string, error: string)
   setImmediate(() => {
     sseEmitter.untrackRun(runId);
     errorRound({ sessionKey, runId, error });
+    resetFinalStream(runId);
   });
 }

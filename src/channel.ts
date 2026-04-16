@@ -10,6 +10,7 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { createChatChannelPlugin } from "openclaw/plugin-sdk/core";
+import type { ChannelAccountSnapshot } from "openclaw/plugin-sdk/status-helpers";
 import { saveMediaBuffer } from "openclaw/plugin-sdk/browser-support";
 import { sseEmitter } from "./sse/emitter.js";
 import { guessMimeType, resolveMediaAttachment } from "./http/handlers/files.js";
@@ -38,6 +39,7 @@ import {
   resolveFridayDeviceIdForOutbound,
   resolveHistorySessionKeyForFridayDevice,
 } from "./friday-session.js";
+import { getLastFridayInboundAt } from "./friday-inbound-stats.js";
 
 const CHANNEL_ID = "friday" as const;
 
@@ -105,6 +107,36 @@ const fridayLifecycle = {
   },
 };
 
+/**
+ * Control UI reads `running` / `connected` / `lastInboundAt` from `ChannelAccountSnapshot`.
+ * Without `status.buildAccountSnapshot`, those fields are missing → “否 / 不适用”.
+ */
+const fridayStatus = {
+  buildAccountSnapshot: async (params: {
+    account: { accountId?: string; name?: string; enabled?: boolean };
+    runtime?: ChannelAccountSnapshot;
+  }): Promise<ChannelAccountSnapshot> => {
+    const { account, runtime } = params;
+    const accountId =
+      typeof account?.accountId === "string" && account.accountId.trim()
+        ? account.accountId.trim()
+        : "default";
+    const inbound = getLastFridayInboundAt();
+    const connected = sseEmitter.getConnectionCount() > 0;
+    return {
+      accountId,
+      name: typeof account?.name === "string" ? account.name : "Friday Channel",
+      enabled: account?.enabled !== false,
+      configured: true,
+      /** HTTP+SSE runs inside the gateway whenever the plugin is loaded. */
+      running: true,
+      connected,
+      lastInboundAt: inbound ?? runtime?.lastInboundAt ?? null,
+      mode: "http+sse",
+    };
+  },
+};
+
 // ── Plugin ───────────────────────────────────────────────────────────────────
 
 export const fridayChannelPlugin = createChatChannelPlugin({
@@ -117,6 +149,7 @@ export const fridayChannelPlugin = createChatChannelPlugin({
     },
     config: fridayConfigAdapter,
     lifecycle: fridayLifecycle,
+    status: fridayStatus,
     bindings: {
       compileConfiguredBinding: () => null,
       matchInboundConversation: () => null,

@@ -116,15 +116,14 @@ class SseConnection {
     const data = this.pending.join("");
     try {
       const ok = this.res.write(data);
+      // Important: once write() is called, data is handed to Node's socket buffer.
+      // We must clear pending regardless of ok to avoid duplicate re-flush after drain.
+      this.pending = [];
       if (ok === false) {
         // Socket buffer full — stop scheduling flushes until drain
         this.waitingDrain = true;
-        log("WRITE_BACKPRESSURE", this.deviceId, `buffer-full pending=${this.pending.length} awaiting-drain`);
-        // NOTE: do NOT clear pending — data is still in Node.js write buffer
-        // and will be flushed when drain fires. We keep pending so it can be
-        // re-flushed if needed (though drain will handle it).
+        log("WRITE_BACKPRESSURE", this.deviceId, `buffer-full pending=0 awaiting-drain`);
       } else {
-        this.pending = [];
         log("WRITE_OK", this.deviceId, `bytes=${data.length} pending=0`);
       }
     } catch (err: unknown) {
@@ -171,6 +170,11 @@ class SseEmitterRegistry {
   private runStates = new Map<string, RunState>(); // runId → state
   /** Latest runId registered per device (e.g. for outbound sendMedia → attachment). */
   private lastRunIdByDevice = new Map<string, string>();
+
+  /** Active GET /friday/events sockets (Control UI “已连接”). */
+  getConnectionCount(): number {
+    return this.connections.size;
+  }
 
   addConnection(deviceId: string, res: ServerResponse): SseConnection {
     // Normalize to uppercase so tool hook broadcasts (which uppercase deviceId) find the connection
@@ -282,8 +286,7 @@ class SseEmitterRegistry {
           runId: (event.data["runId"] as string) ?? runId,
           timestamp: (event.data["timestamp"] as number) ?? Date.now(),
         };
-        const flush =
-          flushNow === true || phase === "delta" || phase === "start" || phase === "end";
+        const flush = flushNow === true || phase === "start" || phase === "end";
         log("BROADCAST_SEND", runId, `reasoning explicit phase=${phase} seq=${String(seqRaw)}`);
         this.sendToDevices(deviceIds, { type: "reasoning", data: dataOut }, flush);
         return;

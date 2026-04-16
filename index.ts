@@ -59,10 +59,44 @@ function deviceIdFromToolContext(ctx: PluginHookToolContext): string | null {
   return null;
 }
 
+function isFridaySessionKey(sk: string): boolean {
+  return /^friday-/i.test(sk) || /^agent:main:friday-/i.test(sk);
+}
+
+/** Only forward tool events when the run/session clearly belongs to Friday. */
+function shouldForwardToolEventToFriday(ctx: PluginHookToolContext): boolean {
+  if (ctx.runId) {
+    // Active or recently untracked Friday run already bound to a device.
+    if (sseEmitter.getDeviceIdByRunId(ctx.runId)) return true;
+    const runSk = getOpenClawAgentRunContext(ctx.runId)?.sessionKey?.trim() ?? "";
+    if (runSk) {
+      if (resolveFridayDeviceIdForSessionKey(runSk)) return true;
+      if (isFridaySessionKey(runSk)) return true;
+    }
+  }
+
+  const sk = typeof ctx.sessionKey === "string" ? ctx.sessionKey.trim() : "";
+  if (sk) {
+    if (resolveFridayDeviceIdForSessionKey(sk)) return true;
+    if (isFridaySessionKey(sk)) return true;
+  }
+
+  return false;
+}
+
 
 function asObject(value: unknown): Record<string, unknown> | null {
   if (!value || typeof value !== "object" || Array.isArray(value)) return null;
   return value as Record<string, unknown>;
+}
+
+/** `dirname` segment + `/` + basename, e.g. `/tmp/test.txt` → `tmp/test.txt`. */
+function compactPathForToolDisplay(fullPath: string): string {
+  const fp = fullPath.trim();
+  if (!fp) return "";
+  const parent = path.basename(path.dirname(fp));
+  const file = path.basename(fp);
+  return parent && file ? `${parent}/${file}` : file || fp;
 }
 
 function stringifyToolStartParams(toolName: string, params: unknown): unknown {
@@ -96,10 +130,27 @@ function stringifyToolStartParams(toolName: string, params: unknown): unknown {
   if (toolName === "read") {
     const fullPath = typeof p.path === "string" ? p.path.trim() : "";
     if (!fullPath) return params;
-    const parent = path.basename(path.dirname(fullPath));
-    const file = path.basename(fullPath);
-    const compact = parent && file ? `${parent}/${file}` : file || fullPath;
+    const compact = compactPathForToolDisplay(fullPath);
     return compact || params;
+  }
+
+  if (toolName === "canvas") {
+    const action = typeof p.action === "string" ? p.action.trim() : "";
+    const url = typeof p.url === "string" ? p.url.trim() : "";
+    const text = [action, url].filter(Boolean).join(" ");
+    return text || params;
+  }
+
+  if (toolName === "edit" || toolName === "write") {
+    const fullPath = typeof p.path === "string" ? p.path.trim() : "";
+    if (!fullPath) return params;
+    const compact = compactPathForToolDisplay(fullPath);
+    return compact || params;
+  }
+
+  if (toolName === "image") {
+    const prompt = typeof p.prompt === "string" ? p.prompt.trim() : "";
+    return prompt || params;
   }
 
   if (toolName === "exec") {
@@ -171,6 +222,7 @@ export default defineChannelPluginEntry({
     // ── Tool lifecycle hooks ────────────────────────────────────────────────
 
     api.on("before_tool_call", (event: PluginHookBeforeToolCallEvent, ctx: PluginHookToolContext) => {
+      if (!shouldForwardToolEventToFriday(ctx)) return;
       const deviceId = deviceIdFromToolContext(ctx);
       const runId = ctx.runId ?? "(unknown)";
 
@@ -214,6 +266,7 @@ export default defineChannelPluginEntry({
     });
 
     api.on("after_tool_call", (event: PluginHookAfterToolCallEvent, ctx: PluginHookToolContext) => {
+      if (!shouldForwardToolEventToFriday(ctx)) return;
       const deviceId = deviceIdFromToolContext(ctx);
       const runId = ctx.runId ?? "(unknown)";
 

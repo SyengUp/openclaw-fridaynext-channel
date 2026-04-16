@@ -21,6 +21,7 @@ import { extractBearerToken } from "../middleware/auth.js";
 import { notifyRunComplete, notifyRunError } from "../../agent/runner.js";
 import { createFridayReplyCallbacks } from "../../agent/runner.js";
 import { registerFridaySessionDeviceMapping } from "../../friday-session.js";
+import { touchFridayInbound } from "../../friday-inbound-stats.js";
 import {
   fridayAttachmentLookupKey,
   fridayFilesPublicUrl,
@@ -33,7 +34,9 @@ import { createRound, createAssistantOnlyRound, appendAssistantBlock, clearHisto
 import {
   clearOutboundMediaSourceDedupe,
   hasOutboundMediaSource,
+  tryClaimOutboundMediaSource,
 } from "../../outbound-media-source-dedupe.js";
+import { resetFinalStream, takeFinalSseDelta } from "../../stream-text-delta.js";
 
 const log = (action: string, deviceId: string, runId?: string, detail?: string) => {
   const ts = new Date().toISOString();
@@ -183,6 +186,7 @@ export async function handleMessages(
   }
 
   const trimmedText = text.trim();
+  touchFridayInbound();
 
   // Slash commands: CommandSource "native" + CommandAuthorized true (see below) so OpenClaw
   // does not silently drop whole-message /new, /reset, /help, etc. (reply pipeline requires
@@ -264,6 +268,7 @@ export async function handleMessages(
 
   const runAgent = async () => {
     try {
+      resetFinalStream(runId);
       const userAttachmentUrls = attachments.map(fridayFilesPublicUrl);
       const userAttachmentItems = userAttachmentUrls
         .map((url) => resolveMediaAttachment(url))
@@ -298,6 +303,8 @@ export async function handleMessages(
           if (attachmentSourceUrlsSent.has(u)) continue;
           if (hasOutboundMediaSource(runId, u)) continue;
           attachmentSourceUrlsSent.add(u);
+          // Register gateway URL so `flushTtsToolAttachments` / path-based claims see the same run asset.
+          tryClaimOutboundMediaSource(runId, u);
           novel.push(u);
         }
         return novel;
@@ -359,7 +366,19 @@ export async function handleMessages(
 
               // Do not emit "block" to app anymore. Convert block text into final delta.
               if (text) {
-                broadcast("final", { text, runId, deviceId }, true);
+                const { delta, patchPrefixChars } = takeFinalSseDelta(runId, text);
+                if (delta) {
+                  broadcast(
+                    "final",
+                    {
+                      text: delta,
+                      runId,
+                      deviceId,
+                      ...(patchPrefixChars !== undefined ? { patchPrefixChars } : {}),
+                    },
+                    true,
+                  );
+                }
               }
 
               emitNovelAssistantMediaSse(novelSources, resolved, "block", audioAsVoice);
