@@ -38,7 +38,9 @@ const deviceIdToLatestHistorySessionKey = new Map<string, string>();
 let lastRegisteredFridayDeviceId: string | undefined;
 
 function normalizeFridaySessionKeyCase(sk: string): string {
-  return /^friday-|^agent:main:friday-/i.test(sk) ? sk.toLowerCase() : sk;
+  return /^friday-|^agent:main:friday-/i.test(sk) || /^agent:main:friday:direct:/i.test(sk)
+    ? sk.toLowerCase()
+    : sk;
 }
 
 export function registerFridaySessionDeviceMapping(

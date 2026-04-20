@@ -43,3 +43,8 @@ export function takeFinalSseDelta(
 export function resetFinalStream(runId: string): void {
   lastFinalFullTextByRunId.delete(runId);
 }
+
+/** Last cumulative final text seen for this run (for error-path history flush). */
+export function peekFinalFullText(runId: string): string | undefined {
+  return lastFinalFullTextByRunId.get(runId);
+}

@@ -87,8 +87,10 @@ function readOpenClawSessionsEntry(sessionKey: string): Record<string, unknown> 
     if (!fs.existsSync(OPENCLAW_SESSIONS_FILE)) return null;
     const raw = JSON.parse(fs.readFileSync(OPENCLAW_SESSIONS_FILE, "utf-8")) as Record<string, Record<string, unknown>>;
     const fileKey = toSessionStoreKey(sessionKey);
-    const fallbackKey = /^friday-|^agent:main:friday-/i.test(fileKey) ? fileKey.toLowerCase() : fileKey;
-    const row = raw[fileKey] ?? raw[fallbackKey];
+    const row =
+      raw[fileKey] ??
+      raw[fileKey.toLowerCase()] ??
+      raw[fileKey.toUpperCase()];
     return row && typeof row === "object" ? row : null;
   } catch {
     return null;
@@ -104,7 +106,7 @@ function usageFieldsFromOpenClawRow(row: Record<string, unknown> | null): { mode
 
 /** Copy model + totalTokens from OpenClaw session store onto the round; persist if anything changed. */
 function applyUsageToRound(sessionKey: string, runId: string): void {
-  const session = sessions.get(sessionKey);
+  const session = getHistory(sessionKey);
   if (!session) return;
   const round = session.rounds.find((r) => r.runId === runId);
   if (!round) return;
@@ -180,11 +182,18 @@ function fridayHistoryDiskLookupKeys(preferred: string): string[] {
     if (s && !out.includes(s)) out.push(s);
   };
   push(k);
+  push(k.toLowerCase());
   const mMain = k.match(/^agent:main:friday-(.+)$/i);
   if (mMain?.[1]) {
     const id = mMain[1];
     push(`agent:main:friday-${id.toUpperCase()}`);
     push(`agent:main:friday-${id.toLowerCase()}`);
+  }
+  const mDirect = k.match(/^agent:main:friday:direct:(.+)$/i);
+  if (mDirect?.[1]) {
+    const id = mDirect[1];
+    push(`agent:main:friday:direct:${id.toUpperCase()}`);
+    push(`agent:main:friday:direct:${id.toLowerCase()}`);
   }
   const mBare = k.match(/^friday-(.+)$/i);
   if (mBare?.[1]) {
@@ -539,29 +548,6 @@ export function appendAssistantBlock(params: {
   persistSession(session);
 }
 
-export function appendFinalDelta(params: {
-  sessionKey: string;
-  runId: string;
-  text: string;
-}): void {
-  const session = sessions.get(params.sessionKey);
-  if (!session) return;
-  const round = session.rounds.find((r) => r.runId === params.runId);
-  if (!round || round.status !== "streaming") return;
-  const now = Date.now();
-  round.messages.push({
-    role: "assistant",
-    type: "final",
-    phase: "delta",
-    runId: params.runId,
-    text: params.text,
-    timestamp: now,
-  });
-  round.updatedAt = now;
-  session.updatedAt = now;
-  persistSession(session);
-}
-
 export function appendToolEvent(params: {
   sessionKey: string;
   runId: string;
@@ -575,7 +561,7 @@ export function appendToolEvent(params: {
   /** When `runId` is an internal id, fall back to the device’s last POST turn runId. */
   deviceId?: string;
 }): void {
-  const session = sessions.get(params.sessionKey);
+  const session = getHistory(params.sessionKey);
   if (!session) return;
   let round = session.rounds.find((r) => r.runId === params.runId);
   if (!round && params.deviceId) {
@@ -660,7 +646,7 @@ export function appendLateReasoningDelta(params: {
  * Mark a round as completed.
  */
 export function completeRound(params: { sessionKey: string; runId: string }): void {
-  const session = sessions.get(params.sessionKey);
+  const session = getHistory(params.sessionKey);
   if (!session) return;
   const round = session.rounds.find((r) => r.runId === params.runId);
   if (!round) return;
@@ -670,13 +656,15 @@ export function completeRound(params: { sessionKey: string; runId: string }): vo
   persistSession(session);
   applyUsageToRound(params.sessionKey, params.runId);
   setImmediate(() => applyUsageToRound(params.sessionKey, params.runId));
+  setTimeout(() => applyUsageToRound(params.sessionKey, params.runId), 1200);
+  setTimeout(() => applyUsageToRound(params.sessionKey, params.runId), 5000);
 }
 
 /**
  * Mark a round as errored.
  */
 export function errorRound(params: { sessionKey: string; runId: string; error: string }): void {
-  const session = sessions.get(params.sessionKey);
+  const session = getHistory(params.sessionKey);
   if (!session) return;
   const round = session.rounds.find((r) => r.runId === params.runId);
   if (!round) return;
@@ -694,6 +682,8 @@ export function errorRound(params: { sessionKey: string; runId: string; error: s
   persistSession(session);
   applyUsageToRound(params.sessionKey, params.runId);
   setImmediate(() => applyUsageToRound(params.sessionKey, params.runId));
+  setTimeout(() => applyUsageToRound(params.sessionKey, params.runId), 1200);
+  setTimeout(() => applyUsageToRound(params.sessionKey, params.runId), 5000);
 }
 
 /**
@@ -779,15 +769,7 @@ function normalizeRound(round: ConversationRound): ConversationRound {
     if (msg.role === "assistant" && msg.type === "final") {
       flushReasoningSegment();
       if (typeof msg.text === "string" && msg.text.length > 0) {
-        // Stored rows may be cumulative snapshots (each `text` extends the previous) or
-        // incremental SSE tails; merge both into one assistant line for history export.
-        if (finalText.length === 0) {
-          finalText = msg.text;
-        } else if (msg.text.startsWith(finalText)) {
-          finalText = msg.text;
-        } else {
-          finalText += msg.text;
-        }
+        finalText = msg.text;
         finalTs = msg.timestamp;
       }
       continue;

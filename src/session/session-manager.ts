@@ -7,6 +7,7 @@ import { join } from "node:path";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 
 const FRIDAY_AGENT_ID = "main";
+const SESSION_ID_RE = /^[a-z0-9][a-z0-9._-]{0,127}$/i;
 
 /**
  * Mirror the gateway's session key canonicalization so we write to the same
@@ -28,6 +29,35 @@ export function toSessionStoreKey(rawSessionKey: string): string {
     return `agent:${FRIDAY_AGENT_ID}:main`;
   }
   return raw;
+}
+
+function toSafeSessionId(raw: string): string {
+  const s = raw.trim();
+  if (SESSION_ID_RE.test(s)) return s;
+  const slug = s
+    .replace(/[^a-z0-9._-]+/gi, "-")
+    .replace(/-+/g, "-")
+    .replace(/^[-._]+|[-._]+$/g, "");
+  const base = slug || "session";
+  const prefixed = /^[a-z0-9]/i.test(base) ? base : `s${base}`;
+  return prefixed.slice(0, 128);
+}
+
+/**
+ * sessions.json stores `sessionId` as an OpenClaw-valid id (no colons).
+ * Keep inbound SessionKey passthrough unchanged; only sanitize this file field.
+ */
+function sessionIdForSessionsFile(fileKey: string, rawSessionKey: string): string {
+  const candidates = [rawSessionKey.trim(), fileKey.trim()];
+  for (const c of candidates) {
+    if (SESSION_ID_RE.test(c)) return c;
+    if (c.startsWith(`agent:${FRIDAY_AGENT_ID}:`)) {
+      const tail = c.slice(`agent:${FRIDAY_AGENT_ID}:`.length);
+      if (SESSION_ID_RE.test(tail)) return tail;
+      return toSafeSessionId(tail);
+    }
+  }
+  return toSafeSessionId(rawSessionKey || fileKey);
 }
 
 export interface FridaySessionInfo {
@@ -77,14 +107,21 @@ export function ensureSessionLevels(
     const sessionsFile = JSON.parse(raw) as Record<string, Record<string, unknown>>;
 
     const fileKey = toSessionStoreKey(sessionKey);
+    const safeSessionId = sessionIdForSessionsFile(fileKey, sessionKey);
     let updated = false;
 
     if (!sessionsFile[fileKey]) {
       sessionsFile[fileKey] = {
-        sessionId: sessionKey,
+        sessionId: safeSessionId,
         updatedAt: Date.now(),
         systemSent: true,
       };
+      updated = true;
+    }
+
+    const currentSessionId = sessionsFile[fileKey]["sessionId"];
+    if (typeof currentSessionId !== "string" || !SESSION_ID_RE.test(currentSessionId)) {
+      sessionsFile[fileKey]["sessionId"] = safeSessionId;
       updated = true;
     }
 

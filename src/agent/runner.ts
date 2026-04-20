@@ -14,11 +14,15 @@ import {
   appendReasoning,
   endReasoning,
   appendAssistantBlock,
-  appendFinalDelta,
   completeRound,
   errorRound,
 } from "../conversation-history.js";
-import { computeStreamDelta, takeFinalSseDelta, resetFinalStream } from "../stream-text-delta.js";
+import {
+  computeStreamDelta,
+  takeFinalSseDelta,
+  resetFinalStream,
+  peekFinalFullText,
+} from "../stream-text-delta.js";
 
 const log = (action: string, runId: string, detail?: string) => {
   const ts = new Date().toISOString();
@@ -140,7 +144,6 @@ export function createFridayReplyCallbacks(
           ...(patchPrefixChars !== undefined ? { patchPrefixChars } : {}),
         },
       });
-      appendFinalDelta({ sessionKey, runId, text: delta });
     },
   };
 }
@@ -183,6 +186,17 @@ export function notifyRunError(sessionKey: string, runId: string, error: string)
     data: { runId, error },
   });
   setImmediate(() => {
+    const pending = peekFinalFullText(runId)?.trim();
+    if (pending) {
+      appendAssistantBlock({
+        sessionKey,
+        runId,
+        text: pending,
+        mediaUrls: [],
+        attachments: [],
+        isError: false,
+      });
+    }
     sseEmitter.untrackRun(runId);
     errorRound({ sessionKey, runId, error });
     resetFinalStream(runId);
