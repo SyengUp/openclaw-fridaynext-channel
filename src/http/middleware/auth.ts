@@ -6,7 +6,9 @@
  */
 
 import type { IncomingMessage } from "node:http";
-import { getFridayRuntime } from "../../runtime.js";
+import { resolveFridayNextConfig } from "../../config.js";
+import { getHostOpenClawConfigSnapshot } from "../../host-config.js";
+import { getFridayNextRuntime } from "../../runtime.js";
 
 /**
  * Extract and validate bearer token from Authorization header.
@@ -21,22 +23,9 @@ export function extractBearerToken(req: IncomingMessage): string | null {
   const token = parts[1];
 
   // Validate token matches the gateway's configured auth token.
-  const cfg = getFridayRuntime().config.loadConfig();
-  const gatewayToken = cfg.gateway?.auth?.token;
-  if (!gatewayToken || token !== gatewayToken) return null;
+  const cfg = getHostOpenClawConfigSnapshot(getFridayNextRuntime().config);
+  const runtimeConfig = resolveFridayNextConfig(cfg);
+  if (!runtimeConfig.authToken || token !== runtimeConfig.authToken) return null;
 
   return token;
-}
-
-/**
- * Extract deviceId from request query params.
- * Returns null if no valid deviceId is found.
- */
-export function extractDeviceId(req: IncomingMessage): string | null {
-  const url = new URL(req.url ?? "/", "http://localhost");
-  const queryDeviceId = url.searchParams.get("deviceId");
-  if (queryDeviceId && typeof queryDeviceId === "string" && queryDeviceId.length > 0) {
-    return queryDeviceId;
-  }
-  return null;
 }

@@ -1,9 +1,7 @@
 /**
- * Friday Channel Plugin Definition.
+ * Friday Next Channel Plugin Definition.
  *
- * This is a lightweight channel plugin that manages HTTP/SSE connections
- * for the Friday iOS app. Unlike traditional messaging channels, Friday
- * uses a dedicated bidirectional HTTP/SSE protocol instead of polling.
+ * HTTP/SSE bridge for the Friday app; outbound sendText/sendMedia are forwarded as `outbound` SSE events.
  */
 
 import crypto from "node:crypto";
@@ -11,42 +9,18 @@ import fs from "node:fs";
 import path from "node:path";
 import { createChatChannelPlugin } from "openclaw/plugin-sdk/core";
 import type { ChannelAccountSnapshot } from "openclaw/plugin-sdk/status-helpers";
-import { saveMediaBuffer } from "openclaw/plugin-sdk/browser-support";
+import { saveMediaBuffer } from "openclaw/plugin-sdk/media-store";
 import { sseEmitter } from "./sse/emitter.js";
 import { guessMimeType, resolveMediaAttachment } from "./http/handlers/files.js";
-import { tryClaimOutboundMediaSource } from "./outbound-media-source-dedupe.js";
-
-function outboundMediaSseType(
-  audioAsVoice: boolean,
-  resolved: Array<{ fileName: string; url: string }>,
-): "tts" | "attachment" {
-  if (audioAsVoice) return "tts";
-  if (
-    resolved.length > 0 &&
-    resolved.every((a) => guessMimeType(a.fileName).toLowerCase().startsWith("audio/"))
-  ) {
-    return "tts";
-  }
-  return "attachment";
-}
-import {
-  appendAssistantBlock,
-  appendLateAssistantText,
-  createAssistantOnlyRound,
-  getHistory,
-} from "./conversation-history.js";
 import {
   resolveFridayDeviceIdForOutbound,
   resolveHistorySessionKeyForFridayDevice,
 } from "./friday-session.js";
 import { getLastFridayInboundAt } from "./friday-inbound-stats.js";
 
-const CHANNEL_ID = "friday" as const;
+const CHANNEL_ID = "friday-next" as const;
 
-function pickFirstString(
-  source: Record<string, unknown>,
-  keys: string[],
-): string | undefined {
+function pickFirstString(source: Record<string, unknown>, keys: string[]): string | undefined {
   for (const key of keys) {
     const val = source[key];
     if (typeof val === "string" && val.trim()) return val.trim();
@@ -64,28 +38,22 @@ function resolveLocalMediaPath(mediaUrl: string, localRoots?: string[]): string 
   return path.join(process.cwd(), mediaUrl);
 }
 
-// ── Config adapter ───────────────────────────────────────────────────────────
-
 const fridayConfigAdapter = {
   listAccountIds: () => ["default"],
   resolveAccount: () => ({ accountId: "default", enabled: true }),
   defaultAccountId: () => "default",
   isConfigured: () => true,
   unconfiguredReason: () => null,
-  describeAccount: () => ({ accountId: "default", name: "Friday Channel", enabled: true }),
+  describeAccount: () => ({ accountId: "default", name: "Friday Next Channel", enabled: true }),
 };
-
-// ── Channel metadata ────────────────────────────────────────────────────────
 
 const fridayMeta = {
   id: CHANNEL_ID,
-  label: "Friday",
-  selectionLabel: "Friday (iOS)",
-  docsPath: "/channels/friday",
-  blurb: "Native iOS app channel with full streaming support.",
+  label: "Friday Next",
+  selectionLabel: "Friday Next (Apple App)",
+  docsPath: "/channels/friday-next",
+  blurb: "Apple app channel with HTTP + SSE transparent OpenClaw proxy.",
 };
-
-// ── Channel capabilities ─────────────────────────────────────────────────────
 
 const fridayCapabilities = {
   chatTypes: ["direct"] as const,
@@ -99,18 +67,12 @@ const fridayCapabilities = {
   readReceipts: false,
 };
 
-// ── Lifecycle ───────────────────────────────────────────────────────────────
-
 const fridayLifecycle = {
   async onAccountConfigChanged() {
-    // No-op: Friday has no external connection to restart
+    // No-op
   },
 };
 
-/**
- * Control UI reads `running` / `connected` / `lastInboundAt` from `ChannelAccountSnapshot`.
- * Without `status.buildAccountSnapshot`, those fields are missing → “否 / 不适用”.
- */
 const fridayStatus = {
   buildAccountSnapshot: async (params: {
     account: { accountId?: string; name?: string; enabled?: boolean };
@@ -125,10 +87,9 @@ const fridayStatus = {
     const connected = sseEmitter.getConnectionCount() > 0;
     return {
       accountId,
-      name: typeof account?.name === "string" ? account.name : "Friday Channel",
+      name: typeof account?.name === "string" ? account.name : "Friday Next Channel",
       enabled: account?.enabled !== false,
       configured: true,
-      /** HTTP+SSE runs inside the gateway whenever the plugin is loaded. */
       running: true,
       connected,
       lastInboundAt: inbound ?? runtime?.lastInboundAt ?? null,
@@ -137,9 +98,7 @@ const fridayStatus = {
   },
 };
 
-// ── Plugin ───────────────────────────────────────────────────────────────────
-
-export const fridayChannelPlugin = createChatChannelPlugin({
+export const fridayNextChannelPlugin = createChatChannelPlugin({
   base: {
     id: CHANNEL_ID,
     meta: fridayMeta,
@@ -161,18 +120,16 @@ export const fridayChannelPlugin = createChatChannelPlugin({
     messaging: {
       normalizeTarget: (raw: string) => {
         const trimmed = raw?.trim() ?? "";
-        return trimmed || "friday";
+        return trimmed || "friday-next";
       },
       targetResolver: {
         hint: "Use the deviceId (e.g. your device identifier).",
-        resolveTarget: async (ctx) => {
-          // The normalized target IS the deviceId — validate it has an SSE connection.
-          // Return the deviceId so ctx.to in sendText/sendMedia is the deviceId.
+        resolveTarget: async (ctx: any) => {
           return { to: ctx.normalized };
         },
       },
-      parseExplicitTarget: () => ({ to: "friday" }),
-      formatTargetDisplay: ({ display }) => display || "Friday",
+      parseExplicitTarget: () => ({ to: "friday-next" }),
+      formatTargetDisplay: ({ display }: any) => display || "Friday Next",
     },
   },
   outbound: {
@@ -181,7 +138,7 @@ export const fridayChannelPlugin = createChatChannelPlugin({
     },
     attachedResults: {
       channel: CHANNEL_ID,
-      sendText: async (ctx) => {
+      sendText: async (ctx: any) => {
         const text = ctx.text ?? "";
         const rawCtx = ctx as unknown as Record<string, unknown>;
         const deviceId = resolveFridayDeviceIdForOutbound(ctx.to, rawCtx);
@@ -193,68 +150,36 @@ export const fridayChannelPlugin = createChatChannelPlugin({
         ]);
         const runId = runIdFromCtx ?? sseEmitter.getLastRunIdForDevice(deviceId) ?? undefined;
         const sessionKey =
-          pickFirstString(rawCtx, [
-            "requesterSessionKey",
-            "sessionKey",
-          ]) ??
+          pickFirstString(rawCtx, ["requesterSessionKey", "sessionKey"]) ??
           resolveHistorySessionKeyForFridayDevice(deviceId);
-
-        // Persist to disk-backed history whenever we know the session (e.g. cron while app offline).
-        // SSE below is optional best-effort when the device is connected.
-        if (text && sessionKey) {
-          const targetRunId = runId ?? crypto.randomUUID();
-          const existing = getHistory(sessionKey)?.rounds.some((r) => r.runId === targetRunId) ?? false;
-          if (!existing) {
-            createAssistantOnlyRound({ sessionKey, runId: targetRunId });
-          }
-          appendLateAssistantText({
-            sessionKey,
-            parentRunId: targetRunId,
-            text,
-          });
-        } else if (text && !sessionKey) {
-          const tsSkip = new Date().toISOString();
-          console.error(
-            `[Friday-OUT] [${tsSkip}] [SEND_TEXT_HISTORY_SKIP] deviceId=${deviceId} textLen=${text.length} detail=no_sessionKey`,
-          );
-        }
 
         const conn = sseEmitter.getConnection(deviceId);
         const ts = new Date().toISOString();
         console.error(
-          `[Friday-OUT] [${ts}] [SEND_TEXT] to=${deviceId} runId=${runId ?? "(none)"} sessionKey=${sessionKey ?? "(none)"} textLen=${text.length} history=${Boolean(text && sessionKey)} online=${!!conn}`,
+          `[Friday-OUT] [${ts}] [SEND_TEXT] to=${deviceId} runId=${runId ?? "(none)"} sessionKey=${sessionKey ?? "(none)"} textLen=${text.length} online=${!!conn}`,
         );
 
         if (conn) {
-          const now = Date.now();
-          conn.send(
-            { type: "final", data: { phase: "start", runId, timestamp: now } },
-            true,
-          );
-          conn.send(
+          sseEmitter.broadcast(
             {
-              type: "final",
+              type: "outbound",
               data: {
-                phase: "delta",
-                text,
+                op: "text",
+                ts: Date.now(),
                 runId,
                 deviceId,
-                mediaUrls: [],
-                isError: false,
+                sessionKey,
+                ctx: {
+                  text,
+                  to: ctx.to,
+                  mediaUrl: ctx.mediaUrl,
+                  audioAsVoice: ctx.audioAsVoice,
+                },
               },
             },
+            deviceId,
             true,
           );
-          conn.send(
-            { type: "final", data: { phase: "end", runId, timestamp: Date.now() } },
-            true,
-          );
-          if (runId) {
-            conn.send(
-              { type: "run-complete", data: { runId, deviceId } },
-              true,
-            );
-          }
         }
 
         return {
@@ -263,7 +188,7 @@ export const fridayChannelPlugin = createChatChannelPlugin({
           timestamp: Date.now(),
         };
       },
-      sendMedia: async (ctx) => {
+      sendMedia: async (ctx: any) => {
         const rawCtx = ctx as unknown as Record<string, unknown>;
         const deviceId = resolveFridayDeviceIdForOutbound(ctx.to, rawCtx);
         const mediaUrl = ctx.mediaUrl;
@@ -308,66 +233,42 @@ export const fridayChannelPlugin = createChatChannelPlugin({
         }
 
         if (buffer) {
-          if (!tryClaimOutboundMediaSource(runId, mediaUrl)) {
-            const tsDup = new Date().toISOString();
+          const mimeType = guessMimeType(mediaUrl);
+          const saved = await saveMediaBuffer(buffer, mimeType, "inbound");
+          if (saved.id) {
+            const fileUrl = `/friday-next/files/${encodeURIComponent(saved.id)}`;
+            const resolved = resolveMediaAttachment(fileUrl);
+            const publicUrl = resolved ? resolved.url : fileUrl;
+
+            const conn = sseEmitter.getConnection(deviceId);
+            const ts = new Date().toISOString();
             console.error(
-              `[Friday-OUT] [${tsDup}] [SEND_MEDIA_SKIP_DUP] to=${deviceId} runId=${runId ?? "(none)"} source=${mediaUrl}`,
+              `[Friday-OUT] [${ts}] [SEND_MEDIA] to=${deviceId} runId=${runId ?? "(none)"} sessionKey=${sessionKey ?? "(none)"} audioAsVoice=${audioAsVoice} url=${publicUrl} online=${!!conn}`,
             );
-          } else {
-            const mimeType = guessMimeType(mediaUrl);
-            const saved = await saveMediaBuffer(buffer, mimeType, "inbound");
-            if (saved.id) {
-              const fileUrl = `/friday/files/${encodeURIComponent(saved.id)}`;
-              const resolved = resolveMediaAttachment(fileUrl);
-              const mediaUrls = resolved ? [resolved.url] : [fileUrl];
-              const attachments = resolved ? [resolved] : [];
-              const sseType = outboundMediaSseType(audioAsVoice, attachments);
 
-              // History first; SSE only if the app is connected.
-              if (sessionKey) {
-                const targetRunId = runId ?? crypto.randomUUID();
-                const existing = getHistory(sessionKey)?.rounds.some((r) => r.runId === targetRunId) ?? false;
-                if (!existing) {
-                  createAssistantOnlyRound({ sessionKey, runId: targetRunId });
-                }
-                appendAssistantBlock({
-                  sessionKey,
-                  runId: targetRunId,
-                  text: caption,
-                  mediaUrls,
-                  attachments,
-                  isError: false,
-                  mediaMessageType: sseType,
-                });
-              } else {
-                const tsSkip = new Date().toISOString();
-                console.error(
-                  `[Friday-OUT] [${tsSkip}] [SEND_MEDIA_HISTORY_SKIP] deviceId=${deviceId} detail=no_sessionKey`,
-                );
-              }
-
-              const conn = sseEmitter.getConnection(deviceId);
-              const ts = new Date().toISOString();
-              console.error(
-                `[Friday-OUT] [${ts}] [SEND_MEDIA] to=${deviceId} runId=${runId ?? "(none)"} sessionKey=${sessionKey ?? "(none)"} audioAsVoice=${audioAsVoice} url=${fileUrl} history=${Boolean(sessionKey)} online=${!!conn}`,
-              );
-
-              if (conn) {
-                sseEmitter.broadcast(
-                  {
-                    type: sseType,
-                    data: {
-                      attachments,
-                      ...(runId ? { runId } : {}),
-                      deviceId,
-                      timestamp: Date.now(),
-                      ...(audioAsVoice ? { audioAsVoice: true } : {}),
+            if (conn) {
+              sseEmitter.broadcast(
+                {
+                  type: "outbound",
+                  data: {
+                    op: "media",
+                    ts: Date.now(),
+                    runId,
+                    deviceId,
+                    sessionKey,
+                    audioAsVoice,
+                    caption,
+                    mediaUrl: publicUrl,
+                    ctx: {
+                      to: ctx.to,
+                      text: caption,
+                      originalMediaUrl: mediaUrl,
                     },
                   },
-                  deviceId,
-                  true,
-                );
-              }
+                },
+                deviceId,
+                true,
+              );
             }
           }
         }

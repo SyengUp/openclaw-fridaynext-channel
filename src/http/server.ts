@@ -1,63 +1,91 @@
 /**
  * HTTP server registration for the Friday channel.
  *
- * Registers routes on the gateway HTTP server under the /friday/ path prefix.
+ * Registers routes on the gateway HTTP server under the /friday-next/ path prefix.
  * Routes are registered via the plugin API's registerHttpRoute method.
  */
 
 import type { IncomingMessage, ServerResponse } from "node:http";
-import type { OpenClawPluginApi } from "openclaw/plugin-sdk/core";
 import { handleMessages } from "./handlers/messages.js";
 import { handleSseStream } from "./handlers/sse.js";
 import { handleFilesUpload } from "./handlers/files-upload.js";
 import { handleFilesDownload } from "./handlers/files-download.js";
-import { handleHistory } from "./handlers/history.js";
+import { handleCancel } from "./handlers/cancel.js";
+import { handleStatus } from "./handlers/status.js";
+import { applyCorsHeaders } from "./middleware/cors.js";
+import { resolveFridayNextConfig } from "../config.js";
+import { getHostOpenClawConfigSnapshot } from "../host-config.js";
+import { getFridayNextRuntime } from "../runtime.js";
+import { sseEmitter } from "../sse/emitter.js";
 
 /** Route matcher - returns the matched handler or null. */
-async function handleFridayRoute(
+async function handleFridayNextRoute(
   req: IncomingMessage,
   res: ServerResponse,
 ): Promise<boolean> {
   const url = new URL(req.url ?? "/", "http://localhost");
   const pathname = url.pathname;
+  applyCorsHeaders(res);
+  if (req.method === "OPTIONS") {
+    res.statusCode = 204;
+    res.end();
+    return true;
+  }
 
-  // Route: GET /friday/events?deviceId=...
-  if (req.method === "GET" && pathname === "/friday/events") {
+  // Route: GET /friday-next/events?deviceId=...
+  if (req.method === "GET" && pathname === "/friday-next/events") {
     return await handleSseStream(req, res);
   }
 
-  // Route: POST /friday/messages
-  if (req.method === "POST" && pathname === "/friday/messages") {
+  // Route: POST /friday-next/messages
+  if (req.method === "POST" && pathname === "/friday-next/messages") {
     return await handleMessages(req, res);
   }
 
-  // Route: GET/DELETE /friday/history?deviceId=...
-  if ((req.method === "GET" || req.method === "DELETE") && pathname === "/friday/history") {
-    return await handleHistory(req, res);
-  }
-
-  // Route: POST /friday/files (multipart upload)
-  if (req.method === "POST" && pathname === "/friday/files") {
+  // Route: POST /friday-next/files (multipart upload)
+  if (req.method === "POST" && pathname === "/friday-next/files") {
     return await handleFilesUpload(req, res);
   }
 
-  // Route: GET /friday/files/:id (download)
-  if (req.method === "GET" && pathname.startsWith("/friday/files/")) {
+  // Route: GET /friday-next/files/:id (download)
+  if (req.method === "GET" && pathname.startsWith("/friday-next/files/")) {
     return await handleFilesDownload(req, res);
+  }
+
+  if (req.method === "POST" && pathname === "/friday-next/cancel") {
+    return await handleCancel(req, res);
+  }
+
+  if (req.method === "GET" && pathname === "/friday-next/status") {
+    return await handleStatus(req, res);
   }
 
   // Not found
   return false;
 }
 
-export function registerFridayHttpRoutes(api: OpenClawPluginApi): void {
+export function registerFridayNextHttpRoutes(api: {
+  logger: { info: (msg: string) => void; warn: (msg: string) => void };
+  registerHttpRoute: (route: {
+    path: string;
+    handler: (req: IncomingMessage, res: ServerResponse) => Promise<boolean>;
+    auth: string;
+    match: string;
+  }) => void;
+}): void {
+  const cfg = resolveFridayNextConfig(getHostOpenClawConfigSnapshot(getFridayNextRuntime().config));
+  sseEmitter.setBacklogLimit(cfg.sseBacklogPerDevice);
+  if (!cfg.authToken) {
+    api.logger.warn("friday-next authToken not configured; all requests will 401");
+  }
+
   // Plugin handles its own auth via extractBearerToken()
   api.registerHttpRoute({
-    path: "/friday",
-    handler: handleFridayRoute,
+    path: "/friday-next",
+    handler: handleFridayNextRoute,
     auth: "plugin",
     match: "prefix",
   });
 
-  api.logger.info("Friday channel HTTP routes registered at /friday/*");
+  api.logger.info("Friday Next channel HTTP routes registered at /friday-next/*");
 }

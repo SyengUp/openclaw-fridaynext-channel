@@ -1,11 +1,53 @@
 {
-  "id": "friday",
-  "channels": ["friday"],
+  "id": "friday-next",
+  "channels": ["friday-next"],
   "configSchema": {
     "type": "object",
     "additionalProperties": false,
-    "properties": {
-      "mode": { "type": "string" }
+    "properties": {}
+  },
+  "channelConfigs": {
+    "friday-next": {
+      "label": "Friday Next",
+      "description": "HTTP+SSE channel for the Friday iOS client.",
+      "schema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "enabled": { "type": "boolean" },
+          "transport": { "type": "string" },
+          "pathPrefix": { "type": "string" },
+          "historyLimit": { "type": "integer", "minimum": 1, "maximum": 200 },
+          "historyDir": { "type": "string" },
+          "logLevel": { "type": "string", "enum": ["debug", "info", "warn", "error"] },
+          "authToken": { "type": "string" },
+          "cors": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "enabled": { "type": "boolean" },
+              "allowOrigin": { "type": "string" }
+            }
+          },
+          "sse": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "keepaliveSec": { "type": "integer", "minimum": 5, "maximum": 120 },
+              "backlogPerDevice": { "type": "integer", "minimum": 0, "maximum": 1000 }
+            }
+          }
+        }
+      },
+      "uiHints": {
+        "authToken": {
+          "label": "Bearer auth token",
+          "sensitive": true
+        }
+      }
     }
+  },
+  "channelEnvVars": {
+    "friday-next": ["FRIDAY_NEXT_AUTH_TOKEN"]
   }
 }

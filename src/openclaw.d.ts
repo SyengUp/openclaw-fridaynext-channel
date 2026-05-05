@@ -1,0 +1,32 @@
+declare module "openclaw/plugin-sdk/agent-harness" {
+  export const abortAgentHarnessRun: (runId: string) => void;
+  export const runAgentHarness: (...args: any[]) => any;
+}
+
+declare module "openclaw/plugin-sdk/core" {
+  export const defineChannelPluginEntry: (...args: any[]) => any;
+  export const createChatChannelPlugin: (...args: any[]) => any;
+  export type ChannelPlugin = any;
+}
+
+declare module "openclaw/plugin-sdk/media-store" {
+  export const saveMediaBuffer: (...args: any[]) => any;
+}
+
+declare module "openclaw/plugin-sdk/plugin-entry" {
+  export type OpenClawPluginApi = any;
+}
+
+declare module "openclaw/plugin-sdk/plugins/types" {
+  export type PluginHookBeforeToolCallEvent = any;
+  export type PluginHookAfterToolCallEvent = any;
+  export type PluginHookToolContext = any;
+}
+
+declare module "openclaw/plugin-sdk/reply-dispatch-runtime" {
+  export const dispatchReplyWithDispatcher: (...args: any[]) => any;
+}
+
+declare module "openclaw/plugin-sdk/status-helpers" {
+  export type ChannelAccountSnapshot = any;
+}

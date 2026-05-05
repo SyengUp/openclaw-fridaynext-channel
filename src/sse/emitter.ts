@@ -1,31 +1,24 @@
 import type { ServerResponse } from "node:http";
+import { createFridayNextLogger } from "../logging.js";
+import { fridaySseOfflineQueue } from "./offline-queue.js";
 
-const log = (action: string, runId: string, detail?: string) => {
-  const ts = new Date().toISOString();
-  const detailPart = detail ? ` detail=${detail}` : "";
-  console.error(`[Friday-EMIT] [${ts}] [${action}] runId=${runId}${detailPart}`);
-};
+const logger = createFridayNextLogger("sse", "info");
 
-export type SseEventType =
-  | "reasoning"
-  | "final"
-  | "attachment"
-  /** Synthetic speech (OpenClaw auto-TTS, `tts` tool, or outbound audio). Same `data` shape as `attachment` unless noted. */
-  | "tts"
-  | "tool"
-  | "agent"
-  | "run-complete"
-  | "run-error";
+export type SseEventType = "connected" | "agent" | "deliver" | "tool-hook" | "outbound" | "ping";
 
 export interface SseEvent {
   type: SseEventType;
   data: Record<string, unknown>;
 }
 
-/** Per-deviceId SSE connection with buffered flush. */
-class SseConnection {
+type BacklogEntry = {
+  id: number;
+  event: SseEvent;
+};
+
+export class SseConnection {
   readonly deviceId: string;
-  private res: ServerResponse;
+  private readonly res: ServerResponse;
   private closed = false;
   private pending: string[] = [];
   private flushTimer: ReturnType<typeof setTimeout> | null = null;
@@ -34,117 +27,62 @@ class SseConnection {
   constructor(deviceId: string, res: ServerResponse) {
     this.deviceId = deviceId;
     this.res = res;
-    // Handle socket backpressure: when write() returns false, wait for drain
     this.res.on("drain", () => {
       this.waitingDrain = false;
-      log("DRAIN", this.deviceId, `buffer-drained, pending=${this.pending.length}`);
-      // Any data that caused backpressure is already in Node.js write buffer and
-      // will be flushed by the OS. Just resume normal scheduling.
       this.scheduleFlush();
     });
-    this.res.on("error", (err: Error) => {
-      log("SOCKET_ERROR", this.deviceId, `error=${err.message}`);
-      this.close();
-    });
+    this.res.on("error", () => this.close());
   }
 
-  send(event: SseEvent, flushNow?: boolean): void {
-    if (this.closed) {
-      log("SEND_SKIPPED", this.deviceId, `type=${event.type} conn-closed`);
-      return;
-    }
-    const payload = JSON.stringify({ type: event.type, ...event.data });
-    log("SEND_QUEUED", this.deviceId, `type=${event.type} pendingBefore=${this.pending.length}`);
-    // Plain JSON per line (no SSE data: prefix — easier for iOS to parse)
-    this.pending.push(`${payload}\n`);
+  send(entry: BacklogEntry | SseEvent, flushNow?: boolean): void {
+    if (this.closed) return;
+    const normalized =
+      "id" in entry && "event" in entry ? entry : { id: Date.now(), event: entry as SseEvent };
+    const payload = JSON.stringify(normalized.event.data);
+    this.pending.push(
+      `id: ${normalized.id}\nevent: ${normalized.event.type}\ndata: ${payload}\n\n`,
+    );
     if (flushNow) {
-      // Bypass 16ms batch timer — flush immediately for streaming final text
-      if (this.flushTimer !== null) {
-        clearTimeout(this.flushTimer);
-        this.flushTimer = null;
-      }
+      if (this.flushTimer) clearTimeout(this.flushTimer);
+      this.flushTimer = null;
       this.flush();
-    } else {
-      this.scheduleFlush();
-    }
-  }
-
-  /** Send a raw SSE line immediately, bypassing the event queue. */
-  sendRaw(line: string): void {
-    if (this.closed) {
-      log("SEND_SKIPPED", this.deviceId, `raw conn-closed`);
       return;
     }
-    try {
-      const ok = this.res.write(line);
-      if (ok === false) {
-        this.waitingDrain = true;
-        log("WRITE_BACKPRESSURE", this.deviceId, `raw pending=1 awaiting-drain`);
-      } else {
-        log("WRITE_OK", this.deviceId, `raw bytes=${line.length}`);
-      }
-    } catch (err: unknown) {
-      log("WRITE_ERROR", this.deviceId, String(err));
-      this.close();
-    }
+    this.scheduleFlush();
+  }
+
+  sendRaw(line: string): void {
+    if (this.closed) return;
+    const ok = this.res.write(line);
+    if (ok === false) this.waitingDrain = true;
   }
 
   private scheduleFlush(): void {
-    // Don't schedule if waiting for drain or already scheduled
-    if (this.waitingDrain || this.flushTimer !== null) return;
+    if (this.waitingDrain || this.flushTimer) return;
     this.flushTimer = setTimeout(() => {
       this.flushTimer = null;
       this.flush();
-    }, 16); // ~60fps flush
+    }, 16);
   }
 
   private flush(): void {
-    if (this.closed) {
-      log("FLUSH_SKIPPED", this.deviceId, `conn-closed`);
-      return;
-    }
-    if (this.pending.length === 0) {
-      log("FLUSH_SKIPPED", this.deviceId, `no-pending`);
-      return;
-    }
-    // If socket buffer is full, wait for drain
-    if (this.waitingDrain) {
-      log("FLUSH_DEFERRED", this.deviceId, `backpressure pending=${this.pending.length}`);
-      return;
-    }
-
+    if (this.closed || this.waitingDrain || this.pending.length === 0) return;
     const data = this.pending.join("");
-    try {
-      const ok = this.res.write(data);
-      // Important: once write() is called, data is handed to Node's socket buffer.
-      // We must clear pending regardless of ok to avoid duplicate re-flush after drain.
-      this.pending = [];
-      if (ok === false) {
-        // Socket buffer full — stop scheduling flushes until drain
-        this.waitingDrain = true;
-        log("WRITE_BACKPRESSURE", this.deviceId, `buffer-full pending=0 awaiting-drain`);
-      } else {
-        log("WRITE_OK", this.deviceId, `bytes=${data.length} pending=0`);
-      }
-    } catch (err: unknown) {
-      log("WRITE_ERROR", this.deviceId, String(err));
-      this.close();
-    }
+    this.pending = [];
+    const ok = this.res.write(data);
+    if (ok === false) this.waitingDrain = true;
   }
 
   close(): void {
     if (this.closed) return;
     this.closed = true;
-    if (this.flushTimer !== null) {
-      clearTimeout(this.flushTimer);
-      this.flushTimer = null;
-    }
+    if (this.flushTimer) clearTimeout(this.flushTimer);
+    this.flushTimer = null;
     this.pending = [];
     try {
       this.res.end();
-      log("CONN_CLOSE", this.deviceId);
     } catch {
-      // Already ended
+      // ignore
     }
   }
 
@@ -153,390 +91,159 @@ class SseConnection {
   }
 }
 
-/** Per-run state for accumulation and sequencing. */
-interface RunState {
-  reasoningStarted: boolean;
-  reasoningEnded: boolean;
-  finalStarted: boolean;
-  finalEnded: boolean;
-  /** Explicit reasoning segment from runner: seq with open start, closed by end or final. */
-  reasoningOpenSeq: number | null;
-}
-
-/** Global SSE emitter registry, keyed by deviceId. */
 class SseEmitterRegistry {
   private connections = new Map<string, SseConnection>();
-  private runEmitter = new Map<string, Set<string>>(); // runId → deviceIds
-  private runStates = new Map<string, RunState>(); // runId → state
-  /** Latest runId registered per device (e.g. for outbound sendMedia → attachment). */
+  private runEmitter = new Map<string, Set<string>>();
   private lastRunIdByDevice = new Map<string, string>();
+  private eventSeqByDevice = new Map<string, number>();
+  private backlogLimit = 200;
 
-  /** Active GET /friday/events sockets (Control UI “已连接”). */
   getConnectionCount(): number {
     return this.connections.size;
   }
 
+  setBacklogLimit(limit: number): void {
+    this.backlogLimit = Math.max(0, Math.floor(limit));
+  }
+
+  getBacklogLimit(): number {
+    return this.backlogLimit;
+  }
+
+  /** Last persisted / assigned SSE id for device (for `connected.lastSeq`). */
+  latestSeqForDevice(deviceId: string): number {
+    const key = deviceId.trim().toUpperCase();
+    const disk = fridaySseOfflineQueue.latestId(key);
+    const mem = this.eventSeqByDevice.get(key) ?? 0;
+    return Math.max(disk, mem);
+  }
+
   addConnection(deviceId: string, res: ServerResponse): SseConnection {
-    // Normalize to uppercase so tool hook broadcasts (which uppercase deviceId) find the connection
-    const normalizedId = deviceId.toUpperCase();
-    const conn = new SseConnection(normalizedId, res);
-    this.connections.set(normalizedId, conn);
-    log("CONN_ADD", deviceId, `total=${this.connections.size}`);
+    const normalized = deviceId.trim().toUpperCase();
+    const existing = this.connections.get(normalized);
+    if (existing && !existing.isClosed) {
+      existing.close();
+      for (const set of this.runEmitter.values()) {
+        set.delete(normalized);
+      }
+    }
+    const conn = new SseConnection(normalized, res);
+    this.connections.set(normalized, conn);
+    logger.info(`connect ${normalized} total=${this.connections.size}`);
     return conn;
   }
 
-  removeConnection(deviceId: string): void {
-    const normalizedId = deviceId.toUpperCase();
-    const conn = this.connections.get(normalizedId);
-    if (conn) {
-      conn.close();
-      this.connections.delete(normalizedId);
-      log("CONN_REMOVE", deviceId, `remaining=${this.connections.size}`);
+  /**
+   * @param expectedConn When provided, only removes if this connection is still the active one
+   * (avoids stale `req.close` after a reconnect replaced the map entry).
+   */
+  removeConnection(deviceId: string, expectedConn?: SseConnection): void {
+    const normalized = deviceId.trim().toUpperCase();
+    const current = this.connections.get(normalized);
+    if (expectedConn !== undefined && current !== expectedConn) {
+      return;
     }
-    for (const deviceIds of this.runEmitter.values()) {
-      deviceIds.delete(normalizedId);
+    current?.close();
+    this.connections.delete(normalized);
+    for (const set of this.runEmitter.values()) set.delete(normalized);
+    logger.info(`disconnect ${normalized} total=${this.connections.size}`);
+  }
+
+  getConnection(deviceId: string): SseConnection | undefined {
+    return this.connections.get(deviceId.trim().toUpperCase());
+  }
+
+  private nextEntry(deviceId: string, event: SseEvent): BacklogEntry {
+    const key = deviceId.trim().toUpperCase();
+    const diskMax = fridaySseOfflineQueue.latestId(key);
+    const memMax = this.eventSeqByDevice.get(key) ?? 0;
+    const last = Math.max(memMax, diskMax);
+    const id = last + 1;
+    this.eventSeqByDevice.set(key, id);
+    fridaySseOfflineQueue.append(key, id, event.type, event.data, this.backlogLimit);
+    return { id, event };
+  }
+
+  replayBacklog(deviceId: string, afterEventId: number): number {
+    const key = deviceId.trim().toUpperCase();
+    const conn = this.connections.get(key);
+    if (!conn) return 0;
+    const entries = fridaySseOfflineQueue.readAfter(key, afterEventId);
+    let count = 0;
+    for (const e of entries) {
+      conn.send({ id: e.id, event: { type: e.event as SseEventType, data: e.data } }, true);
+      count += 1;
     }
+    return count;
   }
 
   broadcast(event: SseEvent, deviceId?: string, flushNow?: boolean): void {
     if (deviceId) {
-      const conn = this.connections.get(deviceId.toUpperCase());
-      if (conn) conn.send(event, flushNow);
+      const key = deviceId.trim().toUpperCase();
+      const entry = this.nextEntry(key, event);
+      this.connections.get(key)?.send(entry, flushNow);
       return;
     }
     for (const conn of this.connections.values()) {
-      conn.send(event, flushNow);
-    }
-  }
-
-  /**
-   * Broadcast an event to all devices tracking a run.
-   * - reasoning: legacy streams get phase=start/delta/end; events with phase+seq pass through (per-segment lifecycle)
-   * - final: adds phase=start/delta/end markers; done=true signals phase=end
-   * - agent/run-complete/run-error/tool/tts: forwarded as-is via runEmitter
-   *
-   * deviceId is extracted from event.data.deviceId and used to send directly
-   * to the matching SSE connection. This avoids the need for the SSE handler
-   * to pre-register with trackDeviceForRun.
-   */
-  broadcastToRun(runId: string, event: SseEvent, flushNow?: boolean): void {
-    const deviceId = event.data["deviceId"] as string | undefined;
-    const deviceIds = this.runEmitter.get(runId);
-
-    // Send to the device's SSE connection directly using deviceId from event data.
-    if (deviceId) {
-      const conn = this.connections.get(deviceId.toUpperCase());
-      if (conn) {
-        log("BROADCAST_SEND", runId, `event=${event.type} deviceId=${deviceId} direct`);
-        conn.send(event, true); // flush immediately for direct sends
-        // If this run has no registered deviceIds set, we're done
-        if (!deviceIds || deviceIds.size === 0) {
-          log("BROADCAST_DONE", runId, `direct-sent only, no runEmitter entry`);
-          return;
-        }
-      } else {
-        log("BROADCAST_SKIP", runId, `event=${event.type} deviceId=${deviceId} conn=NONE activeConns=${[...this.connections.keys()].join(",")}`);
-      }
-    }
-
-    if (!deviceIds) {
-      log("BROADCAST_SKIP", runId, `event=${event.type} no runEmitter entry`);
-      return;
-    }
-
-    let state = this.runStates.get(runId);
-    if (!state) {
-      state = {
-        reasoningStarted: false,
-        reasoningEnded: false,
-        finalStarted: false,
-        finalEnded: false,
-        reasoningOpenSeq: null,
-      };
-      this.runStates.set(runId, state);
-    }
-
-    if (event.type === "reasoning") {
-      const done = event.data["done"] === true;
-      const text = (event.data["text"] as string) ?? "";
-      const phase = event.data["phase"] as string | undefined;
-      const seqRaw = event.data["seq"];
-
-      // Explicit segment lifecycle from Friday runner (start / delta / end + seq)
-      if (phase === "start" || phase === "delta" || phase === "end") {
-        if (phase === "start" && typeof seqRaw === "number") {
-          if (state.reasoningOpenSeq !== null && state.reasoningOpenSeq !== seqRaw) {
-            log("BROADCAST_SEND", runId, `reasoning phase=end (implicit) seq=${state.reasoningOpenSeq} before new start`);
-            this.sendToDevices(
-              deviceIds,
-              {
-                type: "reasoning",
-                data: { phase: "end", seq: state.reasoningOpenSeq, runId, timestamp: Date.now() },
-              },
-              true,
-            );
-          }
-          state.reasoningOpenSeq = seqRaw;
-        }
-        if (phase === "end") {
-          state.reasoningOpenSeq = null;
-        }
-        const dataOut: Record<string, unknown> = {
-          ...event.data,
-          runId: (event.data["runId"] as string) ?? runId,
-          timestamp: (event.data["timestamp"] as number) ?? Date.now(),
-        };
-        const flush = flushNow === true || phase === "start" || phase === "end";
-        log("BROADCAST_SEND", runId, `reasoning explicit phase=${phase} seq=${String(seqRaw)}`);
-        this.sendToDevices(deviceIds, { type: "reasoning", data: dataOut }, flush);
-        return;
-      }
-
-      if (done) {
-        if (state.reasoningOpenSeq !== null) {
-          log("BROADCAST_SEND", runId, `reasoning phase=end (done) seq=${state.reasoningOpenSeq}`);
-          this.sendToDevices(
-            deviceIds,
-            {
-              type: "reasoning",
-              data: {
-                phase: "end",
-                seq: state.reasoningOpenSeq,
-                runId,
-                timestamp: Date.now(),
-              },
-            },
-            true,
-          );
-          state.reasoningOpenSeq = null;
-        }
-        // Send start if never sent (tool-only with no reasoning), then end
-        if (!state.reasoningStarted) {
-          state.reasoningStarted = true;
-          log("BROADCAST_SEND", runId, `reasoning phase=start (implicit)`);
-          this.sendToDevices(deviceIds, {
-            type: "reasoning",
-            data: { phase: "start", runId, timestamp: Date.now() },
-          });
-        }
-        if (!state.reasoningEnded) {
-          state.reasoningEnded = true;
-          log("BROADCAST_SEND", runId, `reasoning phase=end`);
-          this.sendToDevices(deviceIds, {
-            type: "reasoning",
-            data: { phase: "end", runId, timestamp: Date.now() },
-          });
-        }
-        return;
-      }
-
-      if (!state.reasoningStarted) {
-        state.reasoningStarted = true;
-        log("BROADCAST_SEND", runId, `reasoning phase=start`);
-        this.sendToDevices(deviceIds, {
-          type: "reasoning",
-          data: { phase: "start", runId, timestamp: Date.now() },
-        });
-      }
-
-      log("BROADCAST_SEND", runId, `reasoning phase=delta textLen=${text.length}`);
-      this.sendToDevices(deviceIds, {
-        type: "reasoning",
-        data: { phase: "delta", text, runId },
-      });
-      return;
-    }
-
-    if (event.type === "final") {
-      const done = event.data["done"] === true;
-      const text = (event.data["text"] as string) ?? "";
-
-      if (done) {
-        if (state.reasoningOpenSeq !== null) {
-          log("BROADCAST_SEND", runId, `reasoning phase=end (final done) seq=${state.reasoningOpenSeq}`);
-          this.sendToDevices(
-            deviceIds,
-            {
-              type: "reasoning",
-              data: {
-                phase: "end",
-                seq: state.reasoningOpenSeq,
-                runId,
-                timestamp: Date.now(),
-              },
-            },
-            true,
-          );
-          state.reasoningOpenSeq = null;
-        }
-        if (!state.finalEnded) {
-          state.finalEnded = true;
-          log("BROADCAST_SEND", runId, `final phase=end`);
-          this.sendToDevices(deviceIds, {
-            type: "final",
-            data: { phase: "end", runId, timestamp: Date.now() },
-          });
-        }
-        return;
-      }
-
-      // Close reasoning before starting final
-      if (!state.finalStarted) {
-        if (state.reasoningOpenSeq !== null) {
-          log("BROADCAST_SEND", runId, `reasoning phase=end (final started) seq=${state.reasoningOpenSeq}`);
-          this.sendToDevices(
-            deviceIds,
-            {
-              type: "reasoning",
-              data: {
-                phase: "end",
-                seq: state.reasoningOpenSeq,
-                runId,
-                timestamp: Date.now(),
-              },
-            },
-            true,
-          );
-          state.reasoningOpenSeq = null;
-        }
-        if (state.reasoningStarted && !state.reasoningEnded) {
-          state.reasoningEnded = true;
-          log("BROADCAST_SEND", runId, `reasoning phase=end (final started)`);
-          this.sendToDevices(deviceIds, {
-            type: "reasoning",
-            data: { phase: "end", runId, timestamp: Date.now() },
-          });
-        }
-        state.finalStarted = true;
-        log("BROADCAST_SEND", runId, `final phase=start`);
-        this.sendToDevices(deviceIds, {
-          type: "final",
-          data: { phase: "start", runId, timestamp: Date.now() },
-        });
-      }
-
-      log("BROADCAST_SEND", runId, `final phase=delta textLen=${text.length} flushNow=${flushNow}`);
-      this.sendToDevices(deviceIds, {
-        type: "final",
-        data: { phase: "delta", text, runId },
-      }, flushNow);
-      return;
-    }
-
-    // agent/run-complete/run-error/tool: via runEmitter
-    const urgent =
-      flushNow === true ||
-      event.type === "run-error" ||
-      event.type === "run-complete" ||
-      event.type === "tts" ||
-      event.type === "attachment";
-    log("BROADCAST_SEND", runId, `event=${event.type} via runEmitter size=${deviceIds.size} flushNow=${urgent}`);
-    for (const id of deviceIds) {
-      const conn = this.connections.get(id.toUpperCase());
-      if (conn) conn.send(event, urgent);
-    }
-  }
-
-  private sendToDevices(deviceIds: Set<string>, event: SseEvent, flushNow?: boolean): void {
-    for (const id of deviceIds) {
-      const conn = this.connections.get(id.toUpperCase());
-      if (conn) {
-        log("SEND_TO_DEVICE", "N/A", `event=${event.type} deviceId=${id}`);
-        conn.send(event, flushNow);
-      }
+      const entry = this.nextEntry(conn.deviceId, event);
+      conn.send(entry, flushNow);
     }
   }
 
   trackDeviceForRun(deviceId: string, runId: string): void {
-    const normalizedId = deviceId.toUpperCase();
-    let deviceIds = this.runEmitter.get(runId);
-    if (!deviceIds) {
-      deviceIds = new Set();
-      this.runEmitter.set(runId, deviceIds);
-    }
-    deviceIds.add(normalizedId);
-    this.lastRunIdByDevice.set(normalizedId, runId);
-    log("TRACK_RUN", runId, `deviceId=${deviceId} runEmitterSize=${this.runEmitter.size}`);
-  }
-
-  /** Most recent runId for this device from `trackDeviceForRun` (same HTTP message turn). */
-  getLastRunIdForDevice(deviceId: string): string | undefined {
-    return this.lastRunIdByDevice.get(deviceId.toUpperCase());
+    const key = deviceId.trim().toUpperCase();
+    const set = this.runEmitter.get(runId) ?? new Set<string>();
+    set.add(key);
+    this.runEmitter.set(runId, set);
+    this.lastRunIdByDevice.set(key, runId);
   }
 
   untrackRun(runId: string): void {
-    log("UNTRACK_RUN", runId);
     this.runEmitter.delete(runId);
-    this.runStates.delete(runId);
   }
 
-  getConnection(deviceId: string): SseConnection | undefined {
-    return this.connections.get(deviceId.toUpperCase());
+  hasTrackedDevices(runId: string): boolean {
+    return (this.runEmitter.get(runId)?.size ?? 0) > 0;
   }
 
-  /**
-   * When exactly one device has an active SSE connection, return its id.
-   * Used for outbound delivery when the gateway passes placeholder `to: "friday"` (channel id)
-   * instead of a real device UUID — e.g. cron jobs that declare channel but no explicit peer.
-   */
-  getSoleConnectedDeviceId(): string | undefined {
-    if (this.connections.size !== 1) return undefined;
-    return [...this.connections.keys()][0];
-  }
-
-  /**
-   * Broadcast an SSE line directly to a device's SSE connection, bypassing SseEvent wrapping.
-   * Used for attachment events where the iOS app expects flat-field JSON (not nested data{}).
-   */
-  broadcastSseLine(deviceId: string, payload: Record<string, unknown>): void {
-    const conn = this.connections.get(deviceId.toUpperCase());
-    if (!conn) {
-      log("SSE_LINE_SKIP", deviceId, `conn=NONE activeConns=${[...this.connections.keys()].join(",")}`);
-      return;
-    }
-    const line = JSON.stringify(payload) + "\n";
-    log("SSE_LINE_SEND", deviceId, `len=${line.length}`);
-    conn.sendRaw(line);
-  }
-
-  /**
-   * Broadcast a tool event to the device identified by deviceId.
-   * Used by before_tool_call and after_tool_call plugin hooks.
-   */
-  broadcastToolEvent(deviceId: string | null, runId: string, event: SseEvent, flushNow?: boolean): void {
-    if (!deviceId) {
-      log("TOOL_BROADCAST_SKIP", runId, `deviceId=null`);
-      return;
-    }
-    const conn = this.connections.get(deviceId.toUpperCase());
-    if (!conn) {
-      log("TOOL_BROADCAST_SKIP", runId, `deviceId=${deviceId} conn=NONE activeConns=${[...this.connections.keys()].join(",")}`);
-      return;
-    }
-    log("TOOL_BROADCAST", runId, `type=${event.type} deviceId=${deviceId} flushNow=${flushNow}`);
-    conn.send(event, flushNow);
-  }
-
-  /**
-   * Look up the deviceId for a given runId by scanning runEmitter entries.
-   * Used by plugin hooks that receive runId but not deviceId.
-   *
-   * After `notifyRunComplete` → `untrackRun`, the run is removed from `runEmitter` but
-   * `lastRunIdByDevice` still maps the device to that runId — tools that finish slightly
-   * late (e.g. `exec`) would otherwise see `SKIP_no_deviceId`.
-   */
   getDeviceIdByRunId(runId: string): string | null {
-    const deviceIds = this.runEmitter.get(runId);
-    if (deviceIds && deviceIds.size > 0) {
-      return [...deviceIds][0] ?? null;
+    const first = this.runEmitter.get(runId)?.values().next().value;
+    return typeof first === "string" ? first : null;
+  }
+
+  getSoleConnectedDeviceId(): string | null {
+    if (this.connections.size !== 1) return null;
+    return this.connections.keys().next().value ?? null;
+  }
+
+  getLastRunIdForDevice(deviceId: string): string | null {
+    return this.lastRunIdByDevice.get(deviceId.trim().toUpperCase()) ?? null;
+  }
+
+  broadcastToRun(runId: string, event: SseEvent, flushNow?: boolean): void {
+    const direct = typeof event.data.deviceId === "string" ? event.data.deviceId : "";
+    if (direct.trim()) {
+      this.broadcast(event, direct, flushNow);
+      return;
     }
-    for (const [deviceId, rid] of this.lastRunIdByDevice) {
-      if (rid === runId) return deviceId;
-    }
-    return null;
+    const set = this.runEmitter.get(runId);
+    if (!set || set.size === 0) return;
+    for (const deviceId of set) this.broadcast(event, deviceId, flushNow);
+  }
+
+  broadcastToolEvent(deviceId: string, runId: string, event: SseEvent, flushNow?: boolean): void {
+    this.trackDeviceForRun(deviceId, runId);
+    this.broadcastToRun(runId, event, flushNow ?? true);
+  }
+
+  /** Vitest / e2e: drop connections and in-memory seq maps (does not delete disk queue files). */
+  resetForTest(): void {
+    for (const c of this.connections.values()) c.close();
+    this.connections.clear();
+    this.runEmitter.clear();
+    this.lastRunIdByDevice.clear();
+    this.eventSeqByDevice.clear();
   }
 }
 
-// Singleton instance
-const globalEmitter = new SseEmitterRegistry();
-export { globalEmitter as sseEmitter, SseConnection };
+export const sseEmitter = new SseEmitterRegistry();

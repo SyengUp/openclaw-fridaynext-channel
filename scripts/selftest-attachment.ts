@@ -40,7 +40,7 @@ function desktopImageScenario() {
 
   const resolved = resolveMediaAttachment(first);
   assert.ok(resolved, "resolveMediaAttachment should copy into attachments/");
-  assert.ok(resolved!.url.startsWith("/friday/files/"));
+  assert.ok(resolved!.url.startsWith("/friday-next/files/"));
   console.log("[ok] desktop scenario:", resolved);
 }
 
@@ -90,20 +90,20 @@ function nestedMarkdownToolTextScenario() {
   fs.writeFileSync(tmp, "# PRD\n");
 
   const inner = JSON.stringify({
-    channel: "friday",
+    channel: "friday-next",
     mediaUrl: tmp,
     mediaUrls: [tmp],
     result: { messageId: "x" },
   });
   const outer = {
     content: [{ type: "text", text: inner }],
-    details: { channel: "friday", mediaUrl: tmp, mediaUrls: [tmp] },
+    details: { channel: "friday-next", mediaUrl: tmp, mediaUrls: [tmp] },
   };
   const paths = collectMediaPathsFromToolResult(outer);
   assert.ok(paths.has(tmp), "should lift .md path from content[].text JSON");
   const resolved = resolveMediaAttachment(tmp);
   assert.ok(resolved);
-  assert.ok(resolved!.filename.endsWith(".md"));
+  assert.ok(resolved!.fileName.endsWith(".md"));
   console.log("[ok] nested message tool (markdown) scenario:", resolved);
 }
 
@@ -113,7 +113,7 @@ nestedMarkdownToolTextScenario();
 
 function stringifyBlobExtractionScenario() {
   const inner = JSON.stringify({
-    channel: "friday",
+    channel: "friday-next",
     mediaUrl: "/Users/syengup/Desktop/PRD.md",
     mediaUrls: ["/Users/syengup/Desktop/PRD.md"],
   });

@@ -1,8 +1,8 @@
 /**
- * File download handler for GET /friday/files/:id
+ * File download handler for GET /friday-next/files/:id
  *
  * Sources checked (in order):
- * 1. In-memory file index (POST /friday/files and resolved attachments this session)
+ * 1. In-memory file index (POST /friday-next/files and resolved attachments this session)
  * 2. Plugin-root `attachments/` on disk (same basename as URL token; survives restarts)
  * 3. OpenClaw media buffer (~/.openclaw/media/inbound/<id>)
  */
@@ -12,11 +12,9 @@ import { extractBearerToken } from "../middleware/auth.js";
 import {
   getExternalFileSourceByUrlToken,
   getFile,
-  getFileByUrlToken,
   guessMimeType,
   readAttachmentFileFromDisk,
   readFile,
-  readFileByUrlToken,
 } from "./files.js";
 import path from "node:path";
 import fs from "node:fs";
@@ -186,16 +184,7 @@ export async function handleFilesDownload(
       }
     }
 
-    const tokenFile = getFileByUrlToken(fileToken);
-    if (tokenFile) {
-      const { buffer, mimeType } = readFileByUrlToken(fileToken);
-      if (buffer) {
-        sendBuffer(req, res, buffer, mimeType, tokenFile.filename);
-        return true;
-      }
-    }
-
-    // 1.3 Plugin-root attachments/ (survives gateway restarts; basename = URL token)
+    // 1.2 Plugin-root attachments/ (survives gateway restarts; basename = URL token)
     const fromAttachments = readAttachmentFileFromDisk(fileToken);
     if (fromAttachments) {
       sendBuffer(req, res, fromAttachments.buffer, fromAttachments.mimeType, fromAttachments.filename);

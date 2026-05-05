@@ -1,4 +1,4 @@
-/** Last accepted POST /friday/messages timestamp for Control UI channel health. */
+/** Last accepted POST /friday-next/messages timestamp for Control UI channel health. */
 let lastInboundAtMs: number | null = null;
 
 export function touchFridayInbound(): void {

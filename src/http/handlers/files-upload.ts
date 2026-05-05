@@ -1,5 +1,5 @@
 /**
- * File upload handler for POST /friday/files
+ * File upload handler for POST /friday-next/files
  *
  * Handles multipart file uploads from the iOS app.
  * Stores files and returns file IDs that can be referenced in messages.
@@ -155,7 +155,7 @@ export async function handleFilesUpload(
       filename: stored.filename,
       mimeType: stored.mimeType,
       size: stored.size,
-      url: `/friday/files/${encodeURIComponent(stored.urlToken)}`,
+      url: `/friday-next/files/${encodeURIComponent(stored.urlToken)}`,
     };
   });
 

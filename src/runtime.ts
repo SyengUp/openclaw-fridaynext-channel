@@ -1,8 +1,14 @@
-import type { PluginRuntime } from "openclaw/plugin-sdk/core";
-import { createPluginRuntimeStore } from "openclaw/plugin-sdk/runtime-store";
+import { createPluginRuntimeStore } from "./vendor/runtime-store.js";
 
-const {
-  setRuntime: setFridayRuntime,
-  getRuntime: getFridayRuntime,
-} = createPluginRuntimeStore<PluginRuntime>("Friday runtime not initialized");
-export { getFridayRuntime, setFridayRuntime };
+type FridayRuntime = {
+  config: { loadConfig: () => unknown };
+  logger?: { info?: (...args: unknown[]) => void; warn?: (...args: unknown[]) => void };
+};
+
+const { setRuntime, getRuntime, clearRuntime } = createPluginRuntimeStore<FridayRuntime>(
+  "Friday Next runtime not initialized",
+);
+
+export const setFridayNextRuntime = setRuntime;
+export const getFridayNextRuntime = getRuntime;
+export const clearFridayNextRuntime = clearRuntime;

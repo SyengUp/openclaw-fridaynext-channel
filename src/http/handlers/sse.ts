@@ -1,25 +1,18 @@
-/**
- * SSE (Server-Sent Events) handler for GET /friday/events
- *
- * Establishes a persistent SSE connection for a given deviceId.
- * Events are broadcast by the SSE emitter from the agent runner.
- */
-
 import type { IncomingMessage, ServerResponse } from "node:http";
+import { resolveFridayNextConfig } from "../../config.js";
+import { getHostOpenClawConfigSnapshot } from "../../host-config.js";
+import { getFridayNextRuntime } from "../../runtime.js";
 import { sseEmitter } from "../../sse/emitter.js";
-import { createFridaySession } from "../../session/session-manager.js";
 import { extractBearerToken } from "../middleware/auth.js";
 
-const log = (action: string, deviceId: string, detail?: string) => {
-  const ts = new Date().toISOString();
-  console.error(`[Friday-SSE] [${ts}] [${action}] deviceId=${deviceId}${detail ? ` detail=${detail}` : ""}`);
-};
+function parseLastEventId(req: IncomingMessage, url: URL): number {
+  const query = Number.parseInt(url.searchParams.get("lastEventId") ?? "", 10);
+  if (Number.isFinite(query)) return query;
+  const header = Number.parseInt((req.headers["last-event-id"] as string) ?? "", 10);
+  return Number.isFinite(header) ? header : 0;
+}
 
-export async function handleSseStream(
-  req: IncomingMessage,
-  res: ServerResponse,
-): Promise<boolean> {
-  // Only allow GET
+export async function handleSseStream(req: IncomingMessage, res: ServerResponse): Promise<boolean> {
   if (req.method !== "GET") {
     res.statusCode = 405;
     res.setHeader("Content-Type", "application/json");
@@ -27,74 +20,64 @@ export async function handleSseStream(
     return true;
   }
 
-  // Validate bearer token
   const token = extractBearerToken(req);
   if (!token) {
-    const url = new URL(req.url ?? "/", "http://localhost");
-    const deviceId = url.searchParams.get("deviceId") ?? "(unknown)";
-    log("AUTH_FAILED", deviceId, "missing or invalid token");
     res.statusCode = 401;
     res.setHeader("Content-Type", "application/json");
     res.end(JSON.stringify({ error: "Unauthorized: missing bearer token" }));
     return true;
   }
 
-  // Extract deviceId from query params
   const url = new URL(req.url ?? "/", "http://localhost");
-  const deviceId = url.searchParams.get("deviceId");
-  if (!deviceId || deviceId.trim().length === 0) {
-    log("BAD_REQUEST", "(unknown)", "missing deviceId");
+  const deviceId = (url.searchParams.get("deviceId") ?? "").trim();
+  if (!deviceId) {
     res.statusCode = 400;
     res.setHeader("Content-Type", "application/json");
     res.end(JSON.stringify({ error: "Missing required query parameter: deviceId" }));
     return true;
   }
 
-  log("CONNECTING", deviceId);
-
-  // Set SSE headers
   res.statusCode = 200;
   res.setHeader("Content-Type", "text/event-stream; charset=utf-8");
   res.setHeader("Cache-Control", "no-cache, no-store, must-revalidate");
   res.setHeader("Connection", "keep-alive");
-  res.setHeader("X-Accel-Buffering", "no"); // Disable nginx buffering
+  res.setHeader("X-Accel-Buffering", "no");
   res.setHeader("X-Content-Type-Options", "nosniff");
-  res.setHeader("Access-Control-Allow-Origin", "*");
   res.flushHeaders();
 
-  // Create session for this device
-  createFridaySession(deviceId);
-
-  // Register SSE connection
   const conn = sseEmitter.addConnection(deviceId, res);
 
-  // Send initial connected event
-  conn.send({
-    type: "agent",
-    data: { event: "connected", deviceId, timestamp: Date.now() },
-  });
+  const normalized = deviceId.trim().toUpperCase();
+  const lastSeq = sseEmitter.latestSeqForDevice(normalized);
+  sseEmitter.broadcast(
+    {
+      type: "connected",
+      data: {
+        deviceId: normalized,
+        serverTime: Date.now(),
+        lastSeq,
+      },
+    },
+    deviceId,
+    true,
+  );
 
-  log("CONNECTED", deviceId, "sent=event:connected");
+  const lastEventId = parseLastEventId(req, url);
+  if (lastEventId > 0) sseEmitter.replayBacklog(deviceId, lastEventId);
 
-  // Send keepalive every 30s
+  const config = resolveFridayNextConfig(getHostOpenClawConfigSnapshot(getFridayNextRuntime().config));
   const keepalive = setInterval(() => {
     if (conn.isClosed) {
       clearInterval(keepalive);
       return;
     }
-    try {
-      res.write(": keepalive\n\n");
-      log("KEEPALIVE", deviceId);
-    } catch {
-      clearInterval(keepalive);
-    }
-  }, 30000);
+    conn.sendRaw(": keepalive\n\n");
+  }, config.sseKeepaliveSec * 1000);
+  keepalive.unref();
 
-  // Clean up on close
   req.on("close", () => {
     clearInterval(keepalive);
-    sseEmitter.removeConnection(deviceId);
-    log("DISCONNECTED", deviceId);
+    sseEmitter.removeConnection(deviceId, conn);
   });
 
   return true;

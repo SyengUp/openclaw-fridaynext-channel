@@ -1,8 +1,8 @@
 /**
- * File manager for Friday channel attachments.
+ * File manager for Friday Next channel attachments.
  *
  * Files are copied under the plugin root `attachments/` and served at
- * GET /friday/files/{token} so the app can use stable gateway URLs after restarts.
+ * GET /friday-next/files/{token} so the app can use stable gateway URLs after restarts.
  */
 
 import crypto from "node:crypto";
@@ -28,7 +28,7 @@ export function getAttachmentsDir(): string {
 
 export interface StoredFile {
   id: string;
-  /** Path segment for /friday/files/{urlToken} (on-disk basename under attachments/). */
+  /** Path segment for /friday-next/files/{urlToken} (on-disk basename under attachments/). */
   urlToken: string;
   filename: string;
   mimeType: string;
@@ -173,25 +173,20 @@ export function getFile(id: string): StoredFile | undefined {
   return resolveStoredFile(id);
 }
 
-/** Retrieve file metadata by URL token (basename under attachments/). */
-export function getFileByUrlToken(token: string): StoredFile | undefined {
-  return resolveStoredFile(token);
-}
-
 /**
- * Path segment for lookup: raw uuid / urlToken, or token extracted from `/friday/files/...`.
+ * Path segment for lookup: raw uuid / urlToken, or token extracted from `/friday-next/files/...`.
  */
 export function fridayAttachmentLookupKey(ref: string): string {
   const s = ref.trim();
   if (!s) return s;
-  if (s.startsWith("/friday/files/")) {
-    return decodeURIComponent(s.slice("/friday/files/".length));
+  if (s.startsWith("/friday-next/files/")) {
+    return decodeURIComponent(s.slice("/friday-next/files/".length));
   }
   return s;
 }
 
 /**
- * Canonical gateway URL `/friday/files/{urlToken}` with extension when stored (for history, MediaUrls).
+ * Canonical gateway URL `/friday-next/files/{urlToken}` with extension when stored (for history, MediaUrls).
  */
 export function fridayFilesPublicUrl(ref: string): string {
   const lookupKey = fridayAttachmentLookupKey(ref);
@@ -199,19 +194,19 @@ export function fridayFilesPublicUrl(ref: string): string {
 
   const file = resolveStoredFile(lookupKey);
   if (file) {
-    return `/friday/files/${encodeURIComponent(file.urlToken)}`;
+    return `/friday-next/files/${encodeURIComponent(file.urlToken)}`;
   }
 
   const disk = readAttachmentFileFromDisk(lookupKey);
   if (disk) {
-    return `/friday/files/${encodeURIComponent(disk.filename)}`;
+    return `/friday-next/files/${encodeURIComponent(disk.filename)}`;
   }
 
   const trimmed = ref.trim();
-  if (trimmed.startsWith("/friday/files/")) {
-    return `/friday/files/${encodeURIComponent(lookupKey)}`;
+  if (trimmed.startsWith("/friday-next/files/")) {
+    return `/friday-next/files/${encodeURIComponent(lookupKey)}`;
   }
-  return `/friday/files/${encodeURIComponent(lookupKey)}`;
+  return `/friday-next/files/${encodeURIComponent(lookupKey)}`;
 }
 
 export function getExternalFileSourceByUrlToken(token: string): string | undefined {
@@ -231,18 +226,13 @@ export function readFile(id: string): { buffer: Buffer | null; mimeType: string 
   }
 }
 
-/** Read a file by URL token (basename). */
-export function readFileByUrlToken(token: string): { buffer: Buffer | null; mimeType: string } {
-  return readFile(token);
-}
-
 /**
- * Copy a file from a local filesystem path into the Friday channel file store
- * and return its /friday/files/{token} URL. If the path is already a Friday channel
- * file URL (i.e. starts with "/friday/files/"), return it as-is.
+ * Copy a file from a local filesystem path into the Friday Next channel file store
+ * and return its /friday-next/files/{token} URL. If the path is already a Friday Next channel
+ * file URL (i.e. starts with "/friday-next/files/"), return it as-is.
  */
 export function resolveMediaUrl(localPath: string): string {
-  if (localPath.startsWith("/friday/files/")) {
+  if (localPath.startsWith("/friday-next/files/")) {
     return localPath;
   }
 
@@ -252,7 +242,7 @@ export function resolveMediaUrl(localPath: string): string {
     return localPath;
   }
   console.log(`[files] resolveMediaUrl: copied "${stored.filename}" → ${stored.urlToken}`);
-  return `/friday/files/${encodeURIComponent(stored.urlToken)}`;
+  return `/friday-next/files/${encodeURIComponent(stored.urlToken)}`;
 }
 
 export interface ResolvedAttachment {
@@ -265,20 +255,20 @@ export interface ResolvedAttachment {
  * Returns null when source file is missing or cannot be copied.
  */
 export function resolveMediaAttachment(localPath: string): ResolvedAttachment | null {
-  if (localPath.startsWith("/friday/files/")) {
-    const token = decodeURIComponent(localPath.slice("/friday/files/".length));
+  if (localPath.startsWith("/friday-next/files/")) {
+    const token = decodeURIComponent(localPath.slice("/friday-next/files/".length));
     const file = resolveStoredFile(token);
     if (file) {
       return {
         fileName: file.filename,
-        url: `/friday/files/${encodeURIComponent(file.urlToken)}`,
+        url: `/friday-next/files/${encodeURIComponent(file.urlToken)}`,
       };
     }
     const disk = readAttachmentFileFromDisk(token);
     if (disk) {
       return {
         fileName: disk.filename,
-        url: `/friday/files/${encodeURIComponent(token)}`,
+        url: `/friday-next/files/${encodeURIComponent(token)}`,
       };
     }
     const fallback = path.basename(token);
@@ -298,31 +288,15 @@ export function resolveMediaAttachment(localPath: string): ResolvedAttachment | 
     externalFileSourceIndex.set(token, normalizeAgentMediaPath(localPath));
     return {
       fileName: filename,
-      url: `/friday/files/${encodeURIComponent(token)}`,
+      url: `/friday-next/files/${encodeURIComponent(token)}`,
     };
   }
   return {
     fileName: stored.filename,
-    url: `/friday/files/${encodeURIComponent(stored.urlToken)}`,
+    url: `/friday-next/files/${encodeURIComponent(stored.urlToken)}`,
   };
 }
 
-/** Best-effort original display filename (with extension) for a URL/id/token/path ref. */
-export function resolveMediaFileName(ref: string): string {
-  const key = fridayAttachmentLookupKey(ref);
-  if (!key) return "";
-
-  const file = resolveStoredFile(key);
-  if (file) return file.filename;
-
-  const disk = readAttachmentFileFromDisk(key);
-  if (disk) return disk.filename;
-
-  const external = externalFileSourceIndex.get(key);
-  if (external) return path.basename(external);
-
-  return path.basename(key);
-}
 
 /**
  * Guess MIME type from filename extension.
