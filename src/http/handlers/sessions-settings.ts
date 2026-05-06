@@ -58,6 +58,19 @@ export async function handleSessionsSettings(
   const thinkingLevel = typeof body?.thinkingLevel === "string" ? body.thinkingLevel : undefined;
   const modelRef = typeof body?.modelRef === "string" ? body.modelRef : undefined;
 
+  // Split modelRef "provider/modelId" into providerOverride + modelOverride for OpenClaw
+  let providerOverride: string | undefined;
+  let modelOverride: string | undefined;
+  if (modelRef) {
+    const slashIdx = modelRef.indexOf("/");
+    if (slashIdx > 0) {
+      providerOverride = modelRef.slice(0, slashIdx);
+      modelOverride = modelRef.slice(slashIdx + 1);
+    } else {
+      modelOverride = modelRef;
+    }
+  }
+
   const errors: string[] = [];
   if (reasoningLevel !== undefined && !VALID_REASONING.has(reasoningLevel)) {
     errors.push(`reasoningLevel must be one of: ${[...VALID_REASONING].join(", ")}`);
@@ -77,6 +90,8 @@ export async function handleSessionsSettings(
     reasoningLevel,
     thinkingLevel,
     modelRef,
+    providerOverride,
+    modelOverride,
   });
 
   const settings = getSessionSettings(sessionKey);

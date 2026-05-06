@@ -190,6 +190,8 @@ export interface FridaySessionSettings {
   reasoningLevel?: string;
   thinkingLevel?: string;
   modelRef?: string;
+  providerOverride?: string;
+  modelOverride?: string;
 }
 
 /**
@@ -241,6 +243,16 @@ export function setSessionSettings(
       updated = true;
     }
 
+    if (settings.providerOverride !== undefined && data[fileKey]["providerOverride"] !== settings.providerOverride) {
+      data[fileKey]["providerOverride"] = settings.providerOverride;
+      updated = true;
+    }
+
+    if (settings.modelOverride !== undefined && data[fileKey]["modelOverride"] !== settings.modelOverride) {
+      data[fileKey]["modelOverride"] = settings.modelOverride;
+      updated = true;
+    }
+
     if (updated) {
       writeFileSync(sessionsFile, JSON.stringify(data, null, 2), "utf-8");
     }
@@ -267,10 +279,16 @@ export function getSessionSettings(
     const entry = data[fileKey];
     if (!entry) return {};
 
+    const provider = typeof entry["providerOverride"] === "string" ? entry["providerOverride"] : undefined;
+    const model = typeof entry["modelOverride"] === "string" ? entry["modelOverride"] : undefined;
+    const storedModelRef = typeof entry["modelRef"] === "string" ? entry["modelRef"] : undefined;
+    // Build modelRef from providerOverride/modelOverride if modelRef not explicitly stored
+    const modelRef = storedModelRef ?? (provider && model ? `${provider}/${model}` : undefined);
+
     return {
       reasoningLevel: typeof entry["reasoningLevel"] === "string" ? entry["reasoningLevel"] : undefined,
       thinkingLevel: typeof entry["thinkingLevel"] === "string" ? entry["thinkingLevel"] : undefined,
-      modelRef: typeof entry["modelRef"] === "string" ? entry["modelRef"] : undefined,
+      modelRef,
     };
   } catch {
     return {};
