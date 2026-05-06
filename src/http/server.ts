@@ -11,6 +11,7 @@ import { handleSseStream } from "./handlers/sse.js";
 import { handleFilesUpload } from "./handlers/files-upload.js";
 import { handleFilesDownload } from "./handlers/files-download.js";
 import { handleCancel } from "./handlers/cancel.js";
+import { handleSessionsDelete } from "./handlers/sessions-delete.js";
 import { handleStatus } from "./handlers/status.js";
 import { applyCorsHeaders } from "./middleware/cors.js";
 import { resolveFridayNextConfig } from "../config.js";
@@ -54,6 +55,10 @@ async function handleFridayNextRoute(
 
   if (req.method === "POST" && pathname === "/friday-next/cancel") {
     return await handleCancel(req, res);
+  }
+
+  if (req.method === "DELETE" && pathname === "/friday-next/sessions") {
+    return await handleSessionsDelete(req, res);
   }
 
   if (req.method === "GET" && pathname === "/friday-next/status") {

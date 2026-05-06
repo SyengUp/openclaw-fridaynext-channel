@@ -5,7 +5,7 @@
 
 import { join } from "node:path";
 import os from "node:os";
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync, unlinkSync } from "node:fs";
 
 const FRIDAY_AGENT_ID = "main";
 const SESSION_ID_RE = /^[a-z0-9][a-z0-9._-]{0,127}$/i;
@@ -130,4 +130,58 @@ export function ensureSessionLevels(
   } catch {
     // Silently ignore errors — session settings are best-effort
   }
+}
+
+export function resolveSessionsDir(historyDir?: string): string {
+  const base = deriveOpenClawBaseDir(historyDir);
+  return join(base, "agents/main/sessions");
+}
+
+export interface DeleteSessionResult {
+  sessionKey: string;
+  sessionId?: string;
+  transcriptDeleted?: boolean;
+}
+
+/**
+ * Delete a session entry from sessions.json and its transcript files.
+ * Returns info about what was deleted.
+ */
+export function deleteFridaySession(
+  sessionKey: string,
+  historyDir?: string,
+): DeleteSessionResult {
+  const result: DeleteSessionResult = { sessionKey };
+  const sessionsFile = resolveSessionsFilePath(historyDir);
+  if (!existsSync(sessionsFile)) return result;
+
+  const raw = readFileSync(sessionsFile, "utf-8");
+  const data = JSON.parse(raw) as Record<string, Record<string, unknown>>;
+  const fileKey = toSessionStoreKey(sessionKey);
+  const entry = data[fileKey];
+  if (!entry) return result;
+
+  const sessionId = typeof entry["sessionId"] === "string" ? entry["sessionId"] : undefined;
+  const sessionFilePath =
+    typeof entry["sessionFile"] === "string" ? entry["sessionFile"] : undefined;
+  result.sessionId = sessionId;
+
+  // Delete transcript .jsonl file
+  if (sessionFilePath) {
+    try { unlinkSync(sessionFilePath); result.transcriptDeleted = true; } catch { /* gone already */ }
+  }
+
+  // Delete trajectory files
+  if (sessionId) {
+    const dir = resolveSessionsDir(historyDir);
+    for (const suffix of [".trajectory.jsonl", ".trajectory-path.json"]) {
+      try { unlinkSync(join(dir, `${sessionId}${suffix}`)); } catch { /* optional */ }
+    }
+  }
+
+  // Remove from sessions.json
+  delete data[fileKey];
+  writeFileSync(sessionsFile, JSON.stringify(data, null, 2), "utf-8");
+
+  return result;
 }
