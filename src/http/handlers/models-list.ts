@@ -16,16 +16,8 @@ function resolveConfiguredModels(): FridayModelEntry[] {
   if (!rt) return [];
   const cfg = rt.getConfig() as Record<string, unknown>;
 
-  const seen = new Set<string>();
-  const entries: FridayModelEntry[] = [];
-
-  const addEntry = (entry: FridayModelEntry) => {
-    if (seen.has(entry.id)) return;
-    seen.add(entry.id);
-    entries.push(entry);
-  };
-
-  // 1. Provider-level model definitions
+  // Build a lookup of provider-level model metadata
+  const providerMeta = new Map<string, { name?: string; reasoning?: boolean; contextWindow?: number; maxTokens?: number }>();
   const models = cfg?.models as Record<string, unknown> | undefined;
   const providers = models?.providers as Record<string, unknown> | undefined;
   if (providers) {
@@ -33,12 +25,11 @@ function resolveConfiguredModels(): FridayModelEntry[] {
       const providerModels = (provider as { models?: Array<Record<string, unknown>> })?.models;
       if (!Array.isArray(providerModels)) continue;
       for (const m of providerModels) {
-        const id = typeof m.id === "string" ? m.id : typeof m.name === "string" ? m.name : "";
-        if (!id) continue;
-        addEntry({
-          id: `${providerId}/${id}`,
+        const modelId = typeof m.id === "string" ? m.id : typeof m.name === "string" ? m.name : "";
+        if (!modelId) continue;
+        const key = `${providerId}/${modelId}`;
+        providerMeta.set(key, {
           name: typeof m.name === "string" ? m.name : undefined,
-          provider: providerId,
           reasoning: typeof m.reasoning === "boolean" ? m.reasoning : undefined,
           contextWindow: typeof m.contextWindow === "number" ? m.contextWindow : undefined,
           maxTokens: typeof m.maxTokens === "number" ? m.maxTokens : undefined,
@@ -47,34 +38,47 @@ function resolveConfiguredModels(): FridayModelEntry[] {
     }
   }
 
-  // 2. Agent defaults.models (models configured for use, keyed by provider/modelId)
+  // agents.defaults.models is the authoritative list of available models
   const agents = cfg?.agents as Record<string, unknown> | undefined;
   const agentDefaults = agents?.defaults as Record<string, unknown> | undefined;
   const agentModels = agentDefaults?.models as Record<string, Record<string, unknown>> | undefined;
+
+  const seen = new Set<string>();
+  const entries: FridayModelEntry[] = [];
+
   if (agentModels) {
     for (const [modelKey, info] of Object.entries(agentModels)) {
       const slashIdx = modelKey.indexOf("/");
       if (slashIdx <= 0) continue;
       const provider = modelKey.slice(0, slashIdx);
       const modelId = modelKey.slice(slashIdx + 1);
-      addEntry({
+      const meta = providerMeta.get(modelKey);
+      seen.add(modelKey);
+      entries.push({
         id: modelKey,
-        name: typeof info?.alias === "string" ? info.alias : modelId,
+        name: typeof info?.alias === "string" ? info.alias : meta?.name ?? modelId,
         provider,
+        reasoning: meta?.reasoning,
+        contextWindow: meta?.contextWindow,
+        maxTokens: meta?.maxTokens,
       });
     }
   }
 
-  // 3. Agent primary model
+  // Also include agent primary model if not already listed
   const agentList = agents?.list as Array<Record<string, unknown>> | undefined;
   for (const agent of agentList ?? []) {
     const primaryModel = typeof agent?.model === "string" ? agent.model : undefined;
     if (primaryModel && !seen.has(primaryModel)) {
       const slashIdx = primaryModel.indexOf("/");
-      addEntry({
+      const meta = providerMeta.get(primaryModel);
+      entries.push({
         id: primaryModel,
-        name: slashIdx > 0 ? primaryModel.slice(slashIdx + 1) : primaryModel,
+        name: meta?.name ?? (slashIdx > 0 ? primaryModel.slice(slashIdx + 1) : primaryModel),
         provider: slashIdx > 0 ? primaryModel.slice(0, slashIdx) : "",
+        reasoning: meta?.reasoning,
+        contextWindow: meta?.contextWindow,
+        maxTokens: meta?.maxTokens,
       });
     }
   }
