@@ -185,3 +185,94 @@ export function deleteFridaySession(
 
   return result;
 }
+
+export interface FridaySessionSettings {
+  reasoningLevel?: string;
+  thinkingLevel?: string;
+  modelRef?: string;
+}
+
+/**
+ * Set session-level settings (reasoning, thinking, model) in sessions.json.
+ * Only updates the fields that are provided (non-undefined).
+ */
+export function setSessionSettings(
+  sessionKey: string,
+  settings: FridaySessionSettings,
+  historyDir?: string,
+): void {
+  try {
+    const sessionsFile = resolveSessionsFilePath(historyDir);
+    if (!existsSync(sessionsFile)) return;
+
+    const raw = readFileSync(sessionsFile, "utf-8");
+    const data = JSON.parse(raw) as Record<string, Record<string, unknown>>;
+    const fileKey = toSessionStoreKey(sessionKey);
+    const safeSessionId = sessionIdForSessionsFile(fileKey, sessionKey);
+    let updated = false;
+
+    if (!data[fileKey]) {
+      data[fileKey] = {
+        sessionId: safeSessionId,
+        updatedAt: Date.now(),
+        systemSent: true,
+      };
+      updated = true;
+    }
+
+    const currentSessionId = data[fileKey]["sessionId"];
+    if (typeof currentSessionId !== "string" || !SESSION_ID_RE.test(currentSessionId)) {
+      data[fileKey]["sessionId"] = safeSessionId;
+      updated = true;
+    }
+
+    if (settings.reasoningLevel !== undefined && data[fileKey]["reasoningLevel"] !== settings.reasoningLevel) {
+      data[fileKey]["reasoningLevel"] = settings.reasoningLevel;
+      updated = true;
+    }
+
+    if (settings.thinkingLevel !== undefined && data[fileKey]["thinkingLevel"] !== settings.thinkingLevel) {
+      data[fileKey]["thinkingLevel"] = settings.thinkingLevel;
+      updated = true;
+    }
+
+    if (settings.modelRef !== undefined && data[fileKey]["modelRef"] !== settings.modelRef) {
+      data[fileKey]["modelRef"] = settings.modelRef;
+      updated = true;
+    }
+
+    if (updated) {
+      writeFileSync(sessionsFile, JSON.stringify(data, null, 2), "utf-8");
+    }
+  } catch {
+    // Silently ignore errors — session settings are best-effort
+  }
+}
+
+/**
+ * Read session-level settings from sessions.json.
+ * Returns undefined for fields that aren't set.
+ */
+export function getSessionSettings(
+  sessionKey: string,
+  historyDir?: string,
+): FridaySessionSettings {
+  try {
+    const sessionsFile = resolveSessionsFilePath(historyDir);
+    if (!existsSync(sessionsFile)) return {};
+
+    const raw = readFileSync(sessionsFile, "utf-8");
+    const data = JSON.parse(raw) as Record<string, Record<string, unknown>>;
+    const fileKey = toSessionStoreKey(sessionKey);
+    const entry = data[fileKey];
+    if (!entry) return {};
+
+    return {
+      reasoningLevel: typeof entry["reasoningLevel"] === "string" ? entry["reasoningLevel"] : undefined,
+      thinkingLevel: typeof entry["thinkingLevel"] === "string" ? entry["thinkingLevel"] : undefined,
+      modelRef: typeof entry["modelRef"] === "string" ? entry["modelRef"] : undefined,
+    };
+  } catch {
+    return {};
+  }
+}
