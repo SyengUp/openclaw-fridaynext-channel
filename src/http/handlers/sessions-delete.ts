@@ -1,6 +1,7 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { deleteFridaySession, toSessionStoreKey } from "../../session/session-manager.js";
 import { getActiveRunIds } from "../../agent/active-runs.js";
+import { abortRun } from "../../agent/abort-run.js";
 import { getRunRoute } from "../../run-metadata.js";
 import { sseEmitter } from "../../sse/emitter.js";
 import { readJsonBody } from "../middleware/body.js";
@@ -12,14 +13,7 @@ async function cancelActiveRunsForSession(sessionKey: string): Promise<string[]>
   for (const runId of getActiveRunIds()) {
     const route = getRunRoute(runId);
     if (route?.sessionKey === storeKey) {
-      try {
-        if (process.env.VITEST !== "true") {
-          const { abortAgentHarnessRun } = await import("openclaw/plugin-sdk/agent-harness");
-          abortAgentHarnessRun(runId);
-        }
-      } catch {
-        // optional at runtime
-      }
+      await abortRun(runId);
       sseEmitter.untrackRun(runId);
       cancelled.push(runId);
     }

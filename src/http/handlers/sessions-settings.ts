@@ -2,6 +2,7 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import {
   setSessionSettings,
   getSessionSettings,
+  splitModelRef,
 } from "../../session/session-manager.js";
 import { readJsonBody } from "../middleware/body.js";
 import { extractBearerToken } from "../middleware/auth.js";
@@ -58,19 +59,6 @@ export async function handleSessionsSettings(
   const thinkingLevel = typeof body?.thinkingLevel === "string" ? body.thinkingLevel : undefined;
   const modelRef = typeof body?.modelRef === "string" ? body.modelRef : undefined;
 
-  // Split modelRef "provider/modelId" into providerOverride + modelOverride for OpenClaw
-  let providerOverride: string | undefined;
-  let modelOverride: string | undefined;
-  if (modelRef) {
-    const slashIdx = modelRef.indexOf("/");
-    if (slashIdx > 0) {
-      providerOverride = modelRef.slice(0, slashIdx);
-      modelOverride = modelRef.slice(slashIdx + 1);
-    } else {
-      modelOverride = modelRef;
-    }
-  }
-
   const errors: string[] = [];
   if (reasoningLevel !== undefined && !VALID_REASONING.has(reasoningLevel)) {
     errors.push(`reasoningLevel must be one of: ${[...VALID_REASONING].join(", ")}`);
@@ -86,17 +74,17 @@ export async function handleSessionsSettings(
     return true;
   }
 
-  setSessionSettings(sessionKey, {
-    reasoningLevel,
-    thinkingLevel,
-    modelRef,
-    providerOverride,
-    modelOverride,
-  });
+  const settings: Record<string, string | undefined> = { reasoningLevel, thinkingLevel, modelRef };
+  if (modelRef) {
+    const split = splitModelRef(modelRef);
+    settings["providerOverride"] = split.provider;
+    settings["modelOverride"] = split.modelId;
+  }
 
-  const settings = getSessionSettings(sessionKey);
+  const result = setSessionSettings(sessionKey, settings);
+
   res.statusCode = 200;
   res.setHeader("Content-Type", "application/json");
-  res.end(JSON.stringify({ ok: true, sessionKey, ...settings }));
+  res.end(JSON.stringify({ ok: true, sessionKey, ...result }));
   return true;
 }

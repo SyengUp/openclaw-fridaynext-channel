@@ -1,18 +1,9 @@
-/**
- * Session bookkeeping for the Friday Next channel: sessions.json updates
- * for reasoning/thinking levels.
- */
-
 import { join } from "node:path";
 import os from "node:os";
-import { existsSync, readFileSync, writeFileSync, unlinkSync } from "node:fs";
+import { readFileSync, writeFileSync, unlinkSync } from "node:fs";
 
 const FRIDAY_AGENT_ID = "main";
 const SESSION_ID_RE = /^[a-z0-9][a-z0-9._-]{0,127}$/i;
-
-function normalizeLowercaseStringOrEmpty(value: string): string {
-  return value.trim().toLowerCase();
-}
 
 function deriveOpenClawBaseDir(historyDir?: string): string {
   if (historyDir) {
@@ -22,14 +13,17 @@ function deriveOpenClawBaseDir(historyDir?: string): string {
   return join(os.homedir(), ".openclaw");
 }
 
-/**
- * Mirror OpenClaw `toAgentStoreSessionKey({ agentId: "main", requestKey })` so
- * `sessions.json` and inbound dispatch use the same store key as the gateway
- * (e.g. `default` → `agent:main:default`, `main` → `agent:main:main`).
- */
+export function splitModelRef(modelRef: string): { provider?: string; modelId: string } {
+  const slashIdx = modelRef.indexOf("/");
+  if (slashIdx > 0) {
+    return { provider: modelRef.slice(0, slashIdx), modelId: modelRef.slice(slashIdx + 1) };
+  }
+  return { modelId: modelRef };
+}
+
 export function toSessionStoreKey(rawSessionKey: string): string {
   const raw = rawSessionKey.trim();
-  const lowered = normalizeLowercaseStringOrEmpty(raw);
+  const lowered = raw.trim().toLowerCase();
   if (!raw || lowered === "main") {
     return `agent:${FRIDAY_AGENT_ID}:main`;
   }
@@ -77,59 +71,44 @@ function resolveSessionsFilePath(historyDir?: string): string {
   return join(base, "agents/main/sessions/sessions.json");
 }
 
-/**
- * Ensure a session has the desired reasoning/thinking level settings.
- * Creates the session entry if it doesn't exist.
- * Key matches the gateway's toAgentStoreSessionKey normalization.
- */
+function readSessionsData(path: string): Record<string, Record<string, unknown>> | null {
+  try {
+    return JSON.parse(readFileSync(path, "utf-8")) as Record<string, Record<string, unknown>>;
+  } catch {
+    return null;
+  }
+}
+
+function writeSessionsData(path: string, data: Record<string, Record<string, unknown>>): void {
+  try {
+    writeFileSync(path, JSON.stringify(data, null, 2), "utf-8");
+  } catch {
+    // best-effort
+  }
+}
+
+function upsertSessionEntry(
+  data: Record<string, Record<string, unknown>>,
+  fileKey: string,
+  sessionKey: string,
+): void {
+  const safeSessionId = sessionIdForSessionsFile(fileKey, sessionKey);
+  if (!data[fileKey]) {
+    data[fileKey] = { sessionId: safeSessionId, updatedAt: Date.now(), systemSent: true };
+  }
+  const currentSessionId = data[fileKey]["sessionId"];
+  if (typeof currentSessionId !== "string" || !SESSION_ID_RE.test(currentSessionId)) {
+    data[fileKey]["sessionId"] = safeSessionId;
+  }
+}
+
 export function ensureSessionLevels(
   sessionKey: string,
   reasoningLevel: string,
   thinkingLevel: string,
   historyDir?: string,
 ): void {
-  try {
-    const sessionsFile = resolveSessionsFilePath(historyDir);
-    if (!existsSync(sessionsFile)) return;
-
-    const raw = readFileSync(sessionsFile, "utf-8");
-    const data = JSON.parse(raw) as Record<string, Record<string, unknown>>;
-
-    const fileKey = toSessionStoreKey(sessionKey);
-    const safeSessionId = sessionIdForSessionsFile(fileKey, sessionKey);
-    let updated = false;
-
-    if (!data[fileKey]) {
-      data[fileKey] = {
-        sessionId: safeSessionId,
-        updatedAt: Date.now(),
-        systemSent: true,
-      };
-      updated = true;
-    }
-
-    const currentSessionId = data[fileKey]["sessionId"];
-    if (typeof currentSessionId !== "string" || !SESSION_ID_RE.test(currentSessionId)) {
-      data[fileKey]["sessionId"] = safeSessionId;
-      updated = true;
-    }
-
-    if (data[fileKey]["reasoningLevel"] !== reasoningLevel) {
-      data[fileKey]["reasoningLevel"] = reasoningLevel;
-      updated = true;
-    }
-
-    if (data[fileKey]["thinkingLevel"] !== thinkingLevel) {
-      data[fileKey]["thinkingLevel"] = thinkingLevel;
-      updated = true;
-    }
-
-    if (updated) {
-      writeFileSync(sessionsFile, JSON.stringify(data, null, 2), "utf-8");
-    }
-  } catch {
-    // Silently ignore errors — session settings are best-effort
-  }
+  setSessionSettings(sessionKey, { reasoningLevel, thinkingLevel }, historyDir);
 }
 
 export function resolveSessionsDir(historyDir?: string): string {
@@ -143,35 +122,27 @@ export interface DeleteSessionResult {
   transcriptDeleted?: boolean;
 }
 
-/**
- * Delete a session entry from sessions.json and its transcript files.
- * Returns info about what was deleted.
- */
 export function deleteFridaySession(
   sessionKey: string,
   historyDir?: string,
 ): DeleteSessionResult {
   const result: DeleteSessionResult = { sessionKey };
   const sessionsFile = resolveSessionsFilePath(historyDir);
-  if (!existsSync(sessionsFile)) return result;
+  const data = readSessionsData(sessionsFile);
+  if (!data) return result;
 
-  const raw = readFileSync(sessionsFile, "utf-8");
-  const data = JSON.parse(raw) as Record<string, Record<string, unknown>>;
   const fileKey = toSessionStoreKey(sessionKey);
   const entry = data[fileKey];
   if (!entry) return result;
 
   const sessionId = typeof entry["sessionId"] === "string" ? entry["sessionId"] : undefined;
-  const sessionFilePath =
-    typeof entry["sessionFile"] === "string" ? entry["sessionFile"] : undefined;
+  const sessionFilePath = typeof entry["sessionFile"] === "string" ? entry["sessionFile"] : undefined;
   result.sessionId = sessionId;
 
-  // Delete transcript .jsonl file
   if (sessionFilePath) {
     try { unlinkSync(sessionFilePath); result.transcriptDeleted = true; } catch { /* gone already */ }
   }
 
-  // Delete trajectory files
   if (sessionId) {
     const dir = resolveSessionsDir(historyDir);
     for (const suffix of [".trajectory.jsonl", ".trajectory-path.json"]) {
@@ -179,10 +150,8 @@ export function deleteFridaySession(
     }
   }
 
-  // Remove from sessions.json
   delete data[fileKey];
-  writeFileSync(sessionsFile, JSON.stringify(data, null, 2), "utf-8");
-
+  writeSessionsData(sessionsFile, data);
   return result;
 }
 
@@ -194,102 +163,67 @@ export interface FridaySessionSettings {
   modelOverride?: string;
 }
 
-/**
- * Set session-level settings (reasoning, thinking, model) in sessions.json.
- * Only updates the fields that are provided (non-undefined).
- */
 export function setSessionSettings(
   sessionKey: string,
   settings: FridaySessionSettings,
   historyDir?: string,
-): void {
+): FridaySessionSettings {
   try {
     const sessionsFile = resolveSessionsFilePath(historyDir);
-    if (!existsSync(sessionsFile)) return;
+    const data = readSessionsData(sessionsFile);
+    if (!data) return {};
 
-    const raw = readFileSync(sessionsFile, "utf-8");
-    const data = JSON.parse(raw) as Record<string, Record<string, unknown>>;
     const fileKey = toSessionStoreKey(sessionKey);
-    const safeSessionId = sessionIdForSessionsFile(fileKey, sessionKey);
+    upsertSessionEntry(data, fileKey, sessionKey);
+
+    const fieldKeys: (keyof FridaySessionSettings)[] = [
+      "reasoningLevel", "thinkingLevel", "modelRef", "providerOverride", "modelOverride",
+    ];
     let updated = false;
-
-    if (!data[fileKey]) {
-      data[fileKey] = {
-        sessionId: safeSessionId,
-        updatedAt: Date.now(),
-        systemSent: true,
-      };
-      updated = true;
-    }
-
-    const currentSessionId = data[fileKey]["sessionId"];
-    if (typeof currentSessionId !== "string" || !SESSION_ID_RE.test(currentSessionId)) {
-      data[fileKey]["sessionId"] = safeSessionId;
-      updated = true;
-    }
-
-    if (settings.reasoningLevel !== undefined && data[fileKey]["reasoningLevel"] !== settings.reasoningLevel) {
-      data[fileKey]["reasoningLevel"] = settings.reasoningLevel;
-      updated = true;
-    }
-
-    if (settings.thinkingLevel !== undefined && data[fileKey]["thinkingLevel"] !== settings.thinkingLevel) {
-      data[fileKey]["thinkingLevel"] = settings.thinkingLevel;
-      updated = true;
-    }
-
-    if (settings.modelRef !== undefined && data[fileKey]["modelRef"] !== settings.modelRef) {
-      data[fileKey]["modelRef"] = settings.modelRef;
-      updated = true;
-    }
-
-    if (settings.providerOverride !== undefined && data[fileKey]["providerOverride"] !== settings.providerOverride) {
-      data[fileKey]["providerOverride"] = settings.providerOverride;
-      updated = true;
-    }
-
-    if (settings.modelOverride !== undefined && data[fileKey]["modelOverride"] !== settings.modelOverride) {
-      data[fileKey]["modelOverride"] = settings.modelOverride;
-      updated = true;
+    for (const key of fieldKeys) {
+      const value = settings[key];
+      if (value !== undefined && data[fileKey][key] !== value) {
+        data[fileKey][key] = value;
+        updated = true;
+      }
     }
 
     if (updated) {
-      writeFileSync(sessionsFile, JSON.stringify(data, null, 2), "utf-8");
+      writeSessionsData(sessionsFile, data);
     }
+
+    return readSettingsFromEntry(data[fileKey]);
   } catch {
-    // Silently ignore errors — session settings are best-effort
+    return {};
   }
 }
 
-/**
- * Read session-level settings from sessions.json.
- * Returns undefined for fields that aren't set.
- */
+function readSettingsFromEntry(entry: Record<string, unknown>): FridaySessionSettings {
+  const provider = typeof entry["providerOverride"] === "string" ? entry["providerOverride"] : undefined;
+  const model = typeof entry["modelOverride"] === "string" ? entry["modelOverride"] : undefined;
+  const storedModelRef = typeof entry["modelRef"] === "string" ? entry["modelRef"] : undefined;
+  const modelRef = storedModelRef ?? (provider && model ? `${provider}/${model}` : undefined);
+
+  return {
+    reasoningLevel: typeof entry["reasoningLevel"] === "string" ? entry["reasoningLevel"] : undefined,
+    thinkingLevel: typeof entry["thinkingLevel"] === "string" ? entry["thinkingLevel"] : undefined,
+    modelRef,
+  };
+}
+
 export function getSessionSettings(
   sessionKey: string,
   historyDir?: string,
 ): FridaySessionSettings {
   try {
     const sessionsFile = resolveSessionsFilePath(historyDir);
-    if (!existsSync(sessionsFile)) return {};
+    const data = readSessionsData(sessionsFile);
+    if (!data) return {};
 
-    const raw = readFileSync(sessionsFile, "utf-8");
-    const data = JSON.parse(raw) as Record<string, Record<string, unknown>>;
     const fileKey = toSessionStoreKey(sessionKey);
     const entry = data[fileKey];
     if (!entry) return {};
-
-    const provider = typeof entry["providerOverride"] === "string" ? entry["providerOverride"] : undefined;
-    const model = typeof entry["modelOverride"] === "string" ? entry["modelOverride"] : undefined;
-    const storedModelRef = typeof entry["modelRef"] === "string" ? entry["modelRef"] : undefined;
-    // Build modelRef from providerOverride/modelOverride if modelRef not explicitly stored
-    const modelRef = storedModelRef ?? (provider && model ? `${provider}/${model}` : undefined);
-
-    return {
-      reasoningLevel: typeof entry["reasoningLevel"] === "string" ? entry["reasoningLevel"] : undefined,
-      thinkingLevel: typeof entry["thinkingLevel"] === "string" ? entry["thinkingLevel"] : undefined,
-      modelRef,
-    };
+    return readSettingsFromEntry(entry);
   } catch {
     return {};
   }
