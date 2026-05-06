@@ -15,25 +15,70 @@ function resolveConfiguredModels(): FridayModelEntry[] {
   const rt = getFridayAgentForwardRuntime();
   if (!rt) return [];
   const cfg = rt.getConfig() as Record<string, unknown>;
+
+  const seen = new Set<string>();
+  const entries: FridayModelEntry[] = [];
+
+  const addEntry = (entry: FridayModelEntry) => {
+    if (seen.has(entry.id)) return;
+    seen.add(entry.id);
+    entries.push(entry);
+  };
+
+  // 1. Provider-level model definitions
   const models = cfg?.models as Record<string, unknown> | undefined;
   const providers = models?.providers as Record<string, unknown> | undefined;
-  if (!providers) return [];
+  if (providers) {
+    for (const [providerId, provider] of Object.entries(providers)) {
+      const providerModels = (provider as { models?: Array<Record<string, unknown>> })?.models;
+      if (!Array.isArray(providerModels)) continue;
+      for (const m of providerModels) {
+        const id = typeof m.id === "string" ? m.id : typeof m.name === "string" ? m.name : "";
+        if (!id) continue;
+        addEntry({
+          id: `${providerId}/${id}`,
+          name: typeof m.name === "string" ? m.name : undefined,
+          provider: providerId,
+          reasoning: typeof m.reasoning === "boolean" ? m.reasoning : undefined,
+          contextWindow: typeof m.contextWindow === "number" ? m.contextWindow : undefined,
+          maxTokens: typeof m.maxTokens === "number" ? m.maxTokens : undefined,
+        });
+      }
+    }
+  }
 
-  const entries: FridayModelEntry[] = [];
-  for (const [providerId, provider] of Object.entries(providers)) {
-    const providerModels = (provider as { models?: Array<Record<string, unknown>> })?.models;
-    if (!Array.isArray(providerModels) || providerModels.length === 0) continue;
-    for (const m of providerModels) {
-      entries.push({
-        id: `${providerId}/${m.id ?? m.name}`,
-        name: typeof m.name === "string" ? m.name : undefined,
-        provider: providerId,
-        reasoning: typeof m.reasoning === "boolean" ? m.reasoning : undefined,
-        contextWindow: typeof m.contextWindow === "number" ? m.contextWindow : undefined,
-        maxTokens: typeof m.maxTokens === "number" ? m.maxTokens : undefined,
+  // 2. Agent defaults.models (models configured for use, keyed by provider/modelId)
+  const agents = cfg?.agents as Record<string, unknown> | undefined;
+  const agentDefaults = agents?.defaults as Record<string, unknown> | undefined;
+  const agentModels = agentDefaults?.models as Record<string, Record<string, unknown>> | undefined;
+  if (agentModels) {
+    for (const [modelKey, info] of Object.entries(agentModels)) {
+      const slashIdx = modelKey.indexOf("/");
+      if (slashIdx <= 0) continue;
+      const provider = modelKey.slice(0, slashIdx);
+      const modelId = modelKey.slice(slashIdx + 1);
+      addEntry({
+        id: modelKey,
+        name: typeof info?.alias === "string" ? info.alias : modelId,
+        provider,
       });
     }
   }
+
+  // 3. Agent primary model
+  const agentList = agents?.list as Array<Record<string, unknown>> | undefined;
+  for (const agent of agentList ?? []) {
+    const primaryModel = typeof agent?.model === "string" ? agent.model : undefined;
+    if (primaryModel && !seen.has(primaryModel)) {
+      const slashIdx = primaryModel.indexOf("/");
+      addEntry({
+        id: primaryModel,
+        name: slashIdx > 0 ? primaryModel.slice(slashIdx + 1) : primaryModel,
+        provider: slashIdx > 0 ? primaryModel.slice(0, slashIdx) : "",
+      });
+    }
+  }
+
   return entries;
 }
 
