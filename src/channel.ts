@@ -133,12 +133,8 @@ export const fridayNextChannelPlugin = createChatChannelPlugin({
     },
   },
   outbound: {
-    base: {
-      deliveryMode: "direct" as const,
-    },
-    attachedResults: {
-      channel: CHANNEL_ID,
-      sendText: async (ctx: any) => {
+    deliveryMode: "direct" as const,
+    sendText: async (ctx: any) => {
         const text = ctx.text ?? "";
         const rawCtx = ctx as unknown as Record<string, unknown>;
         const deviceId = resolveFridayDeviceIdForOutbound(ctx.to, rawCtx);
@@ -279,6 +275,5 @@ export const fridayNextChannelPlugin = createChatChannelPlugin({
           timestamp: Date.now(),
         };
       },
-    },
   },
 });
