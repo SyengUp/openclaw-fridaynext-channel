@@ -1,44 +1,25 @@
-export function describeMessageActions() {
-  return {
-    actions: ["send", "channel-info", "channel-list"] as const,
-    capabilities: ["text", "media"] as const,
-  };
-}
-
-export async function handleMessageAction(ctx: {
-  channel: string;
+type MessageActionCtx = {
   action: string;
   params: Record<string, unknown>;
-  mediaAccess?: unknown;
-  mediaLocalRoots?: readonly string[];
-  mediaReadFile?: (filePath: string) => Promise<Buffer>;
-  accountId?: string | null;
-  requesterSenderId?: string | null;
-  sessionKey?: string | null;
-  agentId?: string | null;
-  dryRun?: boolean;
-}): Promise<unknown> {
-  const { action, params } = ctx;
+};
 
-  if (action === "channel-info" || action === "channel-list") {
-    return {
-      ok: true,
-      channels: [
-        {
-          id: "friday-next",
-          name: "Friday Next",
-          transport: "http+sse",
-        },
-      ],
-    };
+const DISCOVERY = {
+  actions: ["send", "channel-info", "channel-list"] as const,
+  capabilities: ["text", "media"] as const,
+};
+
+const CHANNEL_INFO_RESPONSE = {
+  ok: true as const,
+  channels: [{ id: "friday-next", name: "Friday Next", transport: "http+sse" }],
+};
+
+export function describeMessageActions() {
+  return DISCOVERY;
+}
+
+export function handleMessageAction(ctx: MessageActionCtx): unknown {
+  if (ctx.action === "channel-info" || ctx.action === "channel-list") {
+    return CHANNEL_INFO_RESPONSE;
   }
-
-  // For "send", return null so the core sendMessage path handles it.
-  // This falls through to deliverOutboundPayloads → createChannelHandler
-  // which resolves the outbound adapter from the plugin registry.
-  if (action === "send") {
-    return null;
-  }
-
   return null;
 }
