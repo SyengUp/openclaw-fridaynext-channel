@@ -11,6 +11,7 @@ import { createChatChannelPlugin } from "openclaw/plugin-sdk/core";
 import type { ChannelAccountSnapshot } from "openclaw/plugin-sdk/status-helpers";
 import { saveMediaBuffer } from "openclaw/plugin-sdk/media-store";
 import { sseEmitter } from "./sse/emitter.js";
+import { describeMessageActions, handleMessageAction } from "./channel-actions.js";
 import { guessMimeType, resolveMediaAttachment } from "./http/handlers/files.js";
 import {
   resolveFridayDeviceIdForOutbound,
@@ -102,6 +103,10 @@ export const fridayNextChannelPlugin = createChatChannelPlugin({
   base: {
     id: CHANNEL_ID,
     meta: fridayMeta,
+    actions: {
+      describeMessageTool: describeMessageActions,
+      handleAction: handleMessageAction,
+    },
     capabilities: fridayCapabilities,
     defaults: {
       queue: { debounceMs: 300 },
