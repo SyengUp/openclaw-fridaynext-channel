@@ -13,7 +13,7 @@ export async function handleStatus(req: IncomingMessage, res: ServerResponse): P
   if (!extractBearerToken(req)) {
     res.statusCode = 401;
     res.setHeader("Content-Type", "application/json");
-    res.end(JSON.stringify({ error: "Unauthorized: missing bearer token" }));
+    res.end(JSON.stringify({ error: "Unauthorized: bearer token mismatch" }));
     return true;
   }
   const activeRuns = getActiveRunIds();

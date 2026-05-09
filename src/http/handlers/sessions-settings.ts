@@ -25,7 +25,7 @@ export async function handleSessionsSettings(
   if (!token) {
     res.statusCode = 401;
     res.setHeader("Content-Type", "application/json");
-    res.end(JSON.stringify({ error: "Unauthorized" }));
+    res.end(JSON.stringify({ error: "Unauthorized: bearer token mismatch" }));
     return true;
   }
 

@@ -24,7 +24,7 @@ export async function handleSseStream(req: IncomingMessage, res: ServerResponse)
   if (!token) {
     res.statusCode = 401;
     res.setHeader("Content-Type", "application/json");
-    res.end(JSON.stringify({ error: "Unauthorized: missing bearer token" }));
+    res.end(JSON.stringify({ error: "Unauthorized: bearer token mismatch" }));
     return true;
   }
 
