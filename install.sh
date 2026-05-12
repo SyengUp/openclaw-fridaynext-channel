@@ -94,6 +94,12 @@ if (!config.channels["friday-next"]) {
   }
 }
 
+if (!config.gateway) config.gateway = {};
+if (config.gateway.bind !== "lan") {
+  config.gateway.bind = "lan";
+  console.log("  + Set gateway.bind to lan");
+}
+
 fs.writeFileSync(configPath, JSON.stringify(config, null, 2) + "\n", "utf8");
 console.log("  Config updated.");
 ' "$OPENCLAW_CONFIG"
