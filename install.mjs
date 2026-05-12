@@ -1,8 +1,12 @@
 #!/usr/bin/env node
 import { execSync } from "node:child_process";
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { dirname, join, relative, resolve, sep } from "node:path";
+import { fileURLToPath } from "node:url";
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = dirname(__filename);
 
 const PLUGIN_DIR = process.argv[2] || join(homedir(), ".openclaw", "extensions", "friday-channel-next");
 const OPENCLAW_CONFIG = join(homedir(), ".openclaw", "openclaw.json");
@@ -31,9 +35,20 @@ function has(cmd) {
   }
 }
 
+// Running from an npm/npx package when we have the full source (index.ts + package.json)
+// and are NOT already inside the target plugin dir.
+function isRunningFromNpmPackage() {
+  return (
+    resolve(__dirname) !== resolve(PLUGIN_DIR) &&
+    existsSync(join(__dirname, "package.json")) &&
+    existsSync(join(__dirname, "index.ts"))
+  );
+}
+
 // --------------- prerequisites ---------------
 
-const missing = ["pnpm", "node", "git", "openclaw"].filter((c) => !has(c));
+const required = ["pnpm", "node", "openclaw"];
+const missing = required.filter((c) => !has(c));
 if (missing.length) {
   missing.forEach((c) => err(`${c} is required but not found. Install it first.`));
   process.exit(1);
@@ -45,11 +60,26 @@ if (!existsSync(OPENCLAW_CONFIG)) {
   process.exit(1);
 }
 
-// --------------- clone / update ---------------
+// --------------- acquire source ---------------
 
 if (existsSync(PLUGIN_DIR)) {
   log(`Plugin directory found: ${PLUGIN_DIR}`);
+} else if (isRunningFromNpmPackage()) {
+  log(`Copying plugin from npm package to ${PLUGIN_DIR} ...`);
+  cpSync(__dirname, PLUGIN_DIR, {
+    recursive: true,
+    filter: (src) => {
+      const rel = relative(__dirname, src);
+      if (rel === "") return true; // root dir
+      const top = rel.split(sep)[0];
+      return ![".git", "node_modules", "dist", "attachments", ".claude"].includes(top);
+    },
+  });
 } else {
+  if (!has("git")) {
+    err("git is required for installation from GitHub. Install git first or use npx @openclaw/friday-channel-next.");
+    process.exit(1);
+  }
   log(`Cloning plugin to ${PLUGIN_DIR} ...`);
   execSync(`git clone "${REPO_URL}" "${PLUGIN_DIR}"`, { stdio: "inherit" });
 }
