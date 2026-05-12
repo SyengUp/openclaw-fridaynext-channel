@@ -179,11 +179,11 @@ log("Installation complete! Friday Next channel is now active.");
 const BOLD_YELLOW = (s) => `\x1b[1;33m${s}\x1b[0m`;
 
 log("");
+log(BOLD_YELLOW("Input the URL and Token below into your FridayNext app to connect."));
+log(BOLD_YELLOW("请将下方 URL 和 Token 输入至 FridayNext App 完成连接。"));
+log("");
 log("Gateway URL:  " + BOLD_YELLOW(gatewayUrl));
 log("Bearer Token: " + BOLD_YELLOW(gatewayToken));
-log("");
-log(BOLD_YELLOW("Input the URL and Token above into your FridayNext app to connect."));
-log(BOLD_YELLOW("请将上方 URL 和 Token 输入至 FridayNext App 完成连接。"));
 log("");
 log("This is a LOCAL network URL (bind=" + bindMode + ").");
 log("If you need a public URL for remote access, configure it");
