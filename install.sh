@@ -148,15 +148,36 @@ async function verifyGateway() {
         req.end();
       });
       if (res.status === 200) {
-        const data = JSON.parse(res.body);
-        if (data.ok) {
-          console.log("  Gateway verified OK (friday-next " + data.version + ", " + data.connections + " connections).");
+        try {
+          const data = JSON.parse(res.body);
+          if (data.ok) {
+            console.log("  Gateway verified OK (friday-next " + data.version + ", " + data.connections + " connections).");
+            return;
+          }
+          console.log("  ! Plugin responded but ok=false — " + JSON.stringify(data));
           return;
+        } catch {
+          if (i < 3) {
+            console.log("  ! Plugin routes not registered yet, retrying (" + i + "/6)...");
+          } else if (i < 6) {
+            console.log("  ! Gateway is up but plugin routes missing — may need config reload, retrying (" + i + "/6)...");
+          } else {
+            console.log("  ! Gateway is running but plugin routes were not loaded. Check plugin config in openclaw.json.");
+          }
+          continue;
         }
+      }
+      if (res.status === 401) {
+        console.log("  ! Auth token mismatch — check gateway.auth.token in openclaw.json.");
+        return;
+      }
+      if (res.status === 404) {
+        console.log("  ! Route /friday-next/status not found — plugin may not be loaded.");
+        return;
       }
       if (i < 6) console.log("  ! Gateway responded " + res.status + ", retrying (" + i + "/6)...");
     } catch {
-      if (i < 6) console.log("  ! Gateway not ready, retrying (" + i + "/6)...");
+      if (i < 6) console.log("  ! Gateway not reachable, retrying (" + i + "/6)...");
     }
   }
   console.log("  ! Gateway verification timed out — check '\''openclaw gateway status'\'' manually.");

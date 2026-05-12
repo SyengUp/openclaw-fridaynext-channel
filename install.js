@@ -181,15 +181,38 @@ async function verifyGateway(url, token, retries = 6) {
         req.end();
       });
       if (res.status === 200) {
-        const data = JSON.parse(res.body);
-        if (data.ok) {
-          log("Gateway verified OK (friday-next " + data.version + ", " + data.connections + " connections).");
-          return true;
+        try {
+          const data = JSON.parse(res.body);
+          if (data.ok) {
+            log("Gateway verified OK (friday-next " + data.version + ", " + data.connections + " connections).");
+            return true;
+          }
+          warn("Plugin responded but ok=false — " + JSON.stringify(data));
+          return false;
+        } catch {
+          // body is not JSON (e.g. HTML control panel) — plugin route not registered yet
+          if (i < 3) {
+            warn(`Plugin routes not registered yet, retrying (${i}/${retries})...`);
+          } else if (i < retries) {
+            warn(`Gateway is up but plugin routes missing — may need config reload, retrying (${i}/${retries})...`);
+          } else {
+            warn("Gateway is running but plugin routes were not loaded. Check plugin config in openclaw.json.");
+          }
+          continue;
         }
+      }
+      if (res.status === 401) {
+        warn("Auth token mismatch — check gateway.auth.token in openclaw.json.");
+        return false;
+      }
+      if (res.status === 404) {
+        warn("Route /friday-next/status not found — plugin may not be loaded.");
+        return false;
       }
       if (i < retries) warn(`Gateway responded ${res.status}, retrying (${i}/${retries})...`);
     } catch {
-      if (i < retries) warn(`Gateway not ready, retrying (${i}/${retries})...`);
+      // Connection refused / timeout — gateway not running yet
+      if (i < retries) warn(`Gateway not reachable, retrying (${i}/${retries})...`);
     }
   }
   warn("Gateway verification timed out — check 'openclaw gateway status' manually.");
