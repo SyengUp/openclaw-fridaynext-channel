@@ -132,9 +132,26 @@ const bind = config.gateway?.bind || "localhost";
 const host = bind === "lan" ? getLanIp() : "127.0.0.1";
 
 const YB = '\x1b[1;33m', N = '\x1b[0m';
-console.log("");
-console.log(YB + "Input the URL and Token below into your FridayNext app to connect." + N);
-console.log(YB + "请将下方 URL 和 Token 输入至 FridayNext App 完成连接。" + N);
+const qrPayload = JSON.stringify({ url: "http://" + host + ":" + port, token: token });
+let qrShown = false;
+try {
+  const { createRequire } = await import("node:module");
+  const qrcode = createRequire(import.meta.url)("qrcode-terminal");
+  console.log("");
+  console.log(YB + "Scan below to auto-fill URL & Token in FridayNext app:" + N);
+  console.log(YB + "扫描下方二维码自动填入 URL 和 Token：" + N);
+  console.log("");
+  qrcode.generate(qrPayload, { small: true });
+  console.log("");
+  console.log("If QR scan doesn't work, enter manually:");
+  console.log("若二维码无法使用，请手动输入：");
+  qrShown = true;
+} catch {}
+if (!qrShown) {
+  console.log("");
+  console.log(YB + "Input the URL and Token below into your FridayNext app to connect." + N);
+  console.log(YB + "请将下方 URL 和 Token 输入至 FridayNext App 完成连接。" + N);
+}
 console.log("");
 console.log("Gateway URL:  " + YB + "http://" + host + ":" + port + N);
 console.log("Bearer Token: " + YB + token + N);

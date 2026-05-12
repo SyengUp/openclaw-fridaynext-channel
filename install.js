@@ -174,13 +174,38 @@ if (bindMode === "lan") {
   gatewayUrl = `http://127.0.0.1:${gatewayPort}`;
 }
 
-log("--------------------------------------------------");
-log("Installation complete! Friday Next channel is now active.");
 const BOLD_YELLOW = (s) => `\x1b[1;33m${s}\x1b[0m`;
 
+log("--------------------------------------------------");
+log("Installation complete! Friday Next channel is now active.");
 log("");
-log(BOLD_YELLOW("Input the URL and Token below into your FridayNext app to connect."));
-log(BOLD_YELLOW("请将下方 URL 和 Token 输入至 FridayNext App 完成连接。"));
+
+// --------------- QR code ---------------
+
+const qrPayload = JSON.stringify({ url: gatewayUrl, token: gatewayToken });
+let qrShown = false;
+
+try {
+  const { createRequire } = await import("node:module");
+  const qrcode = createRequire(import.meta.url)("qrcode-terminal");
+  log(BOLD_YELLOW("Scan below to auto-fill URL & Token in FridayNext app:"));
+  log(BOLD_YELLOW("扫描下方二维码自动填入 URL 和 Token："));
+  log("");
+  qrcode.generate(qrPayload, { small: true });
+  log("");
+  log("If QR scan doesn't work, enter manually:");
+  log("若二维码无法使用，请手动输入：");
+  qrShown = true;
+} catch {
+  // qrcode-terminal not available, fall through to manual-only
+}
+
+// --------------- manual input ---------------
+
+if (!qrShown) {
+  log(BOLD_YELLOW("Input the URL and Token below into your FridayNext app to connect."));
+  log(BOLD_YELLOW("请将下方 URL 和 Token 输入至 FridayNext App 完成连接。"));
+}
 log("");
 log("Gateway URL:  " + BOLD_YELLOW(gatewayUrl));
 log("Bearer Token: " + BOLD_YELLOW(gatewayToken));

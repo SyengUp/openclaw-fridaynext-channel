@@ -1,6 +1,6 @@
 {
   "name": "@syengup/friday-channel-next",
-  "version": "0.0.6",
+  "version": "0.0.7",
   "description": "OpenClaw Friday Next Apple channel plugin",
   "type": "module",
   "files": [
@@ -52,6 +52,9 @@
     "bundle": {
       "stageRuntimeDependencies": true
     }
+  },
+  "dependencies": {
+    "qrcode-terminal": "^0.12.0"
   },
   "devDependencies": {
     "@types/node": "^25.6.0",
