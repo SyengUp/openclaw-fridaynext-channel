@@ -88,11 +88,7 @@ process.chdir(PLUGIN_DIR);
 // --------------- install + build ---------------
 
 log("Installing dependencies...");
-try {
-  execSync("pnpm install --frozen-lockfile", { stdio: "inherit" });
-} catch {
-  execSync("pnpm install", { stdio: "inherit" });
-}
+execSync("pnpm install", { stdio: "inherit" });
 
 log("Building TypeScript...");
 execSync("pnpm build", { stdio: "inherit" });

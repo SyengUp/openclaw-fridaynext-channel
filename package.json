@@ -1,6 +1,6 @@
 {
   "name": "@syengup/friday-channel-next",
-  "version": "0.0.7",
+  "version": "0.0.8",
   "description": "OpenClaw Friday Next Apple channel plugin",
   "type": "module",
   "files": [
@@ -9,7 +9,6 @@
     "install.js",
     "install.sh",
     "tsconfig.json",
-    "pnpm-lock.yaml",
     "openclaw.plugin.json"
   ],
   "scripts": {

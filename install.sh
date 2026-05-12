@@ -48,7 +48,7 @@ fi
 cd "$PLUGIN_DIR"
 
 log "Installing dependencies..."
-pnpm install --frozen-lockfile 2>/dev/null || pnpm install
+pnpm install
 
 log "Building TypeScript..."
 pnpm build
