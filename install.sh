@@ -232,9 +232,22 @@ console.log("");
 console.log("Gateway URL:  " + YB + "http://" + host + ":" + port + N);
 console.log("Bearer Token: " + YB + token + N);
 console.log("");
-console.log("This is a LOCAL network URL (bind=" + bind + ").");
-console.log("If you need a public URL for remote access, configure it");
-console.log("via HTTPS, Tailscale, or a reverse proxy yourself.");
+function isPrivateIp(ip) {
+  var p = ip.split(".").map(Number);
+  if (p[0] === 127) return true;
+  if (p[0] === 10) return true;
+  if (p[0] === 172 && p[1] >= 16 && p[1] <= 31) return true;
+  if (p[0] === 192 && p[1] === 168) return true;
+  if (p[0] === 169 && p[1] === 254) return true;
+  if (p[0] === 100 && p[1] >= 64 && p[1] <= 127) return true;
+  return false;
+}
+if (isPrivateIp(host)) {
+  console.log("This is a LOCAL network URL (" + host + ", bind=" + bind + ").");
+  console.log("If you need public access, configure HTTPS, Tailscale, or a reverse proxy.");
+} else {
+  console.log("This URL appears to be publicly accessible (" + host + ").");
+}
 ' "$OPENCLAW_CONFIG"
 
 log "--------------------------------------------------"

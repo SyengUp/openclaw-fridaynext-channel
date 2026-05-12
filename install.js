@@ -260,7 +260,21 @@ log("");
 log("Gateway URL:  " + BOLD_YELLOW(gatewayUrl));
 log("Bearer Token: " + BOLD_YELLOW(gatewayToken));
 log("");
-log("This is a LOCAL network URL (bind=" + bindMode + ").");
-log("If you need a public URL for remote access, configure it");
-log("via HTTPS, Tailscale, or a reverse proxy yourself.");
+function isPrivateIp(ip) {
+  const parts = ip.split(".").map(Number);
+  if (parts[0] === 127) return true;                       // loopback
+  if (parts[0] === 10) return true;                         // RFC 1918
+  if (parts[0] === 172 && parts[1] >= 16 && parts[1] <= 31) return true; // RFC 1918
+  if (parts[0] === 192 && parts[1] === 168) return true;    // RFC 1918
+  if (parts[0] === 169 && parts[1] === 254) return true;    // link-local
+  if (parts[0] === 100 && parts[1] >= 64 && parts[1] <= 127) return true; // CGNAT / Tailscale
+  return false;
+}
+const ip = new URL(gatewayUrl).hostname;
+if (isPrivateIp(ip)) {
+  log("This is a LOCAL network URL (" + ip + ", bind=" + bindMode + ").");
+  log("If you need public access, configure HTTPS, Tailscale, or a reverse proxy.");
+} else {
+  log("This URL appears to be publicly accessible (" + ip + ").");
+}
 log("--------------------------------------------------");
