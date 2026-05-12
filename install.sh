@@ -109,6 +109,61 @@ console.log("  Config updated.");
 log "Restarting OpenClaw gateway..."
 openclaw gateway restart
 
+# Verify gateway is up
+log "Verifying gateway..."
+node --input-type=module -e '
+import { readFileSync } from "node:fs";
+import { networkInterfaces } from "node:os";
+import http from "node:http";
+
+const config = JSON.parse(readFileSync(process.argv[1], "utf8"));
+
+function getLanIp() {
+  const nets = networkInterfaces();
+  for (const name of Object.keys(nets)) {
+    for (const net of nets[name]) {
+      if (net.family === "IPv4" && !net.internal) return net.address;
+    }
+  }
+  return "127.0.0.1";
+}
+
+const port = config.gateway?.port || 18789;
+const token = config.gateway?.auth?.token || "";
+const bind = config.gateway?.bind || "localhost";
+const host = bind === "lan" ? getLanIp() : "127.0.0.1";
+
+async function verifyGateway() {
+  for (let i = 1; i <= 6; i++) {
+    await new Promise((r) => setTimeout(r, 1000));
+    try {
+      const res = await new Promise((resolve, reject) => {
+        const req = http.request(
+          { hostname: host, port, path: "/friday-next/status", method: "GET",
+            headers: { authorization: "Bearer " + token }, timeout: 5000 },
+          (res) => { let body = ""; res.on("data", (c) => body += c); res.on("end", () => resolve({ status: res.statusCode, body })); },
+        );
+        req.on("error", reject);
+        req.on("timeout", () => { req.destroy(); reject(new Error("timeout")); });
+        req.end();
+      });
+      if (res.status === 200) {
+        const data = JSON.parse(res.body);
+        if (data.ok) {
+          console.log("  Gateway verified OK (friday-next " + data.version + ", " + data.connections + " connections).");
+          return;
+        }
+      }
+      if (i < 6) console.log("  ! Gateway responded " + res.status + ", retrying (" + i + "/6)...");
+    } catch {
+      if (i < 6) console.log("  ! Gateway not ready, retrying (" + i + "/6)...");
+    }
+  }
+  console.log("  ! Gateway verification timed out — check '\''openclaw gateway status'\'' manually.");
+}
+await verifyGateway();
+' "$OPENCLAW_CONFIG"
+
 # Show connection info
 node --input-type=module -e '
 import { readFileSync } from "node:fs";
@@ -131,7 +186,7 @@ const token = config.gateway?.auth?.token || "(not set)";
 const bind = config.gateway?.bind || "localhost";
 const host = bind === "lan" ? getLanIp() : "127.0.0.1";
 
-const YB = '\x1b[1;33m', N = '\x1b[0m';
+const YB = "\x1b[1;33m", N = "\x1b[0m";
 const qrPayload = JSON.stringify({ url: "http://" + host + ":" + port, token: token });
 let qrShown = false;
 try {
@@ -143,7 +198,7 @@ try {
   console.log("");
   qrcode.generate(qrPayload, { small: true });
   console.log("");
-  console.log("If QR scan doesn't work, enter manually:");
+  console.log("If QR scan does not work, enter manually:");
   console.log("若二维码无法使用，请手动输入：");
   qrShown = true;
 } catch {}

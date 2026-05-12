@@ -144,15 +144,13 @@ console.log("  Config updated.");
 log("Restarting OpenClaw gateway...");
 execSync("openclaw gateway restart", { stdio: "inherit" });
 
-// --------------- show connection info ---------------
+// --------------- verify ---------------
 
 function getLanIp() {
   const nets = networkInterfaces();
   for (const name of Object.keys(nets)) {
     for (const net of nets[name]) {
-      if (net.family === "IPv4" && !net.internal) {
-        return net.address;
-      }
+      if (net.family === "IPv4" && !net.internal) return net.address;
     }
   }
   return "127.0.0.1";
@@ -162,13 +160,46 @@ const gatewayPort = config.gateway?.port || 18789;
 const gatewayToken = config.gateway?.auth?.token || "(not set)";
 const bindMode = config.gateway?.bind || "localhost";
 
-let gatewayUrl;
-if (bindMode === "lan") {
-  const ip = getLanIp();
-  gatewayUrl = `http://${ip}:${gatewayPort}`;
-} else {
-  gatewayUrl = `http://127.0.0.1:${gatewayPort}`;
+const gatewayUrl = bindMode === "lan"
+  ? `http://${getLanIp()}:${gatewayPort}`
+  : `http://127.0.0.1:${gatewayPort}`;
+
+async function verifyGateway(url, token, retries = 6) {
+  const http = await import("node:http");
+  const { hostname, port } = new URL(url);
+  for (let i = 1; i <= retries; i++) {
+    await new Promise((r) => setTimeout(r, 1000));
+    try {
+      const res = await new Promise((resolve, reject) => {
+        const req = http.request(
+          { hostname, port, path: "/friday-next/status", method: "GET",
+            headers: { authorization: `Bearer ${token}` }, timeout: 5000 },
+          (res) => { let body = ""; res.on("data", (c) => body += c); res.on("end", () => resolve({ status: res.statusCode, body })); },
+        );
+        req.on("error", reject);
+        req.on("timeout", () => { req.destroy(); reject(new Error("timeout")); });
+        req.end();
+      });
+      if (res.status === 200) {
+        const data = JSON.parse(res.body);
+        if (data.ok) {
+          log("Gateway verified OK (friday-next " + data.version + ", " + data.connections + " connections).");
+          return true;
+        }
+      }
+      if (i < retries) warn(`Gateway responded ${res.status}, retrying (${i}/${retries})...`);
+    } catch {
+      if (i < retries) warn(`Gateway not ready, retrying (${i}/${retries})...`);
+    }
+  }
+  warn("Gateway verification timed out — check 'openclaw gateway status' manually.");
+  return false;
 }
+
+log("Verifying gateway...");
+await verifyGateway(gatewayUrl, gatewayToken);
+
+// --------------- show connection info ---------------
 
 const BOLD_YELLOW = (s) => `\x1b[1;33m${s}\x1b[0m`;
 
