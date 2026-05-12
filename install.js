@@ -260,20 +260,27 @@ log("");
 log("Gateway URL:  " + BOLD_YELLOW(gatewayUrl));
 log("Bearer Token: " + BOLD_YELLOW(gatewayToken));
 log("");
-function isPrivateIp(ip) {
-  const parts = ip.split(".").map(Number);
-  if (parts[0] === 127) return true;                       // loopback
-  if (parts[0] === 10) return true;                         // RFC 1918
-  if (parts[0] === 172 && parts[1] >= 16 && parts[1] <= 31) return true; // RFC 1918
-  if (parts[0] === 192 && parts[1] === 168) return true;    // RFC 1918
-  if (parts[0] === 169 && parts[1] === 254) return true;    // link-local
-  if (parts[0] === 100 && parts[1] >= 64 && parts[1] <= 127) return true; // CGNAT / Tailscale
-  return false;
+function classifyIp(ip) {
+  const p = ip.split(".").map(Number);
+  if (p[0] === 100 && p[1] >= 64 && p[1] <= 127) return "tailscale";
+  if (p[0] === 127) return "loopback";
+  if (p[0] === 10) return "private";
+  if (p[0] === 172 && p[1] >= 16 && p[1] <= 31) return "private";
+  if (p[0] === 192 && p[1] === 168) return "private";
+  if (p[0] === 169 && p[1] === 254) return "private";
+  return "public";
 }
 const ip = new URL(gatewayUrl).hostname;
-if (isPrivateIp(ip)) {
+const ipType = classifyIp(ip);
+if (ipType === "tailscale") {
+  log("This is a Tailscale network URL (" + ip + ").");
+  log("Accessible from your Tailnet devices.");
+} else if (ipType === "private") {
   log("This is a LOCAL network URL (" + ip + ", bind=" + bindMode + ").");
   log("If you need public access, configure HTTPS, Tailscale, or a reverse proxy.");
+} else if (ipType === "loopback") {
+  log("This is a LOOPBACK URL (" + ip + ").");
+  log("Only accessible from this machine.");
 } else {
   log("This URL appears to be publicly accessible (" + ip + ").");
 }

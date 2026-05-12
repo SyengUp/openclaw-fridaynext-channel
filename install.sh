@@ -232,19 +232,25 @@ console.log("");
 console.log("Gateway URL:  " + YB + "http://" + host + ":" + port + N);
 console.log("Bearer Token: " + YB + token + N);
 console.log("");
-function isPrivateIp(ip) {
+function classifyIp(ip) {
   var p = ip.split(".").map(Number);
-  if (p[0] === 127) return true;
-  if (p[0] === 10) return true;
-  if (p[0] === 172 && p[1] >= 16 && p[1] <= 31) return true;
-  if (p[0] === 192 && p[1] === 168) return true;
-  if (p[0] === 169 && p[1] === 254) return true;
-  if (p[0] === 100 && p[1] >= 64 && p[1] <= 127) return true;
-  return false;
+  if (p[0] === 100 && p[1] >= 64 && p[1] <= 127) return "tailscale";
+  if (p[0] === 127) return "loopback";
+  if (p[0] === 10) return "private";
+  if (p[0] === 172 && p[1] >= 16 && p[1] <= 31) return "private";
+  if (p[0] === 192 && p[1] === 168) return "private";
+  if (p[0] === 169 && p[1] === 254) return "private";
+  return "public";
 }
-if (isPrivateIp(host)) {
+if (classifyIp(host) === "tailscale") {
+  console.log("This is a Tailscale network URL (" + host + ").");
+  console.log("Accessible from your Tailnet devices.");
+} else if (classifyIp(host) === "private") {
   console.log("This is a LOCAL network URL (" + host + ", bind=" + bind + ").");
   console.log("If you need public access, configure HTTPS, Tailscale, or a reverse proxy.");
+} else if (classifyIp(host) === "loopback") {
+  console.log("This is a LOOPBACK URL (" + host + ").");
+  console.log("Only accessible from this machine.");
 } else {
   console.log("This URL appears to be publicly accessible (" + host + ").");
 }
