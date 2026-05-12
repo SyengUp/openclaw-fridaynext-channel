@@ -15,9 +15,9 @@ GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 NC='\033[0m'
 
-log()  { printf "%b%s\\n" "${GREEN}[friday-next]${NC} " "$1"; }
-warn() { printf "%b%s\\n" "${YELLOW}[friday-next]${NC} " "$1"; }
-err()  { printf "%b%s\\n" "${RED}[friday-next]${NC} " "$1" >&2; }
+log()  { printf "  %s\\n" "$1"; }
+warn() { printf "  ${YELLOW}!${NC} %s\\n" "$1"; }
+err()  { printf "  ${RED}X${NC} %s\\n" "$1" >&2; }
 
 trap 'err "Install failed."' ERR
 
@@ -109,10 +109,41 @@ console.log("  Config updated.");
 log "Restarting OpenClaw gateway..."
 openclaw gateway restart
 
+# Show connection info
+node --input-type=module -e '
+import { readFileSync } from "node:fs";
+import { networkInterfaces } from "node:os";
+
+const config = JSON.parse(readFileSync(process.argv[1], "utf8"));
+
+function getLanIp() {
+  const nets = networkInterfaces();
+  for (const name of Object.keys(nets)) {
+    for (const net of nets[name]) {
+      if (net.family === "IPv4" && !net.internal) return net.address;
+    }
+  }
+  return "127.0.0.1";
+}
+
+const port = config.gateway?.port || 18789;
+const token = config.gateway?.auth?.token || "(not set)";
+const bind = config.gateway?.bind || "localhost";
+const host = bind === "lan" ? getLanIp() : "127.0.0.1";
+
+const YB = '\x1b[1;33m', N = '\x1b[0m';
+console.log("");
+console.log("Gateway URL:  " + YB + "http://" + host + ":" + port + N);
+console.log("Bearer Token: " + YB + token + N);
+console.log("");
+console.log(YB + "Input the URL and Token above into your FridayNext app to connect." + N);
+console.log(YB + "请将上方 URL 和 Token 输入至 FridayNext App 完成连接。" + N);
+console.log("");
+console.log("This is a LOCAL network URL (bind=" + bind + ").");
+console.log("If you need a public URL for remote access, configure it");
+console.log("via HTTPS, Tailscale, or a reverse proxy yourself.");
+' "$OPENCLAW_CONFIG"
+
 log "--------------------------------------------------"
 log "Installation complete! Friday Next channel is now active."
-log ""
-log "The channel uses your gateway auth token by default."
-log "To use a different token, set FRIDAY_NEXT_AUTH_TOKEN env var or"
-log "add authToken to channels.friday-next in openclaw.json."
 log "--------------------------------------------------"

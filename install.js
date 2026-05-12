@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import { execSync } from "node:child_process";
 import { cpSync, existsSync, readFileSync, writeFileSync } from "node:fs";
-import { homedir } from "node:os";
+import { homedir, networkInterfaces } from "node:os";
 import { dirname, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -15,15 +15,14 @@ const REPO_URL = process.env.FRIDAY_NEXT_REPO || "https://github.com/SyengUp/ope
 const G = (s) => `\x1b[32m${s}\x1b[0m`;
 const Y = (s) => `\x1b[33m${s}\x1b[0m`;
 const R = (s) => `\x1b[31m${s}\x1b[0m`;
-
 function log(msg) {
-  console.log(`${G("[friday-next]")} ${msg}`);
+  console.log(`  ${msg}`);
 }
 function warn(msg) {
-  console.log(`${Y("[friday-next]")} ${msg}`);
+  console.log(`  ${Y("!")} ${msg}`);
 }
 function err(msg) {
-  console.error(`${R("[friday-next]")} ${msg}`);
+  console.error(`  ${R("X")} ${msg}`);
 }
 
 function has(cmd) {
@@ -149,10 +148,44 @@ console.log("  Config updated.");
 log("Restarting OpenClaw gateway...");
 execSync("openclaw gateway restart", { stdio: "inherit" });
 
+// --------------- show connection info ---------------
+
+function getLanIp() {
+  const nets = networkInterfaces();
+  for (const name of Object.keys(nets)) {
+    for (const net of nets[name]) {
+      if (net.family === "IPv4" && !net.internal) {
+        return net.address;
+      }
+    }
+  }
+  return "127.0.0.1";
+}
+
+const gatewayPort = config.gateway?.port || 18789;
+const gatewayToken = config.gateway?.auth?.token || "(not set)";
+const bindMode = config.gateway?.bind || "localhost";
+
+let gatewayUrl;
+if (bindMode === "lan") {
+  const ip = getLanIp();
+  gatewayUrl = `http://${ip}:${gatewayPort}`;
+} else {
+  gatewayUrl = `http://127.0.0.1:${gatewayPort}`;
+}
+
 log("--------------------------------------------------");
 log("Installation complete! Friday Next channel is now active.");
+const BOLD_YELLOW = (s) => `\x1b[1;33m${s}\x1b[0m`;
+
 log("");
-log("The channel uses your gateway auth token by default.");
-log("To use a different token, set FRIDAY_NEXT_AUTH_TOKEN env var or");
-log("add authToken to channels.friday-next in openclaw.json.");
+log("Gateway URL:  " + BOLD_YELLOW(gatewayUrl));
+log("Bearer Token: " + BOLD_YELLOW(gatewayToken));
+log("");
+log(BOLD_YELLOW("Input the URL and Token above into your FridayNext app to connect."));
+log(BOLD_YELLOW("请将上方 URL 和 Token 输入至 FridayNext App 完成连接。"));
+log("");
+log("This is a LOCAL network URL (bind=" + bindMode + ").");
+log("If you need a public URL for remote access, configure it");
+log("via HTTPS, Tailscale, or a reverse proxy yourself.");
 log("--------------------------------------------------");
