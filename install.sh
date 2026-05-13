@@ -129,6 +129,7 @@ openclaw gateway restart
 
 # Verify gateway is up
 log "Verifying gateway..."
+VERIFY_LOG=$(mktemp)
 node --input-type=module -e '
 import { readFileSync } from "node:fs";
 import { networkInterfaces } from "node:os";
@@ -151,6 +152,7 @@ const token = config.gateway?.auth?.token || "";
 const bind = config.gateway?.bind || "localhost";
 const host = bind === "lan" ? getLanIp() : "127.0.0.1";
 
+let ok = false;
 async function verifyGateway() {
   for (let i = 1; i <= 6; i++) {
     await new Promise((r) => setTimeout(r, 1000));
@@ -170,6 +172,7 @@ async function verifyGateway() {
           const data = JSON.parse(res.body);
           if (data.ok) {
             console.log("  Gateway verified OK (friday-next " + data.version + ", " + data.connections + " connections).");
+            ok = true;
             return;
           }
           console.log("  ! Plugin responded but ok=false — " + JSON.stringify(data));
@@ -201,7 +204,14 @@ async function verifyGateway() {
   console.log("  ! Gateway verification timed out — check '\''openclaw gateway status'\'' manually.");
 }
 await verifyGateway();
-' "$OPENCLAW_CONFIG"
+console.log(ok ? "VERIFY_OK" : "VERIFY_FAIL");
+' "$OPENCLAW_CONFIG" 2>&1 | tee "$VERIFY_LOG"
+if grep -q "VERIFY_OK" "$VERIFY_LOG"; then
+  VERIFY_PASS=1
+else
+  VERIFY_PASS=0
+fi
+rm -f "$VERIFY_LOG"
 
 # Show connection info
 node --input-type=module -e '
@@ -275,5 +285,11 @@ if (classifyIp(host) === "tailscale") {
 ' "$OPENCLAW_CONFIG"
 
 log "--------------------------------------------------"
-log "Installation complete! Friday Next channel is now active."
+if [ "$VERIFY_PASS" = "1" ]; then
+  log "Installation complete! Friday Next channel is now active."
+else
+  warn "Installation complete, but gateway verification failed."
+  warn "Check 'openclaw gateway status' and restart the gateway if needed."
+  warn "Also ensure OpenClaw is updated to 2026.5.7 or above: openclaw update"
+fi
 log "--------------------------------------------------"

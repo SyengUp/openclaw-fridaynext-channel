@@ -235,14 +235,20 @@ async function verifyGateway(url, token, retries = 6) {
 }
 
 log("Verifying gateway...");
-await verifyGateway(gatewayUrl, gatewayToken);
+const verified = await verifyGateway(gatewayUrl, gatewayToken);
 
 // --------------- show connection info ---------------
 
 const BOLD_YELLOW = (s) => `\x1b[1;33m${s}\x1b[0m`;
 
 log("--------------------------------------------------");
-log("Installation complete! Friday Next channel is now active.");
+if (verified) {
+  log("Installation complete! Friday Next channel is now active.");
+} else {
+  warn("Installation complete, but gateway verification failed.");
+  warn("Check 'openclaw gateway status' and restart the gateway if needed.");
+  warn("Also ensure OpenClaw is updated to 2026.5.7 or above: openclaw update");
+}
 log("");
 
 // --------------- QR code ---------------
