@@ -248,6 +248,7 @@ if (verified) {
   warn("Installation complete, but gateway verification failed.");
   warn("Check 'openclaw gateway status' and restart the gateway if needed.");
   warn("Also ensure OpenClaw is updated to 2026.5.7 or above: openclaw update");
+  warn("同时请确认 OpenClaw 已升级至 2026.5.7 或以上版本：openclaw update");
 }
 log("");
 
