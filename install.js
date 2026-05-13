@@ -59,10 +59,15 @@ if (!PKG) {
   process.exit(1);
 }
 
-// Auto-detect best registry (if npmjs.org is unreachable, use npmmirror)
+// Auto-detect best registry (measure latency; fall back to npmmirror if slow/unreachable)
 let registryFlag = "";
 try {
-  execSync('curl -s --connect-timeout 3 --max-time 5 https://registry.npmjs.org/ >/dev/null 2>&1');
+  const start = Date.now();
+  execSync('curl -s -o /dev/null --connect-timeout 2 --max-time 4 https://registry.npmjs.org/', { stdio: "pipe", timeout: 6000 });
+  if (Date.now() - start > 1500) {
+    warn("Default registry slow, using https://registry.npmmirror.com");
+    registryFlag = "--registry=https://registry.npmmirror.com";
+  }
 } catch {
   warn("Default registry unreachable, using https://registry.npmmirror.com");
   registryFlag = "--registry=https://registry.npmmirror.com";

@@ -39,13 +39,15 @@ else
   exit 1
 fi
 
-# Auto-detect best registry (if npmjs.org is unreachable, use npmmirror)
-if curl -s --connect-timeout 3 https://registry.npmjs.org/ >/dev/null 2>&1; then
-  REGISTRY=""
-else
-  warn "Default registry unreachable, using https://registry.npmmirror.com"
-  REGISTRY="--registry=https://registry.npmmirror.com"
-fi
+# Auto-detect best registry (measure latency; fall back to npmmirror if slow/unreachable)
+TIME=$(curl -s -o /dev/null -w '%{time_total}' --connect-timeout 2 --max-time 4 https://registry.npmjs.org/ 2>/dev/null || echo "999")
+case "$TIME" in
+  0.*) ;;  # under 1s — fast enough
+  *)
+    warn "Default registry slow/unreachable, using https://registry.npmmirror.com"
+    REGISTRY="--registry=https://registry.npmmirror.com"
+    ;;
+esac
 
 if [ ! -f "$OPENCLAW_CONFIG" ]; then
   err "OpenClaw config not found at $OPENCLAW_CONFIG"
