@@ -1,6 +1,6 @@
 {
   "name": "@syengup/friday-channel-next",
-  "version": "0.0.13",
+  "version": "0.0.14",
   "description": "OpenClaw Friday Next Apple channel plugin",
   "type": "module",
   "files": [
@@ -13,7 +13,7 @@
   ],
   "scripts": {
     "build": "tsc -p tsconfig.json",
-    "test": "pnpm test:unit && pnpm test:e2e",
+    "test": "npm run test:unit && npm run test:e2e",
     "test:unit": "vitest run",
     "test:e2e": "vitest run --config vitest.e2e.config.ts",
     "test:smoke": "node scripts/e2e-smoke.mjs",

@@ -46,10 +46,16 @@ function isRunningFromNpmPackage() {
 
 // --------------- prerequisites ---------------
 
-const required = ["pnpm", "node", "openclaw"];
+const required = ["node", "openclaw"];
 const missing = required.filter((c) => !has(c));
 if (missing.length) {
   missing.forEach((c) => err(`${c} is required but not found. Install it first.`));
+  process.exit(1);
+}
+
+const PKG = has("pnpm") ? "pnpm" : has("npm") ? "npm" : null;
+if (!PKG) {
+  err("pnpm or npm is required but not found. Install one first.");
   process.exit(1);
 }
 
@@ -88,10 +94,10 @@ process.chdir(PLUGIN_DIR);
 // --------------- install + build ---------------
 
 log("Installing dependencies...");
-execSync("pnpm install", { stdio: "inherit" });
+execSync(`${PKG} install`, { stdio: "inherit" });
 
 log("Building TypeScript...");
-execSync("pnpm build", { stdio: "inherit" });
+execSync(`${PKG} run build`, { stdio: "inherit" });
 
 // --------------- configure OpenClaw ---------------
 

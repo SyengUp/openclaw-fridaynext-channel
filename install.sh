@@ -22,12 +22,22 @@ err()  { printf "  ${RED}X${NC} %s\\n" "$1" >&2; }
 trap 'err "Install failed."' ERR
 
 # Check prerequisites
-for cmd in pnpm node git openclaw; do
+for cmd in node git openclaw; do
   if ! command -v "$cmd" &>/dev/null; then
     err "$cmd is required but not found. Install it first."
     exit 1
   fi
 done
+
+# Auto-detect package manager (prefer pnpm, fall back to npm)
+if command -v pnpm &>/dev/null; then
+  PKG="pnpm"
+elif command -v npm &>/dev/null; then
+  PKG="npm"
+else
+  err "pnpm or npm is required but not found. Install one first."
+  exit 1
+fi
 
 if [ ! -f "$OPENCLAW_CONFIG" ]; then
   err "OpenClaw config not found at $OPENCLAW_CONFIG"
@@ -48,10 +58,10 @@ fi
 cd "$PLUGIN_DIR"
 
 log "Installing dependencies..."
-pnpm install
+$PKG install
 
 log "Building TypeScript..."
-pnpm build
+$PKG run build
 
 # Step 2: Configure OpenClaw
 
