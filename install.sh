@@ -39,6 +39,14 @@ else
   exit 1
 fi
 
+# Auto-detect best registry (if npmjs.org is unreachable, use npmmirror)
+if curl -s --connect-timeout 3 https://registry.npmjs.org/ >/dev/null 2>&1; then
+  REGISTRY=""
+else
+  warn "Default registry unreachable, using https://registry.npmmirror.com"
+  REGISTRY="--registry=https://registry.npmmirror.com"
+fi
+
 if [ ! -f "$OPENCLAW_CONFIG" ]; then
   err "OpenClaw config not found at $OPENCLAW_CONFIG"
   err "Make sure OpenClaw is installed and has been run at least once."
@@ -58,7 +66,7 @@ fi
 cd "$PLUGIN_DIR"
 
 log "Installing dependencies..."
-$PKG install
+$PKG install $REGISTRY
 
 log "Building TypeScript..."
 $PKG run build

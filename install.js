@@ -59,6 +59,15 @@ if (!PKG) {
   process.exit(1);
 }
 
+// Auto-detect best registry (if npmjs.org is unreachable, use npmmirror)
+let registryFlag = "";
+try {
+  execSync('curl -s --connect-timeout 3 --max-time 5 https://registry.npmjs.org/ >/dev/null 2>&1');
+} catch {
+  warn("Default registry unreachable, using https://registry.npmmirror.com");
+  registryFlag = "--registry=https://registry.npmmirror.com";
+}
+
 if (!existsSync(OPENCLAW_CONFIG)) {
   err(`OpenClaw config not found at ${OPENCLAW_CONFIG}`);
   err("Make sure OpenClaw is installed and has been run at least once.");
@@ -94,7 +103,7 @@ process.chdir(PLUGIN_DIR);
 // --------------- install + build ---------------
 
 log("Installing dependencies...");
-execSync(`${PKG} install`, { stdio: "inherit" });
+execSync(`${PKG} install ${registryFlag}`, { stdio: "inherit" });
 
 log("Building TypeScript...");
 execSync(`${PKG} run build`, { stdio: "inherit" });
