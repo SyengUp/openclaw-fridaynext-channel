@@ -8,8 +8,27 @@ import { fileURLToPath } from "node:url";
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
-const PLUGIN_DIR = process.argv[2] || join(homedir(), ".openclaw", "extensions", "friday-channel-next");
-const OPENCLAW_CONFIG = join(homedir(), ".openclaw", "openclaw.json");
+const sudoUser = process.env.SUDO_USER;
+
+function realHome() {
+  if (!sudoUser) return homedir();
+  // Under sudo, homedir() may return /root. Check if HOME was preserved.
+  const current = homedir();
+  if (current !== "/root" && current !== "/var/root" && existsSync(current)) return current;
+  // Resolve the real user's home
+  try {
+    const h = execSync(`sh -c 'echo ~${sudoUser}'`, { encoding: "utf8" }).trim();
+    if (h && !h.startsWith("~") && existsSync(h)) return h;
+  } catch {}
+  for (const g of [`/home/${sudoUser}`, `/Users/${sudoUser}`]) {
+    if (existsSync(g)) return g;
+  }
+  return current;
+}
+
+const USER_HOME = realHome();
+const PLUGIN_DIR = process.argv[2] || join(USER_HOME, ".openclaw", "extensions", "friday-channel-next");
+const OPENCLAW_CONFIG = join(USER_HOME, ".openclaw", "openclaw.json");
 const REPO_URL = process.env.FRIDAY_NEXT_REPO || "https://github.com/SyengUp/openclaw-fridaynext-channel.git";
 
 const G = (s) => `\x1b[32m${s}\x1b[0m`;
@@ -34,6 +53,20 @@ function has(cmd) {
   }
 }
 
+let openclawCmd = "openclaw";
+
+function hasOpenclaw() {
+  if (has("openclaw")) return true;
+  if (!sudoUser) return false;
+  // Under sudo, openclaw isn't in root's PATH — run via the real user.
+  try {
+    execSync(`sudo -u "${sudoUser}" openclaw --version`, { stdio: "ignore" });
+    openclawCmd = `sudo -u "${sudoUser}" openclaw`;
+    return true;
+  } catch {}
+  return false;
+}
+
 // Running from an npm/npx package when we have the full source (index.ts + package.json)
 // and are NOT already inside the target plugin dir.
 function isRunningFromNpmPackage() {
@@ -46,10 +79,20 @@ function isRunningFromNpmPackage() {
 
 // --------------- prerequisites ---------------
 
-const required = ["node", "openclaw"];
-const missing = required.filter((c) => !has(c));
+if (sudoUser) {
+  warn("Running under sudo is unnecessary and may cause issues.");
+  warn("If possible, run without sudo: npx -y @syengup/friday-channel-next");
+}
+
+const missing = [];
+if (!has("node")) missing.push("node");
+if (!hasOpenclaw()) missing.push("openclaw");
 if (missing.length) {
   missing.forEach((c) => err(`${c} is required but not found. Install it first.`));
+  if (sudoUser && missing.includes("openclaw")) {
+    err("Could not find openclaw even via the real user's PATH.");
+    err(`Check that openclaw is installed under ${USER_HOME}.`);
+  }
   process.exit(1);
 }
 
@@ -108,16 +151,36 @@ process.chdir(PLUGIN_DIR);
 // --------------- install + build ---------------
 
 log("Installing dependencies...");
-execSync(`${PKG} install ${registryFlag}`, { stdio: "inherit" });
+try {
+  execSync(`${PKG} install ${registryFlag}`, { stdio: "inherit" });
+} catch {
+  err("Dependency installation failed.");
+  err("Check your network connection and try again.");
+  if (sudoUser) err("If running under sudo, ensure the real user can access the package manager.");
+  process.exit(1);
+}
 
 log("Building TypeScript...");
-execSync(`${PKG} run build`, { stdio: "inherit" });
+try {
+  execSync(`${PKG} run build`, { stdio: "inherit" });
+} catch {
+  err("TypeScript build failed.");
+  err("Check the compilation errors above and make sure the package is not corrupted.");
+  process.exit(1);
+}
 
 // --------------- configure OpenClaw ---------------
 
 log("Configuring OpenClaw...");
 
-const config = JSON.parse(readFileSync(OPENCLAW_CONFIG, "utf8"));
+let config;
+try {
+  config = JSON.parse(readFileSync(OPENCLAW_CONFIG, "utf8"));
+} catch {
+  err(`Failed to read ${OPENCLAW_CONFIG}.`);
+  err("The file may be missing or corrupted. Verify OpenClaw is installed correctly.");
+  process.exit(1);
+}
 
 if (!config.plugins) config.plugins = {};
 if (!Array.isArray(config.plugins.allow)) config.plugins.allow = [];
@@ -156,13 +219,33 @@ if (config.gateway.bind !== "lan") {
   console.log("  + Set gateway.bind to lan");
 }
 
-writeFileSync(OPENCLAW_CONFIG, JSON.stringify(config, null, 2) + "\n", "utf8");
+try {
+  writeFileSync(OPENCLAW_CONFIG, JSON.stringify(config, null, 2) + "\n", "utf8");
+} catch {
+  err(`Failed to write ${OPENCLAW_CONFIG}.`);
+  err("Check disk space and file permissions.");
+  process.exit(1);
+}
 console.log("  Config updated.");
+
+if (sudoUser) {
+  try {
+    execSync(`chown -R "${sudoUser}" "${PLUGIN_DIR}" "${OPENCLAW_CONFIG}"`, { stdio: "ignore" });
+    log("Fixed file ownership back to " + sudoUser);
+  } catch {
+    warn("Could not fix file ownership — files in " + PLUGIN_DIR + " may be owned by root.");
+  }
+}
 
 // --------------- restart gateway ---------------
 
 log("Restarting OpenClaw gateway...");
-execSync("openclaw gateway restart", { stdio: "inherit" });
+try {
+  execSync(`${openclawCmd} gateway restart`, { stdio: "inherit" });
+} catch {
+  warn("Gateway restart failed. The plugin files are installed but the gateway was not restarted.");
+  warn("Check 'openclaw gateway status' and restart manually: openclaw gateway restart");
+}
 
 // --------------- verify ---------------
 
