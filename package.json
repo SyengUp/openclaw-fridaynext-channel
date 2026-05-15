@@ -1,6 +1,6 @@
 {
   "name": "@syengup/friday-channel-next",
-  "version": "0.0.28",
+  "version": "0.0.29",
   "description": "OpenClaw Friday Next Apple channel plugin",
   "type": "module",
   "files": [
@@ -18,9 +18,7 @@
     "test:smoke": "node scripts/e2e-smoke.mjs",
     "test:msg-live": "node scripts/message-roundtrip-live.mjs"
   },
-  "bin": {
-    "friday-channel-next": "./cli.mjs"
-  },
+  "bin": "./cli.mjs",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "exports": {
