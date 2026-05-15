@@ -126,6 +126,15 @@ if (!existsSync(OPENCLAW_CONFIG)) {
 
 if (existsSync(PLUGIN_DIR)) {
   log(`Plugin directory found: ${PLUGIN_DIR}`);
+  if (existsSync(join(PLUGIN_DIR, ".git"))) {
+    try {
+      log("Pulling latest changes...");
+      execSync("git fetch origin && git checkout -f origin/main", { cwd: PLUGIN_DIR, stdio: "pipe" });
+      log("Updated to latest version.");
+    } catch {
+      warn("Could not update from git — continuing with existing source.");
+    }
+  }
 } else if (isRunningFromNpmPackage()) {
   log(`Copying plugin from npm package to ${PLUGIN_DIR} ...`);
   cpSync(__dirname, PLUGIN_DIR, {
@@ -198,6 +207,18 @@ if (!config.plugins.entries["friday-next"]) {
   console.log("  + Enabled friday-next in plugins.entries");
 }
 
+if (!config.plugins.allow.includes("canvas")) {
+  config.plugins.allow.push("canvas");
+  console.log("  + Added canvas to plugins.allow");
+}
+if (!config.plugins.entries["canvas"]) {
+  config.plugins.entries["canvas"] = { enabled: true };
+  console.log("  + Added canvas to plugins.entries (enabled)");
+} else if (!config.plugins.entries["canvas"].enabled) {
+  config.plugins.entries["canvas"].enabled = true;
+  console.log("  + Enabled canvas in plugins.entries");
+}
+
 if (!config.channels) config.channels = {};
 if (!config.channels["friday-next"]) {
   config.channels["friday-next"] = { enabled: true, transport: "http+sse" };
@@ -217,6 +238,49 @@ if (!config.gateway) config.gateway = {};
 if (config.gateway.bind !== "lan") {
   config.gateway.bind = "lan";
   console.log("  + Set gateway.bind to lan");
+}
+if (!config.gateway.nodes) config.gateway.nodes = {};
+if (!Array.isArray(config.gateway.nodes.allowCommands)) config.gateway.nodes.allowCommands = [];
+for (const cmd of [
+  "canvas.navigate",
+  "canvas.present",
+  "canvas.hide",
+  "canvas.eval",
+  "canvas.snapshot",
+  "canvas.a2ui.push",
+  "canvas.a2ui.reset",
+  "canvas.a2ui.pushJSONL",
+]) {
+  if (!config.gateway.nodes.allowCommands.includes(cmd)) {
+    config.gateway.nodes.allowCommands.push(cmd);
+    console.log("  + Added " + cmd + " to gateway.nodes.allowCommands");
+  }
+}
+
+// Ensure canvas and nodes are in the main agent's tools.alsoAllow (not deny)
+if (!config.agents) config.agents = {};
+if (!Array.isArray(config.agents.list)) config.agents.list = [];
+let mainAgent = config.agents.list.find((a) => a.id === "main");
+if (!mainAgent) {
+  mainAgent = { id: "main" };
+  config.agents.list.push(mainAgent);
+}
+if (!mainAgent.tools) mainAgent.tools = {};
+if (!Array.isArray(mainAgent.tools.alsoAllow)) mainAgent.tools.alsoAllow = [];
+for (const tool of ["canvas", "nodes"]) {
+  if (!mainAgent.tools.alsoAllow.includes(tool)) {
+    mainAgent.tools.alsoAllow.push(tool);
+    console.log("  + Added " + tool + " to agent 'main' tools.alsoAllow");
+  }
+}
+if (Array.isArray(mainAgent.tools.deny)) {
+  for (const tool of ["canvas", "nodes"]) {
+    const idx = mainAgent.tools.deny.indexOf(tool);
+    if (idx !== -1) {
+      mainAgent.tools.deny.splice(idx, 1);
+      console.log("  - Removed " + tool + " from agent 'main' tools.deny");
+    }
+  }
 }
 
 try {

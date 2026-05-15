@@ -6,7 +6,7 @@ Guidance for working in this repository (OpenClaw `friday-next` channel plugin).
 
 ```bash
 pnpm build           # Compile TS to dist/ (required before gateway restart)
-./install.sh         # One-click: install deps, build, and configure OpenClaw
+./install.js         # One-click: install deps, build, and configure OpenClaw
 pnpm test:unit       # Vitest unit tests (excludes *.e2e.test.ts)
 pnpm test:e2e        # Vitest e2e (vitest.e2e.config.ts)
 pnpm test            # unit then e2e
