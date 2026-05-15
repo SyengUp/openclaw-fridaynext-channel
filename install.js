@@ -96,6 +96,33 @@ if (missing.length) {
   process.exit(1);
 }
 
+// --------------- version check ---------------
+{
+  const MIN_OPENCLAW = [2026, 5, 12];
+  try {
+    const verOut = execSync(`${openclawCmd} --version`, { encoding: "utf8" }).trim();
+    const m = verOut.match(/(\d{4})\.(\d{1,2})\.(\d{1,2})/);
+    if (m) {
+      const cur = [parseInt(m[1], 10), parseInt(m[2], 10), parseInt(m[3], 10)];
+      let tooOld = false;
+      for (let i = 0; i < 3; i++) {
+        if (cur[i] > MIN_OPENCLAW[i]) break;
+        if (cur[i] < MIN_OPENCLAW[i]) { tooOld = true; break; }
+      }
+      if (tooOld) {
+        err(`OpenClaw version ${m[0]} is too old.`);
+        err(`Friday Next channel requires OpenClaw 2026.5.12 or above.`);
+        err(`Please update: ${openclawCmd} update`);
+        err(`请先升级 OpenClaw 至 2026.5.12 或以上版本：${openclawCmd} update`);
+        process.exit(1);
+      }
+    }
+  } catch {
+    // If version check itself fails, don't block — continue with a warning
+    warn("Could not determine OpenClaw version — continuing anyway.");
+  }
+}
+
 const PKG = has("pnpm") ? "pnpm" : has("npm") ? "npm" : null;
 if (!PKG) {
   err("pnpm or npm is required but not found. Install one first.");
