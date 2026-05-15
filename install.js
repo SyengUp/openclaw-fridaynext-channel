@@ -124,18 +124,7 @@ if (!existsSync(OPENCLAW_CONFIG)) {
 
 // --------------- acquire source ---------------
 
-if (existsSync(PLUGIN_DIR)) {
-  log(`Plugin directory found: ${PLUGIN_DIR}`);
-  if (existsSync(join(PLUGIN_DIR, ".git"))) {
-    try {
-      log("Pulling latest changes...");
-      execSync("git fetch origin && git checkout -f origin/main", { cwd: PLUGIN_DIR, stdio: "pipe" });
-      log("Updated to latest version.");
-    } catch {
-      warn("Could not update from git — continuing with existing source.");
-    }
-  }
-} else if (isRunningFromNpmPackage()) {
+function copyFromNpmPackage() {
   log(`Copying plugin from npm package to ${PLUGIN_DIR} ...`);
   cpSync(__dirname, PLUGIN_DIR, {
     recursive: true,
@@ -146,6 +135,32 @@ if (existsSync(PLUGIN_DIR)) {
       return ![".git", "node_modules", "dist", "attachments", ".claude"].includes(top);
     },
   });
+}
+
+if (existsSync(PLUGIN_DIR)) {
+  log(`Plugin directory found: ${PLUGIN_DIR}`);
+  if (existsSync(join(PLUGIN_DIR, ".git"))) {
+    try {
+      log("Pulling latest changes...");
+      execSync("git fetch origin && git checkout -f origin/main", { cwd: PLUGIN_DIR, stdio: "pipe" });
+      log("Updated to latest version.");
+    } catch {
+      warn("Could not update from git — continuing with existing source.");
+    }
+  } else if (isRunningFromNpmPackage()) {
+    copyFromNpmPackage();
+  } else {
+    // No .git, running locally — re-execute via npx to get the latest
+    log("Updating via npx...");
+    try {
+      execSync("npx -y @syengup/friday-channel-next", { stdio: "inherit" });
+      process.exit(0);
+    } catch {
+      warn("Could not update via npx — continuing with existing source.");
+    }
+  }
+} else if (isRunningFromNpmPackage()) {
+  copyFromNpmPackage();
 } else {
   if (!has("git")) {
     err("git is required for installation from GitHub. Install git first or use npx @openclaw/friday-channel-next.");
