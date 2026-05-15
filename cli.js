@@ -29,9 +29,7 @@ function realHome() {
 const USER_HOME = realHome();
 const PLUGIN_DIR = process.argv[2] || join(USER_HOME, ".openclaw", "extensions", "friday-channel-next");
 const OPENCLAW_CONFIG = join(USER_HOME, ".openclaw", "openclaw.json");
-const REPO_URL = process.env.FRIDAY_NEXT_REPO || "https://github.com/SyengUp/openclaw-fridaynext-channel.git";
 
-const G = (s) => `\x1b[32m${s}\x1b[0m`;
 const Y = (s) => `\x1b[33m${s}\x1b[0m`;
 const R = (s) => `\x1b[31m${s}\x1b[0m`;
 function log(msg) {
@@ -137,37 +135,20 @@ function copyFromNpmPackage() {
   });
 }
 
-if (existsSync(PLUGIN_DIR)) {
-  log(`Plugin directory found: ${PLUGIN_DIR}`);
-  if (existsSync(join(PLUGIN_DIR, ".git"))) {
-    try {
-      log("Pulling latest changes...");
-      execSync("git fetch origin && git checkout -f origin/main", { cwd: PLUGIN_DIR, stdio: "pipe" });
-      log("Updated to latest version.");
-    } catch {
-      warn("Could not update from git — continuing with existing source.");
-    }
-  } else if (isRunningFromNpmPackage()) {
-    copyFromNpmPackage();
-  } else {
-    // No .git, running locally — re-execute via npx to get the latest
-    log("Updating via npx...");
-    try {
-      execSync("npx -y @syengup/friday-channel-next", { stdio: "inherit" });
-      process.exit(0);
-    } catch {
-      warn("Could not update via npx — continuing with existing source.");
-    }
-  }
-} else if (isRunningFromNpmPackage()) {
+if (isRunningFromNpmPackage()) {
   copyFromNpmPackage();
-} else {
-  if (!has("git")) {
-    err("git is required for installation from GitHub. Install git first or use npx @openclaw/friday-channel-next.");
-    process.exit(1);
+} else if (existsSync(PLUGIN_DIR)) {
+  log(`Plugin directory found: ${PLUGIN_DIR}`);
+  log("Updating via npx...");
+  try {
+    execSync("npx -y @syengup/friday-channel-next", { stdio: "inherit" });
+    process.exit(0);
+  } catch {
+    warn("Could not update via npx — continuing with existing source.");
   }
-  log(`Cloning plugin to ${PLUGIN_DIR} ...`);
-  execSync(`git clone "${REPO_URL}" "${PLUGIN_DIR}"`, { stdio: "inherit" });
+} else {
+  err("This plugin is installed via npx. Run: npx -y @syengup/friday-channel-next");
+  process.exit(1);
 }
 
 process.chdir(PLUGIN_DIR);
