@@ -1,12 +1,12 @@
 {
   "name": "@syengup/friday-channel-next",
-  "version": "0.0.31",
+  "version": "0.0.32",
   "description": "OpenClaw Friday Next Apple channel plugin",
   "type": "module",
   "files": [
     "index.ts",
     "src/",
-    "cli.mjs",
+    "install.js",
     "tsconfig.json",
     "openclaw.plugin.json"
   ],
@@ -19,7 +19,7 @@
     "test:msg-live": "node scripts/message-roundtrip-live.mjs"
   },
   "bin": {
-    "friday-channel-next": "cli.mjs"
+    "friday-channel-next": "install.js"
   },
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
