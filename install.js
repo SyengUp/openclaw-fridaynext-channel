@@ -332,12 +332,12 @@ if (sudoUser) {
 
 log("Restarting OpenClaw gateway...");
 try {
-  const out = execSync(`${openclawCmd} gateway restart`, { encoding: "utf8", stdio: "pipe" });
+  const out = execSync(`${openclawCmd} gateway restart`, { encoding: "utf8", stdio: "pipe", timeout: 15000 });
   if (out.trim()) console.log(out.trim());
 } catch (e) {
   if (e.stdout?.trim()) console.log(e.stdout.trim());
   if (e.stderr?.trim()) console.error(e.stderr.trim());
-  warn("Gateway restart failed. The plugin files are installed but the gateway was not restarted.");
+  warn("Gateway restart failed or timed out. The plugin files are installed but the gateway may not have restarted.");
   warn("Check 'openclaw gateway status' and restart manually: openclaw gateway restart");
 }
 
