@@ -64,8 +64,30 @@ function resolveConfiguredModels(): ResolvedModels {
     }
   }
 
-  const agentModel = agentDefaults?.model as Record<string, unknown> | undefined;
-  const defaultModel = typeof agentModel?.primary === "string" ? agentModel.primary : "";
+  const agentModel = agentDefaults?.model;
+  let defaultModel =
+    typeof agentModel === "string" && agentModel.trim()
+      ? agentModel.trim()
+      : typeof (agentModel as Record<string, unknown> | undefined)?.primary === "string"
+        ? ((agentModel as Record<string, unknown>).primary as string)
+        : "";
+
+  if (!defaultModel && entries.length > 0) {
+    defaultModel = entries[0].id;
+  }
+
+  if (defaultModel && !seen.has(defaultModel)) {
+    const split = splitModelRef(defaultModel);
+    const meta = providerMeta.get(defaultModel);
+    entries.unshift({
+      id: defaultModel,
+      name: meta?.name ?? split.modelId,
+      provider: split.provider ?? "",
+      reasoning: meta?.reasoning,
+      contextWindow: meta?.contextWindow,
+      maxTokens: meta?.maxTokens,
+    });
+  }
 
   return { models: entries, defaultModel };
 }

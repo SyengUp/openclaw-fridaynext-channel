@@ -27,7 +27,8 @@ export type FridayReplyPayload = {
 import { resolveFridayNextConfig } from "../../config.js";
 import { getHostOpenClawConfigSnapshot } from "../../host-config.js";
 import { getFridayNextRuntime } from "../../runtime.js";
-import { ensureSessionLevels, toSessionStoreKey } from "../../session/session-manager.js";
+import { getFridayAgentForwardRuntime } from "../../agent-forward-runtime.js";
+import { setSessionSettings, splitModelRef, toSessionStoreKey } from "../../session/session-manager.js";
 import { sseEmitter } from "../../sse/emitter.js";
 import { extractBearerToken } from "../middleware/auth.js";
 import { readJsonBody } from "../middleware/body.js";
@@ -317,6 +318,9 @@ export interface FridayMessagePayload {
   text: string;
   sessionKey: string;
   attachments?: string[];
+  modelRef?: string;
+  reasoningLevel?: string;
+  thinkingLevel?: string;
 }
 
 async function buildBodyForAgentWithAttachments(text: string, attachmentIds: string[]): Promise<string> {
@@ -413,7 +417,56 @@ export async function handleMessages(req: IncomingMessage, res: ServerResponse):
   );
 
   const cfg = resolveFridayNextConfig(getHostOpenClawConfigSnapshot(runtime.config));
-  ensureSessionLevels(baseSessionKey, "stream", "medium", cfg.historyDir);
+
+  // Resolve defaults from the OpenClaw agent config so settings are never left empty.
+  let defaultModel: string | undefined;
+  let defaultReasoning: string | undefined;
+  let defaultThinking: string | undefined;
+  try {
+    const forwardRt = getFridayAgentForwardRuntime();
+    if (forwardRt) {
+      const ocCfg = (forwardRt.getConfig() ?? {}) as Record<string, unknown>;
+      const agents = ocCfg.agents as Record<string, unknown> | undefined;
+      const agentDefaults = agents?.defaults as Record<string, unknown> | undefined;
+      const model = agentDefaults?.model as Record<string, unknown> | undefined;
+      defaultModel = typeof model?.primary === "string" ? (model.primary as string) : undefined;
+      defaultReasoning =
+        typeof agentDefaults?.reasoningDefault === "string"
+          ? (agentDefaults.reasoningDefault as string)
+          : undefined;
+      defaultThinking =
+        typeof agentDefaults?.thinkingDefault === "string"
+          ? (agentDefaults.thinkingDefault as string)
+          : undefined;
+    }
+  } catch {
+    // Config not available (tests) — leave defaults undefined.
+  }
+
+  const modelRef = payload.modelRef ?? defaultModel;
+  const reasoningLevel = payload.reasoningLevel ?? defaultReasoning;
+  const thinkingLevel = payload.thinkingLevel ?? defaultThinking;
+
+  const settings: Record<string, string | undefined> = {};
+  if (modelRef) {
+    settings.modelRef = modelRef;
+    const split = splitModelRef(modelRef);
+    settings.providerOverride = split.provider;
+    settings.modelOverride = split.modelId;
+  }
+  if (reasoningLevel) settings.reasoningLevel = reasoningLevel;
+  if (thinkingLevel) settings.thinkingLevel = thinkingLevel;
+
+  if (Object.keys(settings).length > 0) {
+    setSessionSettings(baseSessionKey, settings, cfg.historyDir);
+  }
+
+  log(
+    "SESSION_SETTINGS",
+    normalizedDeviceId,
+    runId,
+    `sessionKey=${baseSessionKey} modelRef=${modelRef ?? "(default)"} reasoning=${reasoningLevel ?? "(default)"} thinking=${thinkingLevel ?? "(default)"}`,
+  );
 
   registerFridaySessionDeviceMapping(appSessionKey, normalizedDeviceId);
   sseEmitter.trackDeviceForRun(normalizedDeviceId, runId);

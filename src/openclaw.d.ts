@@ -21,6 +21,11 @@ declare module "openclaw/plugin-sdk/plugins/types" {
   export type PluginHookBeforeToolCallEvent = any;
   export type PluginHookAfterToolCallEvent = any;
   export type PluginHookToolContext = any;
+  export type PluginHookSubagentSpawningEvent = any;
+  export type PluginHookSubagentSpawnedEvent = any;
+  export type PluginHookSubagentEndedEvent = any;
+  export type PluginHookSubagentDeliveryTargetEvent = any;
+  export type PluginHookSubagentContext = any;
 }
 
 declare module "openclaw/plugin-sdk/reply-dispatch-runtime" {

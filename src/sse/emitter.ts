@@ -4,7 +4,7 @@ import { fridaySseOfflineQueue } from "./offline-queue.js";
 
 const logger = createFridayNextLogger("sse", "info");
 
-export type SseEventType = "connected" | "agent" | "deliver" | "tool-hook" | "outbound" | "ping";
+export type SseEventType = "connected" | "agent" | "deliver" | "tool-hook" | "outbound" | "ping" | "subagent";
 
 export interface SseEvent {
   type: SseEventType;

@@ -6,6 +6,7 @@ import { setOfflineQueueBaseDirForTest } from "../sse/offline-queue.js";
 import { sseEmitter } from "../sse/emitter.js";
 import { resetActiveRunsForTest } from "../agent/active-runs.js";
 import { resetRunMetadataForTest } from "../run-metadata.js";
+import { resetForTest as resetSubagentRegistryForTest } from "../agent/subagent-registry.js";
 
 export type MockRuntimeOptions = {
   authToken?: string;
@@ -32,6 +33,7 @@ export function setMockRuntime(opts: MockRuntimeOptions = {}): void {
   sseEmitter.resetForTest();
   resetActiveRunsForTest();
   resetRunMetadataForTest();
+  resetSubagentRegistryForTest();
   const historyDir = opts.historyDir ?? createTempHistoryDir();
   setOfflineQueueBaseDirForTest(path.join(historyDir, "events-queue"));
   const cfg = {

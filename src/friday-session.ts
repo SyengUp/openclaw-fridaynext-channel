@@ -5,6 +5,14 @@ import { getOpenClawAgentRunContext } from "./agent-run-context-bridge.js";
 import { observeAgentEventForActiveRuns } from "./agent/active-runs.js";
 import { getRunMetadata, ingestAgentEventMetadata } from "./run-metadata.js";
 import { buildSessionUsageSnapshot } from "./session-usage-snapshot.js";
+import {
+  lookupByRunId,
+  registerSessionKeyForRun,
+  registerSpawnIntent,
+  consumeSpawnIntent,
+  ensureSubagentFromSpawnTool,
+  registerEnded as registerSubagentEnded,
+} from "./agent/subagent-registry.js";
 
 /** Last `data.text` per run for `stream: "thinking"` — OpenClaw core may send cumulative `delta`; we rewrite true increments for the app. */
 const lastThinkingTextByRun = new Map<string, string>();
@@ -193,8 +201,9 @@ function completeAgentEventForward(params: {
   deviceIdRaw: string;
   outgoingData: Record<string, unknown>;
   isTerminalLifecycle: boolean;
+  subagentMeta?: { label?: string; parentRunId?: string; depth: number };
 }): void {
-  const { evt, sk, deviceIdRaw, outgoingData, isTerminalLifecycle } = params;
+  const { evt, sk, deviceIdRaw, outgoingData, isTerminalLifecycle, subagentMeta } = params;
 
   observeAgentEventForActiveRuns({ stream: evt.stream, runId: evt.runId, data: outgoingData });
 
@@ -211,6 +220,7 @@ function completeAgentEventForward(params: {
     sessionKey: evt.sessionKey ?? sk,
   };
   if (directToDevice) payload.deviceId = deviceId;
+  if (subagentMeta) payload.subagent = subagentMeta;
 
   sseEmitter.broadcastToRun(targetRunId, { type: "agent", data: payload });
 
@@ -262,6 +272,11 @@ export function forwardAgentEventRaw(evt: ForwardAgentEventArgs): void {
     const mapped = openClawRunIdToDeviceId.get(evt.runId);
     if (mapped) deviceIdRaw = mapped;
   }
+  // Subagent runs have their deviceId in the subagent registry
+  if (!deviceIdRaw) {
+    const sub = lookupByRunId(evt.runId);
+    if (sub) deviceIdRaw = sub.deviceId;
+  }
   if (!deviceIdRaw) return;
 
   if (!sk) {
@@ -270,6 +285,102 @@ export function forwardAgentEventRaw(evt: ForwardAgentEventArgs): void {
   }
 
   openClawRunIdToDeviceId.set(evt.runId, deviceIdRaw.toUpperCase());
+
+  // Register sessionKey → runId so we can resolve parentRunId
+  if (sk && evt.stream === "lifecycle" && evt.data.phase === "start") {
+    registerSessionKeyForRun(sk, evt.runId);
+  }
+
+  // ── sessions_spawn tool → subagent lifecycle (replaces hooks) ──
+  const isSpawnTool =
+    evt.stream === "tool" && (evt.data.name === "sessions_spawn" || evt.data.name === "task");
+
+  // Phase 1: spawning — tool.start with taskName in args
+  if (isSpawnTool && evt.data.phase === "start") {
+    const toolCallId =
+      typeof evt.data.toolCallId === "string" ? evt.data.toolCallId : "";
+    const args = evt.data.args as Record<string, unknown> | undefined;
+    const label =
+      typeof args?.taskName === "string" ? args.taskName : undefined;
+    if (toolCallId) {
+      const intent = registerSpawnIntent({
+        toolCallId,
+        label,
+        deviceId: deviceIdRaw,
+        parentRunId: evt.runId,
+        requesterSessionKey: sk || undefined,
+      });
+      sseEmitter.broadcast(
+        {
+          type: "subagent",
+          data: {
+            phase: "spawning",
+            childSessionKey: null,
+            runId: null,
+            label: intent.label ?? null,
+            parentRunId: intent.parentRunId,
+            depth: intent.depth,
+            deviceId: intent.deviceId,
+          },
+        },
+        intent.deviceId,
+      );
+    }
+  }
+
+  // Phase 2: spawned — tool.result with childSessionKey + runId
+  if (isSpawnTool && evt.data.phase === "result") {
+    const details = (evt.data.result as Record<string, unknown> | undefined)?.details as
+      | { childSessionKey?: string; runId?: string; taskName?: string }
+      | undefined;
+    if (details?.childSessionKey) {
+      const toolCallId =
+        typeof evt.data.toolCallId === "string" ? evt.data.toolCallId : "";
+      const intent = toolCallId ? consumeSpawnIntent(toolCallId) : undefined;
+      const label =
+        details.taskName ||
+        intent?.label ||
+        (typeof (evt.data as Record<string, unknown>).meta === "string"
+          ? ((evt.data as Record<string, unknown>).meta as string)
+          : undefined);
+      const entry = ensureSubagentFromSpawnTool({
+        childSessionKey: details.childSessionKey,
+        bareRunId: details.runId,
+        label,
+        deviceId: deviceIdRaw,
+        parentRunId: intent?.parentRunId ?? evt.runId,
+        requesterSessionKey: sk,
+        depth: intent?.depth,
+      });
+      const compoundRunId = entry.runId ?? evt.runId;
+      sseEmitter.trackDeviceForRun(entry.deviceId, compoundRunId);
+      sseEmitter.broadcast(
+        {
+          type: "subagent",
+          data: {
+            phase: "spawned",
+            runId: compoundRunId,
+            childSessionKey: entry.childSessionKey,
+            label: entry.label ?? null,
+            parentRunId: entry.parentRunId ?? null,
+            depth: entry.depth,
+            deviceId: entry.deviceId,
+          },
+        },
+        entry.deviceId,
+      );
+    }
+  }
+
+  const subagentEntry = lookupByRunId(evt.runId);
+  // Only annotate events that originate from the subagent itself
+  // (sessionKey matches childSessionKey). Main-agent delivery events
+  // share the announce runId but have a different sessionKey.
+  const isSubagentOwnEvent =
+    subagentEntry && sk && subagentEntry.childSessionKey === sk;
+  const subagentMeta = isSubagentOwnEvent
+    ? { label: subagentEntry.label, parentRunId: subagentEntry.parentRunId, depth: subagentEntry.depth }
+    : undefined;
 
   let outgoingData: Record<string, unknown> = { ...evt.data };
 
@@ -299,6 +410,32 @@ export function forwardAgentEventRaw(evt: ForwardAgentEventArgs): void {
     evt.stream === "lifecycle" && typeof evt.data.phase === "string" ? evt.data.phase : "";
   const isTerminalLifecycle = evt.stream === "lifecycle" && (lifecyclePhase === "end" || lifecyclePhase === "error");
 
+  // Emit subagent ended SSE when a subagent run terminates
+  if (isTerminalLifecycle && isSubagentOwnEvent && subagentEntry.status !== "ended") {
+    const outcome = lifecyclePhase === "error" ? "error" : "ok";
+    const errorStr = lifecyclePhase === "error" ? String(evt.data.error ?? "unknown") : undefined;
+    const ended = registerSubagentEnded({ runId: evt.runId, outcome, error: errorStr });
+    if (ended) {
+      sseEmitter.broadcast(
+        {
+          type: "subagent",
+          data: {
+            phase: "ended",
+            runId: ended.runId ?? evt.runId ?? null,
+            childSessionKey: ended.childSessionKey,
+            label: ended.label ?? null,
+            parentRunId: ended.parentRunId ?? null,
+            depth: ended.depth,
+            deviceId: ended.deviceId,
+            outcome: ended.outcome ?? null,
+            error: ended.error ?? null,
+          },
+        },
+        ended.deviceId,
+      );
+    }
+  }
+
   if (isTerminalLifecycle && getFridayAgentForwardRuntime()) {
     setImmediate(() => {
       let data = outgoingData;
@@ -312,6 +449,7 @@ export function forwardAgentEventRaw(evt: ForwardAgentEventArgs): void {
         deviceIdRaw,
         outgoingData: data,
         isTerminalLifecycle: true,
+        subagentMeta,
       });
     });
     return;
@@ -323,5 +461,6 @@ export function forwardAgentEventRaw(evt: ForwardAgentEventArgs): void {
     deviceIdRaw,
     outgoingData,
     isTerminalLifecycle,
+    subagentMeta,
   });
 }

@@ -59,10 +59,11 @@ Only these names are emitted:
 | `event`     | Source | Purpose |
 |------------|--------|---------|
 | `connected` | Plugin | Synthetic handshake: `deviceId`, `serverTime`, `lastSeq` |
-| `agent`     | OpenClaw `onAgentEvent` | Full native stream (`lifecycle`, `assistant`, `tool`, `thinking`, …) |
+| `agent`     | OpenClaw `onAgentEvent` | Full native stream (`lifecycle`, `assistant`, `tool`, `thinking`, …); subagent events include `subagent` annotation |
 | `deliver`   | Dispatch `deliver` callback | `kind`: `tool` \| `block` \| `final`; payload with media URLs rewritten to `/friday-next/files/:id`; `final` may include `channelData.fridayNext.modelName/totalTokens` |
 | `tool-hook` | `before_tool_call` / `after_tool_call` | Hook payload + `runId`, `deviceId`, `sessionKey` |
 | `outbound`  | Channel `sendText` / `sendMedia`, dispatch errors | Proactive push or `op: "dispatch_error"` |
+| `subagent`  | Plugin hooks | Subagent lifecycle: `phase: "spawning"` \| `"spawned"` \| `"ended"` |
 | `ping`      | (reserved / internal) | — |
 
 **Removed (breaking):** `run-start`, `run-complete`, `run-error`, `final`, `reasoning`, `block`, `attachment`, `tts`, `tool` as top-level SSE event names, `dispatch`, and any plugin-synthesized “final delta” events. Consume **`agent`** (`stream: "lifecycle"` + `phase`) and **`deliver`** instead.
@@ -112,7 +113,197 @@ OpenClaw agent event payload, e.g. `{ runId, seq, ts, stream, data, sessionKey? 
 
 Cron / sub-agent style pushes: `op`: `"text"` \| `"media"` (and context), `op`: `"dispatch_error"` with `error`, plus late metadata patch `op: "final_meta"` with `runId`, `modelName`, and `totalTokens`.
 
-## Offline queue
+### `subagent` data
+
+Subagent lifecycle events track the creation, activation, and termination of sub-agent runs. When the main agent invokes a tool that spawns a sub-agent (e.g. `task`), the plugin emits three phased SSE events.
+
+#### Phase: `"spawning"`
+
+Emitted as early as possible — when the sub-agent spawn is requested but before the child run is created. Use this to show an immediate "Creating sub-task…" indicator in the UI. There is **no `runId`** yet at this stage.
+
+```json
+{
+  "type": "subagent",
+  "data": {
+    "phase": "spawning",
+    "childSessionKey": "agent:main:subagent:code-reviewer",
+    "label": "code-reviewer",
+    "parentRunId": "main-run-001",
+    "depth": 1,
+    "deviceId": "DEVICE-AAAA-BBBB"
+  }
+}
+```
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `phase` | `"spawning"` | Lifecycle phase |
+| `childSessionKey` | `string` | The sub-agent's session key (persistent identifier across spawning→spawned→ended) |
+| `label` | `string \| null` | Sub-agent display name (e.g. `"code-reviewer"`, `"lint"`). `null` if unnamed |
+| `parentRunId` | `string \| null` | The immediate parent's `runId`. `null` if the parent runId couldn't be resolved |
+| `depth` | `number` | Nesting depth. `1` for the first level, `2` for a sub-agent spawned by another sub-agent, etc. |
+| `deviceId` | `string` | Owning Friday device UUID (uppercase) |
+
+#### Phase: `"spawned"`
+
+Emitted after the child run has been created. The `runId` is now available — all subsequent `agent` events for this sub-agent will carry this `runId`.
+
+```json
+{
+  "type": "subagent",
+  "data": {
+    "phase": "spawned",
+    "runId": "sub-run-abc123",
+    "childSessionKey": "agent:main:subagent:code-reviewer",
+    "label": "code-reviewer",
+    "parentRunId": "main-run-001",
+    "depth": 1,
+    "deviceId": "DEVICE-AAAA-BBBB"
+  }
+}
+```
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `phase` | `"spawned"` | Lifecycle phase |
+| `runId` | `string` | The sub-agent's run ID — matches `runId` in subsequent `agent` SSE events |
+| `childSessionKey` | `string` | Same session key as in `spawning` |
+| `label` | `string \| null` | Same as `spawning` |
+| `parentRunId` | `string \| null` | Same as `spawning` |
+| `depth` | `number` | Same as `spawning` |
+| `deviceId` | `string` | Same as `spawning` |
+
+#### Phase: `"ended"`
+
+Emitted when the sub-agent run terminates, regardless of outcome.
+
+```json
+{
+  "type": "subagent",
+  "data": {
+    "phase": "ended",
+    "runId": "sub-run-abc123",
+    "childSessionKey": "agent:main:subagent:code-reviewer",
+    "label": "code-reviewer",
+    "parentRunId": "main-run-001",
+    "depth": 1,
+    "deviceId": "DEVICE-AAAA-BBBB",
+    "outcome": "ok",
+    "error": null
+  }
+}
+```
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `phase` | `"ended"` | Lifecycle phase |
+| `runId` | `string \| null` | The sub-agent's run ID (may be `null` if the run was never created) |
+| `childSessionKey` | `string` | Same session key |
+| `label` | `string \| null` | Same |
+| `parentRunId` | `string \| null` | Same |
+| `depth` | `number` | Same |
+| `deviceId` | `string` | Same |
+| `outcome` | `"ok" \| "error" \| "timeout" \| "killed" \| "reset" \| "deleted" \| null` | Termination outcome |
+| `error` | `string \| null` | Error message when outcome is `"error"` or `"timeout"` |
+
+#### Lifecycle state machine
+
+```
+spawning  ──→  spawned  ──→  ended
+   │                            ↑
+   └──── spawn-failed ──────────┘
+```
+
+If the spawn itself fails (e.g. session creation rejected), the plugin may go directly from `spawning` to `ended` without a `spawned` frame. In that case `phase: "ended"` will have `outcome: "error"` and `runId: null`.
+
+---
+
+### Subagent `agent` event annotation
+
+All `agent` SSE events that belong to a sub-agent run carry an extra `subagent` field. The presence of this field is the canonical way to distinguish main-agent events from sub-agent events.
+
+```json
+{
+  "type": "agent",
+  "data": {
+    "runId": "sub-run-abc123",
+    "seq": 14,
+    "ts": 1710000001000,
+    "stream": "thinking",
+    "data": {
+      "text": "Analyzing the code for issues…",
+      "delta": "issues…",
+      "reasoningPrefixChars": 27
+    },
+    "sessionKey": "agent:main:subagent:code-reviewer",
+    "subagent": {
+      "label": "code-reviewer",
+      "parentRunId": "main-run-001",
+      "depth": 1
+    }
+  }
+}
+```
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `subagent` | `object` | **Present only for sub-agent events.** Absent for main-agent events |
+| `subagent.label` | `string \| undefined` | Sub-agent display name |
+| `subagent.parentRunId` | `string \| undefined` | Immediate parent's `runId` |
+| `subagent.depth` | `number` | Nesting depth |
+
+`agent` events from the main run **do not** have the `subagent` field.
+
+#### App-side grouping logic
+
+```pseudocode
+on SseFrame frame:
+  if frame.event == "agent":
+    if frame.data.subagent exists:
+      // This is a sub-agent event
+      groupBy = frame.data.subagent.label ?? frame.data.runId
+      parent  = frame.data.subagent.parentRunId
+      depth   = frame.data.subagent.depth
+    else:
+      // This is a main-agent event
+      groupBy = frame.data.runId
+```
+
+### Nested sub-agents
+
+Sub-agents can spawn other sub-agents. Each level increments `depth` and `parentRunId` points to the immediate parent:
+
+```
+Main run (runId=MAIN, depth=0)
+  │
+  ├─ subagent "reviewer" (runId=REV, depth=1, parentRunId=MAIN)
+  │     │
+  │     ├─ agent events annotated: { subagent: { label:"reviewer", parentRunId:MAIN, depth:1 } }
+  │     │
+  │     └─ subagent "lint" (runId=LINT, depth=2, parentRunId=REV)
+  │           │
+  │           ├─ agent events annotated: { subagent: { label:"lint", parentRunId:REV, depth:2 } }
+  │           └─ ended
+  │
+  └─ ended
+```
+
+The app can indent sub-agent UI blocks by `depth` and nest them under the parent identified by `parentRunId`.
+
+### Complete subagent lifecycle (SSE frame sequence)
+
+```
+SSE event: subagent  phase=spawning   childSessionKey=… label="code-reviewer" parentRunId=MAIN depth=1
+SSE event: subagent  phase=spawned    runId=REV  childSessionKey=… label="code-reviewer"
+SSE event: agent     stream=thinking  runId=REV  subagent={label:"code-reviewer", parentRunId:MAIN, depth:1}
+SSE event: agent     stream=lifecycle runId=REV  data.phase=start   subagent={…}
+SSE event: agent     stream=tool      runId=REV  data.phase=start   subagent={…}  toolName=read
+SSE event: agent     stream=tool      runId=REV  data.phase=end     subagent={…}  toolName=read
+SSE event: agent     stream=assistant runId=REV  subagent={…}
+SSE event: subagent  phase=ended      runId=REV  outcome=ok
+```
+
+**Note:** The `subagent` lifecycle events and `agent` events are emitted on the same SSE connection. `agent` events for the sub-agent can arrive between `spawned` and `ended` (and may even briefly overlap with main-agent events if the main agent continues working in parallel).
 
 For each device, events (except `connected`) are appended to a JSONL file before being written to the socket:
 
