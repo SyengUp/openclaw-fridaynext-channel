@@ -420,7 +420,6 @@ export async function handleMessages(req: IncomingMessage, res: ServerResponse):
 
   // Resolve defaults from the OpenClaw agent config so settings are never left empty.
   let defaultModel: string | undefined;
-  let defaultReasoning: string | undefined;
   let defaultThinking: string | undefined;
   try {
     const forwardRt = getFridayAgentForwardRuntime();
@@ -430,10 +429,6 @@ export async function handleMessages(req: IncomingMessage, res: ServerResponse):
       const agentDefaults = agents?.defaults as Record<string, unknown> | undefined;
       const model = agentDefaults?.model as Record<string, unknown> | undefined;
       defaultModel = typeof model?.primary === "string" ? (model.primary as string) : undefined;
-      defaultReasoning =
-        typeof agentDefaults?.reasoningDefault === "string"
-          ? (agentDefaults.reasoningDefault as string)
-          : undefined;
       defaultThinking =
         typeof agentDefaults?.thinkingDefault === "string"
           ? (agentDefaults.thinkingDefault as string)
@@ -444,7 +439,7 @@ export async function handleMessages(req: IncomingMessage, res: ServerResponse):
   }
 
   const modelRef = payload.modelRef ?? defaultModel;
-  const reasoningLevel = payload.reasoningLevel ?? defaultReasoning;
+  const reasoningLevel = payload.reasoningLevel ?? "stream";
   const thinkingLevel = payload.thinkingLevel ?? defaultThinking;
 
   const settings: Record<string, string | undefined> = {};
