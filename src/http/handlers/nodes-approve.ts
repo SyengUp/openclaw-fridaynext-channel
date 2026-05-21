@@ -1,48 +1,27 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
-import { exec } from "node:child_process";
 import { readJsonBody } from "../middleware/body.js";
 import { extractBearerToken } from "../middleware/auth.js";
 import { createFridayNextLogger } from "../../logging.js";
+import { loadNodePairingModule } from "../../agent/node-pairing-bridge.js";
 
-const EXEC_ENV = process.platform === "win32"
-  ? process.env
-  : { ...process.env, PATH: `/opt/homebrew/bin:/usr/local/bin:/home/linuxbrew/.linuxbrew/bin:${process.env.PATH ?? ""}` };
-
-interface PendingNode {
+interface PendingNodeEntry {
   requestId: string;
   nodeId: string;
 }
-
-interface PairedNode {
+interface PairedNodeEntry {
   nodeId: string;
-  approvedAtMs?: number;
+  approvedAtMs: number;
   caps?: string[];
   commands?: string[];
 }
-
-interface NodeListJson {
-  pending?: PendingNode[];
-  paired?: PairedNode[];
+interface NodePairingList {
+  pending: PendingNodeEntry[];
+  paired: PairedNodeEntry[];
 }
-
-interface ApproveJson {
-  requestId: string;
-  node?: { nodeId: string; approvedAtMs?: number };
-}
-
-function execAsync(command: string, timeoutMs: number): Promise<{ stdout: string; stderr: string }> {
-  return new Promise((resolve, reject) => {
-    const child = exec(command, { encoding: "utf-8", timeout: timeoutMs, maxBuffer: 1024 * 1024, env: EXEC_ENV }, (error, stdout, stderr) => {
-      if (error) {
-        reject(error);
-      } else {
-        resolve({ stdout, stderr });
-      }
-    });
-    child.stdout?.on("data", () => { /* drain */ });
-    child.stderr?.on("data", () => { /* drain */ });
-  });
-}
+type ApproveNodePairingResult =
+  | { requestId: string; node: PairedNodeEntry }
+  | { status: "forbidden"; missingScope: string }
+  | null;
 
 export async function handleNodesApprove(
   req: IncomingMessage,
@@ -83,63 +62,53 @@ export async function handleNodesApprove(
 
   const normalizedNodeId = rawNodeId.trim().toUpperCase();
 
-  let listStdout: string;
-  try {
-    const result = await execAsync("openclaw nodes list --json", 15000);
-    listStdout = result.stdout;
-  } catch (err) {
-    const stderr = (err as { stderr?: string })?.stderr?.trim();
-    log.error(`nodes list failed: ${err instanceof Error ? err.message : String(err)}`);
-    res.statusCode = 502;
-    res.setHeader("Content-Type", "application/json");
-    res.end(JSON.stringify({ error: "Failed to list nodes from gateway", detail: stderr || undefined }));
-    return true;
-  }
+const { listNodePairing, approveNodePairing } = loadNodePairingModule();
 
-  let listData: NodeListJson;
+  let listData;
   try {
-    listData = JSON.parse(listStdout) as NodeListJson;
-  } catch {
-    log.error(`nodes list returned invalid JSON: ${listStdout.slice(0, 200)}`);
+    listData = await listNodePairing();
+  } catch (err) {
+    log.error(`listNodePairing failed: ${err instanceof Error ? err.message : String(err)}`);
     res.statusCode = 502;
     res.setHeader("Content-Type", "application/json");
-    res.end(JSON.stringify({ error: "Unexpected response from gateway node list" }));
+    res.end(JSON.stringify({ error: "Failed to list nodes from gateway" }));
     return true;
   }
 
   const pending = listData.pending ?? [];
   const pendingMatch = pending.find(
-    (entry) => entry.nodeId.trim().toUpperCase() === normalizedNodeId,
+    (entry: PendingNodeEntry) => entry.nodeId.trim().toUpperCase() === normalizedNodeId,
   );
 
   if (pendingMatch) {
     const requestId = pendingMatch.requestId;
     log.info(`approving nodeId=${normalizedNodeId} requestId=${requestId}`);
 
-    let approveStdout: string;
+    let approved;
     try {
-      const result = await execAsync(`openclaw nodes approve ${requestId} --json`, 15000);
-      approveStdout = result.stdout;
+      approved = await approveNodePairing(requestId, {});
     } catch (err) {
-      const stderr = (err as { stderr?: string })?.stderr?.trim();
-      log.error(`nodes approve failed: ${err instanceof Error ? err.message : String(err)}`);
+      log.error(`approveNodePairing failed: ${err instanceof Error ? err.message : String(err)}`);
       res.statusCode = 502;
       res.setHeader("Content-Type", "application/json");
       res.end(JSON.stringify({
-        error: "Node approval command failed",
-        detail: stderr || (err instanceof Error ? err.message : "Unknown error"),
+        error: "Node approval failed",
+        detail: err instanceof Error ? err.message : "Unknown error",
       }));
       return true;
     }
 
-    let approveData: ApproveJson;
-    try {
-      approveData = JSON.parse(approveStdout) as ApproveJson;
-    } catch {
-      log.error(`nodes approve returned non-JSON: ${approveStdout.slice(0, 200)}`);
-      res.statusCode = 502;
+    if (!approved) {
+      res.statusCode = 404;
       res.setHeader("Content-Type", "application/json");
-      res.end(JSON.stringify({ error: "Unexpected response from node approval" }));
+      res.end(JSON.stringify({ error: "Pending node request not found" }));
+      return true;
+    }
+
+    if ("status" in approved && approved.status === "forbidden") {
+      res.statusCode = 403;
+      res.setHeader("Content-Type", "application/json");
+      res.end(JSON.stringify({ error: `Node approval forbidden: ${(approved as any).missingScope ?? "unknown"}` }));
       return true;
     }
 
@@ -148,16 +117,16 @@ export async function handleNodesApprove(
     res.end(JSON.stringify({
       ok: true,
       nodeId: normalizedNodeId,
-      requestId: approveData.requestId,
-      approvedAtMs: approveData.node?.approvedAtMs,
+      requestId: (approved as any).requestId,
+      approvedAtMs: (approved as any).node?.approvedAtMs,
     }));
     return true;
   }
 
-  // Not in pending — check if already paired with non-empty caps/commands
+  // Check if already paired with non-empty caps/commands
   const paired = listData.paired ?? [];
   const pairedMatch = paired.find(
-    (entry) => entry.nodeId.trim().toUpperCase() === normalizedNodeId,
+    (entry: PairedNodeEntry) => entry.nodeId.trim().toUpperCase() === normalizedNodeId,
   );
 
   if (pairedMatch) {

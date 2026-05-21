@@ -3,6 +3,36 @@ declare module "openclaw/plugin-sdk/agent-harness" {
   export const runAgentHarness: (...args: any[]) => any;
 }
 
+declare module "openclaw/plugin-sdk/device-bootstrap" {
+  export const listDevicePairing: (baseDir?: string) => Promise<DevicePairingList>;
+  export const approveDevicePairing: (requestId: string, options?: { callerScopes?: readonly string[] }, baseDir?: string) => Promise<ApproveDevicePairingResult>;
+
+  interface DevicePairingPendingRequest {
+    requestId: string;
+    deviceId: string;
+    publicKey: string;
+    displayName?: string;
+    platform?: string;
+    ts: number;
+  }
+  interface PairedDevice {
+    deviceId: string;
+    approvedAtMs: number;
+  }
+  interface DevicePairingList {
+    pending: DevicePairingPendingRequest[];
+    paired: PairedDevice[];
+  }
+  type ApproveDevicePairingResult = {
+    status: "approved";
+    requestId: string;
+    device: PairedDevice;
+  } | {
+    status: "forbidden";
+    reason: string;
+  } | null;
+}
+
 declare module "openclaw/plugin-sdk/core" {
   export const defineChannelPluginEntry: (...args: any[]) => any;
   export const createChatChannelPlugin: (...args: any[]) => any;

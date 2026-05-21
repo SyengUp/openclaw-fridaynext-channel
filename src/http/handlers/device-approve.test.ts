@@ -4,9 +4,14 @@ import { PassThrough } from "node:stream";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { setMockRuntime } from "../../test-support/mock-runtime.js";
 
-const mockExecImpl = vi.hoisted(() => vi.fn());
-vi.mock("node:child_process", () => ({
-  exec: mockExecImpl,
+const { mockList, mockApprove } = vi.hoisted(() => ({
+  mockList: vi.fn(),
+  mockApprove: vi.fn(),
+}));
+
+vi.mock("openclaw/plugin-sdk/device-bootstrap", () => ({
+  listDevicePairing: mockList,
+  approveDevicePairing: mockApprove,
 }));
 
 import { handleDeviceApprove } from "./device-approve.js";
@@ -30,45 +35,13 @@ function mockReq(method: string, headers: Record<string, string> = {}): PassThro
   return stream;
 }
 
-function mockExecSuccess(stdout: string) {
-  const child = new EventEmitter() as EventEmitter & { stdout: EventEmitter; stderr: EventEmitter };
-  child.stdout = new EventEmitter();
-  child.stderr = new EventEmitter();
-  mockExecImpl.mockImplementationOnce((_cmd: string, _opts: unknown, cb: (error: null, stdout: string, stderr: string) => void) => {
-    cb(null, stdout, "");
-    return child;
-  });
-}
-
-function mockExecError(message: string, stderr?: string) {
-  const err = new Error(message) as Error & { stderr: string };
-  err.stderr = stderr ?? "";
-  const child = new EventEmitter() as EventEmitter & { stdout: EventEmitter; stderr: EventEmitter };
-  child.stdout = new EventEmitter();
-  child.stderr = new EventEmitter();
-  mockExecImpl.mockImplementationOnce((_cmd: string, _opts: unknown, cb: (error: Error) => void) => {
-    cb(err);
-    return child;
-  });
-}
-
-function mockExecErrorWithStderr(err: Error & { stderr?: string }) {
-  const child = new EventEmitter() as EventEmitter & { stdout: EventEmitter; stderr: EventEmitter };
-  child.stdout = new EventEmitter();
-  child.stderr = new EventEmitter();
-  mockExecImpl.mockImplementationOnce((_cmd: string, _opts: unknown, cb: (error: Error) => void) => {
-    cb(err);
-    return child;
-  });
-}
-
 const DEVICE_ID = "a80b8c4b305fb02c5772c409c6dfcbacde691b61557f7779511ad1a5be8fdf06";
 const REQUEST_ID = "12f150e8-b1bc-4688-be23-e3a7fa8b9e51";
 
 describe("handleDeviceApprove", () => {
   beforeEach(() => {
     setMockRuntime();
-    mockExecImpl.mockReset();
+    vi.clearAllMocks();
   });
 
   it("returns 405 on non-POST", async () => {
@@ -106,8 +79,8 @@ describe("handleDeviceApprove", () => {
     expect(JSON.parse((res as unknown as MockRes).body).error).toContain("deviceId");
   });
 
-  it("returns 502 when devices list CLI fails", async () => {
-    mockExecError("ENOENT");
+  it("returns 502 when listDevicePairing fails", async () => {
+    mockList.mockRejectedValueOnce(new Error("ENOENT"));
 
     const req = mockReq("POST", { authorization: "Bearer test-token" });
     const res = new MockRes() as unknown as ServerResponse;
@@ -118,23 +91,22 @@ describe("handleDeviceApprove", () => {
     expect(JSON.parse((res as unknown as MockRes).body).error).toContain("Failed to list devices");
   });
 
-  it("returns 502 when devices list returns invalid JSON", async () => {
-    mockExecSuccess("not valid json {{{");
+  it("returns 404 when listDevicePairing returns data without matching device", async () => {
+    mockList.mockResolvedValueOnce({ pending: [{ requestId: "x", deviceId: "UNMATCHED" }], paired: [] });
 
     const req = mockReq("POST", { authorization: "Bearer test-token" });
     const res = new MockRes() as unknown as ServerResponse;
     const p = handleDeviceApprove(req as unknown as IncomingMessage, res);
     req.end(JSON.stringify({ deviceId: DEVICE_ID }));
     await p;
-    expect((res as unknown as MockRes).statusCode).toBe(502);
-    expect(JSON.parse((res as unknown as MockRes).body).error).toContain("Unexpected response");
+    expect((res as unknown as MockRes).statusCode).toBe(404);
   });
 
   it("returns 404 when deviceId not in pending list", async () => {
-    mockExecSuccess(JSON.stringify({
+    mockList.mockResolvedValueOnce({
       pending: [{ requestId: "uuid-1", deviceId: "OTHER_DEVICE" }],
       paired: [],
-    }));
+    });
 
     const req = mockReq("POST", { authorization: "Bearer test-token" });
     const res = new MockRes() as unknown as ServerResponse;
@@ -148,7 +120,7 @@ describe("handleDeviceApprove", () => {
   });
 
   it("returns 404 when pending array is empty", async () => {
-    mockExecSuccess(JSON.stringify({ pending: [], paired: [] }));
+    mockList.mockResolvedValueOnce({ pending: [], paired: [] });
 
     const req = mockReq("POST", { authorization: "Bearer test-token" });
     const res = new MockRes() as unknown as ServerResponse;
@@ -158,14 +130,12 @@ describe("handleDeviceApprove", () => {
     expect((res as unknown as MockRes).statusCode).toBe(404);
   });
 
-  it("returns 502 when approve command fails", async () => {
-    mockExecSuccess(JSON.stringify({
+  it("returns 502 when approveDevicePairing fails", async () => {
+    mockList.mockResolvedValueOnce({
       pending: [{ requestId: REQUEST_ID, deviceId: DEVICE_ID }],
       paired: [],
-    }));
-    const approveErr = new Error("Command failed") as Error & { stderr: string };
-    approveErr.stderr = "unknown requestId";
-    mockExecErrorWithStderr(approveErr);
+    });
+    mockApprove.mockRejectedValueOnce(new Error("unknown requestId"));
 
     const req = mockReq("POST", { authorization: "Bearer test-token" });
     const res = new MockRes() as unknown as ServerResponse;
@@ -174,35 +144,36 @@ describe("handleDeviceApprove", () => {
     await p;
     expect((res as unknown as MockRes).statusCode).toBe(502);
     const body = JSON.parse((res as unknown as MockRes).body);
-    expect(body.error).toContain("Device approval command failed");
+    expect(body.error).toContain("Device approval failed");
     expect(body.detail).toBe("unknown requestId");
   });
 
-  it("returns 502 when approve returns non-JSON", async () => {
-    mockExecSuccess(JSON.stringify({
+  it("returns 404 when approveDevicePairing returns null", async () => {
+    mockList.mockResolvedValueOnce({
       pending: [{ requestId: REQUEST_ID, deviceId: DEVICE_ID }],
       paired: [],
-    }));
-    mockExecSuccess("No pending device pairing requests to approve");
+    });
+    mockApprove.mockResolvedValueOnce(null);
 
     const req = mockReq("POST", { authorization: "Bearer test-token" });
     const res = new MockRes() as unknown as ServerResponse;
     const p = handleDeviceApprove(req as unknown as IncomingMessage, res);
     req.end(JSON.stringify({ deviceId: DEVICE_ID }));
     await p;
-    expect((res as unknown as MockRes).statusCode).toBe(502);
-    expect(JSON.parse((res as unknown as MockRes).body).error).toContain("Unexpected response from device approval");
+    expect((res as unknown as MockRes).statusCode).toBe(404);
+    expect(JSON.parse((res as unknown as MockRes).body).error).toContain("not found");
   });
 
   it("succeeds with complete flow", async () => {
-    mockExecSuccess(JSON.stringify({
+    mockList.mockResolvedValueOnce({
       pending: [{ requestId: REQUEST_ID, deviceId: DEVICE_ID }],
       paired: [],
-    }));
-    mockExecSuccess(JSON.stringify({
+    });
+    mockApprove.mockResolvedValueOnce({
+      status: "approved",
       requestId: REQUEST_ID,
       device: { deviceId: DEVICE_ID, approvedAtMs: 1778571972361 },
-    }));
+    });
 
     const req = mockReq("POST", { authorization: "Bearer test-token" });
     const res = new MockRes() as unknown as ServerResponse;
@@ -216,18 +187,20 @@ describe("handleDeviceApprove", () => {
     expect(body.deviceId).toBe(DEVICE_ID.toUpperCase());
     expect(body.requestId).toBe(REQUEST_ID);
     expect(body.approvedAtMs).toBe(1778571972361);
-    expect(mockExecImpl).toHaveBeenCalledTimes(2);
+    expect(mockList).toHaveBeenCalledTimes(1);
+    expect(mockApprove).toHaveBeenCalledTimes(1);
   });
 
   it("normalizes deviceId case-insensitively", async () => {
-    mockExecSuccess(JSON.stringify({
+    mockList.mockResolvedValueOnce({
       pending: [{ requestId: REQUEST_ID, deviceId: DEVICE_ID }],
       paired: [],
-    }));
-    mockExecSuccess(JSON.stringify({
+    });
+    mockApprove.mockResolvedValueOnce({
+      status: "approved",
       requestId: REQUEST_ID,
       device: { deviceId: DEVICE_ID, approvedAtMs: 1 },
-    }));
+    });
 
     const req = mockReq("POST", { authorization: "Bearer test-token" });
     const res = new MockRes() as unknown as ServerResponse;

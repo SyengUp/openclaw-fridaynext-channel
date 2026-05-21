@@ -1,40 +1,8 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
-import { exec } from "node:child_process";
+import { listDevicePairing, approveDevicePairing } from "openclaw/plugin-sdk/device-bootstrap";
 import { readJsonBody } from "../middleware/body.js";
 import { extractBearerToken } from "../middleware/auth.js";
 import { createFridayNextLogger } from "../../logging.js";
-
-const EXEC_ENV = process.platform === "win32"
-  ? process.env
-  : { ...process.env, PATH: `/opt/homebrew/bin:/usr/local/bin:/home/linuxbrew/.linuxbrew/bin:${process.env.PATH ?? ""}` };
-
-interface PendingDevice {
-  requestId: string;
-  deviceId: string;
-}
-
-interface DeviceListJson {
-  pending?: PendingDevice[];
-}
-
-interface ApproveJson {
-  requestId: string;
-  device?: { deviceId: string; approvedAtMs?: number };
-}
-
-function execAsync(command: string, timeoutMs: number): Promise<{ stdout: string; stderr: string }> {
-  return new Promise((resolve, reject) => {
-    const child = exec(command, { encoding: "utf-8", timeout: timeoutMs, maxBuffer: 1024 * 1024, env: EXEC_ENV }, (error, stdout, stderr) => {
-      if (error) {
-        reject(error);
-      } else {
-        resolve({ stdout, stderr });
-      }
-    });
-    child.stdout?.on("data", () => { /* drain */ });
-    child.stderr?.on("data", () => { /* drain */ });
-  });
-}
 
 export async function handleDeviceApprove(
   req: IncomingMessage,
@@ -75,32 +43,18 @@ export async function handleDeviceApprove(
 
   const normalizedDeviceId = rawDeviceId.trim().toUpperCase();
 
-  let listStdout: string;
+  let pairing;
   try {
-    const result = await execAsync("openclaw devices list --json", 15000);
-    listStdout = result.stdout;
+    pairing = await listDevicePairing();
   } catch (err) {
-    const stderr = (err as { stderr?: string })?.stderr?.trim();
-    log.error(`devices list failed: ${err instanceof Error ? err.message : String(err)}`);
+    log.error(`listDevicePairing failed: ${err instanceof Error ? err.message : String(err)}`);
     res.statusCode = 502;
     res.setHeader("Content-Type", "application/json");
-    res.end(JSON.stringify({ error: "Failed to list devices from gateway", detail: stderr || undefined }));
+    res.end(JSON.stringify({ error: "Failed to list devices from gateway" }));
     return true;
   }
 
-  let listData: DeviceListJson;
-  try {
-    listData = JSON.parse(listStdout) as DeviceListJson;
-  } catch {
-    log.error(`devices list returned invalid JSON: ${listStdout.slice(0, 200)}`);
-    res.statusCode = 502;
-    res.setHeader("Content-Type", "application/json");
-    res.end(JSON.stringify({ error: "Unexpected response from gateway device list" }));
-    return true;
-  }
-
-  const pending = listData.pending ?? [];
-  const match = pending.find(
+  const match = pairing.pending.find(
     (entry) => entry.deviceId.trim().toUpperCase() === normalizedDeviceId,
   );
 
@@ -117,30 +71,31 @@ export async function handleDeviceApprove(
   const requestId = match.requestId;
   log.info(`approving deviceId=${normalizedDeviceId} requestId=${requestId}`);
 
-  let approveStdout: string;
+  let approved;
   try {
-    const result = await execAsync(`openclaw devices approve ${requestId} --json`, 15000);
-    approveStdout = result.stdout;
+    approved = await approveDevicePairing(requestId);
   } catch (err) {
-    const stderr = (err as { stderr?: string })?.stderr?.trim();
-    log.error(`devices approve failed: ${err instanceof Error ? err.message : String(err)}`);
+    log.error(`approveDevicePairing failed: ${err instanceof Error ? err.message : String(err)}`);
     res.statusCode = 502;
     res.setHeader("Content-Type", "application/json");
     res.end(JSON.stringify({
-      error: "Device approval command failed",
-      detail: stderr || (err instanceof Error ? err.message : "Unknown error"),
+      error: "Device approval failed",
+      detail: err instanceof Error ? err.message : "Unknown error",
     }));
     return true;
   }
 
-  let approveData: ApproveJson;
-  try {
-    approveData = JSON.parse(approveStdout) as ApproveJson;
-  } catch {
-    log.error(`devices approve returned non-JSON: ${approveStdout.slice(0, 200)}`);
-    res.statusCode = 502;
+  if (!approved) {
+    res.statusCode = 404;
     res.setHeader("Content-Type", "application/json");
-    res.end(JSON.stringify({ error: "Unexpected response from device approval" }));
+    res.end(JSON.stringify({ error: "Pending device request not found" }));
+    return true;
+  }
+
+  if (approved.status === "forbidden") {
+    res.statusCode = 403;
+    res.setHeader("Content-Type", "application/json");
+    res.end(JSON.stringify({ error: `Device approval forbidden: ${(approved as any).reason ?? "unknown"}` }));
     return true;
   }
 
@@ -149,8 +104,8 @@ export async function handleDeviceApprove(
   res.end(JSON.stringify({
     ok: true,
     deviceId: normalizedDeviceId,
-    requestId: approveData.requestId,
-    approvedAtMs: approveData.device?.approvedAtMs,
+    requestId: approved.requestId,
+    approvedAtMs: (approved as any).device?.approvedAtMs,
   }));
   return true;
 }
