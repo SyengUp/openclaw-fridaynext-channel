@@ -84,9 +84,16 @@ const { listNodePairing, approveNodePairing } = loadNodePairingModule();
     const requestId = pendingMatch.requestId;
     log.info(`approving nodeId=${normalizedNodeId} requestId=${requestId}`);
 
+    const callerScopes = [
+      "operator.admin",
+      "operator.pairing",
+      "operator.read",
+      "operator.write",
+    ];
+
     let approved;
     try {
-      approved = await approveNodePairing(requestId, {});
+      approved = await approveNodePairing(requestId, { callerScopes });
     } catch (err) {
       log.error(`approveNodePairing failed: ${err instanceof Error ? err.message : String(err)}`);
       res.statusCode = 502;
