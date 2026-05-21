@@ -1,6 +1,6 @@
 {
   "name": "@syengup/friday-channel-next",
-  "version": "0.0.37",
+  "version": "0.0.38",
   "description": "OpenClaw Friday Next Apple channel plugin",
   "type": "module",
   "files": [

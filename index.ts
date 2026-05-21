@@ -23,8 +23,13 @@ export { setFridayNextRuntime } from "./src/runtime.js";
 /** `api.on` returns void — register tool hooks at most once per process. */
 let fridayNextToolHooksRegistered = false;
 let disposeAgentEventListener: (() => void) | null = null;
-/** Avoid duplicate `registerHttpRoute` when gateway re-invokes `registerFull`. */
-let fridayNextPluginHttpRegistered = false;
+/**
+ * Track the last `api` instance on which HTTP routes were registered.
+ * When the health-monitor restarts the plugin, `registerFull` receives a fresh `api` whose
+ * old routes are gone — we must re-register.  A WeakRef lets us distinguish "same api,
+ * re-entered" (skip) from "new api after restart" (re-register).
+ */
+let lastApiRoutesRegistered: WeakRef<OpenClawPluginApi> | null = null;
 
 function deviceIdFromToolContext(ctx: PluginHookToolContext): string | null {
   if (ctx.runId) {
@@ -77,8 +82,9 @@ export default defineChannelPluginEntry({
   setRuntime: setFridayNextRuntime,
   registerFull: (api: OpenClawPluginApi) => {
     setFridayAgentForwardRuntime(api);
-    if (!fridayNextPluginHttpRegistered) {
-      fridayNextPluginHttpRegistered = true;
+    const sameApi = lastApiRoutesRegistered?.deref() === api;
+    if (!sameApi) {
+      lastApiRoutesRegistered = new WeakRef(api);
       registerFridayNextHttpRoutes(api);
     } else {
       const cfg = resolveFridayNextConfig(getHostOpenClawConfigSnapshot(getFridayNextRuntime().config));

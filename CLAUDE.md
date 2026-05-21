@@ -71,6 +71,8 @@ iOS App ←--HTTP/SSE--→ Friday Plugin ←--OpenClaw Plugin API--→ Gateway +
 - **`src/logging.ts`** — Scoped logger factory (`[friday-next:<scope>]` prefix, level-gated).
 - **`src/vendor/runtime-store.ts`** — Vendored from OpenClaw SDK; `Symbol.for("openclaw.plugin-sdk.runtime-store-registry")`-based runtime singleton. Kept here to avoid importing the full gateway graph in tests.
 - **`src/openclaw.d.ts`** — Ambient module declarations for `openclaw/plugin-sdk/*` imports (avoids depending on the full SDK type bundle).
+- **`src/collect-message-media-paths.ts`** — Extracts local filesystem paths (`/Users/.../file.ext`, `mediaUrl`, `filePath`, `audioPath`) from tool result JSON/strings. Used by outbound media delivery to resolve agent-generated files.
+- **`openclaw.plugin.json`** — Plugin manifest declaring channel metadata, config schema (auth token, CORS, SSE keepalive/backlog), UI hints (sensitive fields), and env vars (`FRIDAY_NEXT_AUTH_TOKEN`).
 
 ## SSE event names
 
