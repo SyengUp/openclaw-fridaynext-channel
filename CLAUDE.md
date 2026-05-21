@@ -20,7 +20,7 @@ pnpm vitest run src/http/handlers/messages.test.ts
 pnpm vitest run --config vitest.e2e.config.ts src/e2e/send-text.e2e.test.ts
 ```
 
-Both vitest configs use an `openclaw` import alias pinned to `~/Downloads/openclaw-2026.5.4/src`. Update both `vitest.config.ts` and `vitest.e2e.config.ts` when upgrading the OpenClaw version.
+Both vitest configs auto-detect the OpenClaw dist directory from standard install paths (`/opt/homebrew`, `/usr/local`, nvm). If your OpenClaw is installed elsewhere, set the `OPENCLAW_DIST` env var or update the candidates in both configs.
 
 ## Architecture
 
