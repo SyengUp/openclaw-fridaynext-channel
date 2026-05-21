@@ -63,7 +63,37 @@ function mockExecErrorWithStderr(err: Error & { stderr?: string }) {
 }
 
 const DEVICE_ID = "a80b8c4b305fb02c5772c409c6dfcbacde691b61557f7779511ad1a5be8fdf06";
-const REQUEST_ID = "12f150e8-b1bc-4688-be23-e3a7fa8b9e51";
+const DEVICE_REQUEST_ID = "12f150e8-b1bc-4688-be23-e3a7fa8b9e51";
+const NODE_REQUEST_ID = "d24e3a9c-c8f2-4e1f-b9a7-8f16c3d7e2a4";
+
+// helpers to mock the 4 CLI calls in sequence
+function mockDeviceListSuccess(overrides?: Partial<{ requestId: string; deviceId: string }>) {
+  mockExecSuccess(JSON.stringify({
+    pending: [{ requestId: overrides?.requestId ?? DEVICE_REQUEST_ID, deviceId: overrides?.deviceId ?? DEVICE_ID }],
+    paired: [],
+  }));
+}
+
+function mockDeviceApproveSuccess() {
+  mockExecSuccess(JSON.stringify({
+    requestId: DEVICE_REQUEST_ID,
+    device: { deviceId: DEVICE_ID, approvedAtMs: 1778571972361 },
+  }));
+}
+
+function mockNodeListSuccess(overrides?: Partial<{ requestId: string; nodeId: string }>) {
+  mockExecSuccess(JSON.stringify({
+    pending: [{ requestId: overrides?.requestId ?? NODE_REQUEST_ID, nodeId: overrides?.nodeId ?? DEVICE_ID }],
+    paired: [],
+  }));
+}
+
+function mockNodeApproveSuccess() {
+  mockExecSuccess(JSON.stringify({
+    requestId: NODE_REQUEST_ID,
+    node: { nodeId: DEVICE_ID, approvedAtMs: 1778571972500 },
+  }));
+}
 
 describe("handleDeviceApprove", () => {
   beforeEach(() => {
@@ -159,11 +189,7 @@ describe("handleDeviceApprove", () => {
   });
 
   it("returns 502 when approve command fails", async () => {
-    mockExecSuccess(JSON.stringify({
-      pending: [{ requestId: REQUEST_ID, deviceId: DEVICE_ID }],
-      paired: [],
-    }));
-    // second call (approve) fails
+    mockDeviceListSuccess();
     const approveErr = new Error("Command failed") as Error & { stderr: string };
     approveErr.stderr = "unknown requestId";
     mockExecErrorWithStderr(approveErr);
@@ -180,10 +206,7 @@ describe("handleDeviceApprove", () => {
   });
 
   it("returns 502 when approve returns non-JSON", async () => {
-    mockExecSuccess(JSON.stringify({
-      pending: [{ requestId: REQUEST_ID, deviceId: DEVICE_ID }],
-      paired: [],
-    }));
+    mockDeviceListSuccess();
     mockExecSuccess("No pending device pairing requests to approve");
 
     const req = mockReq("POST", { authorization: "Bearer test-token" });
@@ -195,15 +218,11 @@ describe("handleDeviceApprove", () => {
     expect(JSON.parse((res as unknown as MockRes).body).error).toContain("Unexpected response from device approval");
   });
 
-  it("succeeds with complete flow", async () => {
-    mockExecSuccess(JSON.stringify({
-      pending: [{ requestId: REQUEST_ID, deviceId: DEVICE_ID }],
-      paired: [],
-    }));
-    mockExecSuccess(JSON.stringify({
-      requestId: REQUEST_ID,
-      device: { deviceId: DEVICE_ID, approvedAtMs: 1778571972361 },
-    }));
+  it("succeeds with complete flow (device + node approve)", async () => {
+    mockDeviceListSuccess();
+    mockDeviceApproveSuccess();
+    mockNodeListSuccess();
+    mockNodeApproveSuccess();
 
     const req = mockReq("POST", { authorization: "Bearer test-token" });
     const res = new MockRes() as unknown as ServerResponse;
@@ -215,20 +234,19 @@ describe("handleDeviceApprove", () => {
     const body = JSON.parse((res as unknown as MockRes).body);
     expect(body.ok).toBe(true);
     expect(body.deviceId).toBe(DEVICE_ID.toUpperCase());
-    expect(body.requestId).toBe(REQUEST_ID);
-    expect(body.approvedAtMs).toBe(1778571972361);
-    expect(mockExecImpl).toHaveBeenCalledTimes(2);
+    expect(body.device.requestId).toBe(DEVICE_REQUEST_ID);
+    expect(body.device.approvedAtMs).toBe(1778571972361);
+    expect(body.node.ok).toBe(true);
+    expect(body.node.requestId).toBe(NODE_REQUEST_ID);
+    expect(body.node.approvedAtMs).toBe(1778571972500);
+    expect(mockExecImpl).toHaveBeenCalledTimes(4);
   });
 
   it("normalizes deviceId case-insensitively", async () => {
-    mockExecSuccess(JSON.stringify({
-      pending: [{ requestId: REQUEST_ID, deviceId: DEVICE_ID }],
-      paired: [],
-    }));
-    mockExecSuccess(JSON.stringify({
-      requestId: REQUEST_ID,
-      device: { deviceId: DEVICE_ID, approvedAtMs: 1 },
-    }));
+    mockDeviceListSuccess();
+    mockDeviceApproveSuccess();
+    mockNodeListSuccess();
+    mockNodeApproveSuccess();
 
     const req = mockReq("POST", { authorization: "Bearer test-token" });
     const res = new MockRes() as unknown as ServerResponse;
@@ -240,5 +258,65 @@ describe("handleDeviceApprove", () => {
     const body = JSON.parse((res as unknown as MockRes).body);
     expect(body.ok).toBe(true);
     expect(body.deviceId).toBe(DEVICE_ID.toUpperCase());
+    expect(body.node.ok).toBe(true);
+  });
+
+  it("returns 200 with node error when nodes list fails", async () => {
+    mockDeviceListSuccess();
+    mockDeviceApproveSuccess();
+    mockExecError("ENOENT");
+
+    const req = mockReq("POST", { authorization: "Bearer test-token" });
+    const res = new MockRes() as unknown as ServerResponse;
+    const p = handleDeviceApprove(req as unknown as IncomingMessage, res);
+    req.end(JSON.stringify({ deviceId: DEVICE_ID }));
+    await p;
+
+    expect((res as unknown as MockRes).statusCode).toBe(200);
+    const body = JSON.parse((res as unknown as MockRes).body);
+    expect(body.ok).toBe(true);
+    expect(body.device.requestId).toBe(DEVICE_REQUEST_ID);
+    expect(body.node.ok).toBe(false);
+    expect(body.node.error).toContain("Failed to list nodes");
+  });
+
+  it("returns 200 with node error when nodeId not in pending", async () => {
+    mockDeviceListSuccess();
+    mockDeviceApproveSuccess();
+    mockExecSuccess(JSON.stringify({ pending: [], paired: [] }));
+
+    const req = mockReq("POST", { authorization: "Bearer test-token" });
+    const res = new MockRes() as unknown as ServerResponse;
+    const p = handleDeviceApprove(req as unknown as IncomingMessage, res);
+    req.end(JSON.stringify({ deviceId: DEVICE_ID }));
+    await p;
+
+    expect((res as unknown as MockRes).statusCode).toBe(200);
+    const body = JSON.parse((res as unknown as MockRes).body);
+    expect(body.ok).toBe(true);
+    expect(body.node.ok).toBe(false);
+    expect(body.node.error).toContain("No pending node found");
+  });
+
+  it("returns 200 with node error when nodes approve fails", async () => {
+    mockDeviceListSuccess();
+    mockDeviceApproveSuccess();
+    mockNodeListSuccess();
+    const nodeApproveErr = new Error("Command failed") as Error & { stderr: string };
+    nodeApproveErr.stderr = "unknown requestId";
+    mockExecErrorWithStderr(nodeApproveErr);
+
+    const req = mockReq("POST", { authorization: "Bearer test-token" });
+    const res = new MockRes() as unknown as ServerResponse;
+    const p = handleDeviceApprove(req as unknown as IncomingMessage, res);
+    req.end(JSON.stringify({ deviceId: DEVICE_ID }));
+    await p;
+
+    expect((res as unknown as MockRes).statusCode).toBe(200);
+    const body = JSON.parse((res as unknown as MockRes).body);
+    expect(body.ok).toBe(true);
+    expect(body.device.requestId).toBe(DEVICE_REQUEST_ID);
+    expect(body.node.ok).toBe(false);
+    expect(body.node.error).toContain("unknown requestId");
   });
 });
