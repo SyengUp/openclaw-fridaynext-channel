@@ -52,12 +52,14 @@ import {
   registerRunRoute,
   setRunMetadata,
 } from "../../run-metadata.js";
+import { createFridayNextLogger } from "../../logging.js";
+
+const logger = createFridayNextLogger("messages");
 
 const log = (action: string, deviceId: string, runId?: string, detail?: string) => {
-  const ts = new Date().toISOString();
   const runPart = runId ? ` runId=${runId}` : "";
   const detailPart = detail ? ` detail=${detail}` : "";
-  console.error(`[Friday-MSG] [${ts}] [${action}] deviceId=${deviceId}${runPart}${detailPart}`);
+  logger.info(`[${action}] deviceId=${deviceId}${runPart}${detailPart}`);
 };
 
 function collectReplyPayloadMediaUrls(pl: { mediaUrls?: string[]; mediaUrl?: string | null }): string[] {

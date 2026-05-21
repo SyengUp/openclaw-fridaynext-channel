@@ -8,6 +8,7 @@
  */
 
 import type { IncomingMessage, ServerResponse } from "node:http";
+import { createFridayNextLogger } from "../../logging.js";
 import { extractBearerToken } from "../middleware/auth.js";
 import {
   getExternalFileSourceByUrlToken,
@@ -19,6 +20,8 @@ import {
 import path from "node:path";
 import fs from "node:fs";
 import os from "node:os";
+
+const logger = createFridayNextLogger("files-download");
 
 const MIME_FROM_EXT: Record<string, string> = {
   png: "image/png",
@@ -232,7 +235,7 @@ export async function handleFilesDownload(
     sendError(res, 404, "File not found");
     return true;
   } catch (err) {
-    console.error(`[Friday-FILES] GET download failed: ${String(err)}`);
+    logger.error(`GET download failed: ${String(err)}`);
     sendError(res, 500, "Internal Server Error");
     return true;
   }

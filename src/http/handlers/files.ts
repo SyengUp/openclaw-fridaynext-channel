@@ -8,6 +8,7 @@
 import crypto from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
+import { createFridayNextLogger } from "../../logging.js";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -41,6 +42,8 @@ export interface StoredFile {
 const fileIndex = new Map<string, StoredFile>();
 const fileTokenIndex = new Map<string, StoredFile>();
 const externalFileSourceIndex = new Map<string, string>();
+
+const logger = createFridayNextLogger("files");
 
 function registerStoredFile(file: StoredFile): void {
   fileIndex.set(file.id, file);
@@ -115,7 +118,7 @@ function copyLocalFileToAttachments(sourcePath: string): StoredFile | null {
       // Fallback to read+write so attachment persistence still works.
       const raw = fs.readFileSync(resolvedPath);
       fs.writeFileSync(storedPath, raw);
-      console.error(`[files] copyLocalFileToAttachments copy fallback used for "${resolvedPath}": ${String(copyErr)}`);
+      logger.warn(`copyLocalFileToAttachments copy fallback used for "${resolvedPath}": ${String(copyErr)}`);
     }
     const stat = fs.statSync(storedPath);
     const mimeType = guessMimeType(filename);
@@ -131,7 +134,7 @@ function copyLocalFileToAttachments(sourcePath: string): StoredFile | null {
     registerStoredFile(file);
     return file;
   } catch (err) {
-    console.error(`[files] copyLocalFileToAttachments failed for "${resolvedPath}": ${String(err)}`);
+    logger.error(`copyLocalFileToAttachments failed for "${resolvedPath}": ${String(err)}`);
     return null;
   }
 }
@@ -238,10 +241,10 @@ export function resolveMediaUrl(localPath: string): string {
 
   const stored = copyLocalFileToAttachments(localPath);
   if (!stored) {
-    console.error(`[files] resolveMediaUrl: file not found or unreadable: ${localPath}`);
+    logger.error(`resolveMediaUrl: file not found or unreadable: ${localPath}`);
     return localPath;
   }
-  console.log(`[files] resolveMediaUrl: copied "${stored.filename}" → ${stored.urlToken}`);
+  logger.info(`resolveMediaUrl: copied "${stored.filename}" → ${stored.urlToken}`);
   return `/friday-next/files/${encodeURIComponent(stored.urlToken)}`;
 }
 

@@ -8,6 +8,7 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { createChatChannelPlugin } from "openclaw/plugin-sdk/core";
+import { createFridayNextLogger } from "./logging.js";
 import type { ChannelAccountSnapshot } from "openclaw/plugin-sdk/status-helpers";
 import { saveMediaBuffer } from "openclaw/plugin-sdk/media-store";
 import { sseEmitter } from "./sse/emitter.js";
@@ -19,6 +20,7 @@ import {
 } from "./friday-session.js";
 import { getLastFridayInboundAt } from "./friday-inbound-stats.js";
 
+const logger = createFridayNextLogger("channel");
 const CHANNEL_ID = "friday-next" as const;
 
 function pickFirstString(source: Record<string, unknown>, keys: string[]): string | undefined {
@@ -156,8 +158,8 @@ export const fridayNextChannelPlugin = createChatChannelPlugin({
 
         const conn = sseEmitter.getConnection(deviceId);
         const ts = new Date().toISOString();
-        console.error(
-          `[Friday-OUT] [${ts}] [SEND_TEXT] to=${deviceId} runId=${runId ?? "(none)"} sessionKey=${sessionKey ?? "(none)"} textLen=${text.length} online=${!!conn}`,
+        logger.info(
+          `[SEND_TEXT] to=${deviceId} runId=${runId ?? "(none)"} sessionKey=${sessionKey ?? "(none)"} textLen=${text.length} online=${!!conn}`,
         );
 
         if (conn) {
@@ -243,8 +245,8 @@ export const fridayNextChannelPlugin = createChatChannelPlugin({
 
             const conn = sseEmitter.getConnection(deviceId);
             const ts = new Date().toISOString();
-            console.error(
-              `[Friday-OUT] [${ts}] [SEND_MEDIA] to=${deviceId} runId=${runId ?? "(none)"} sessionKey=${sessionKey ?? "(none)"} audioAsVoice=${audioAsVoice} url=${publicUrl} online=${!!conn}`,
+            logger.info(
+              `[SEND_MEDIA] to=${deviceId} runId=${runId ?? "(none)"} sessionKey=${sessionKey ?? "(none)"} audioAsVoice=${audioAsVoice} url=${publicUrl} online=${!!conn}`,
             );
 
             if (conn) {
