@@ -62,9 +62,16 @@ export async function handleNodesApprove(
 
   const normalizedNodeId = rawNodeId.trim().toUpperCase();
 
-const { listNodePairing, approveNodePairing } = loadNodePairingModule();
-
-  let listData;
+let listData, listNodePairing, approveNodePairing;
+  try {
+    ({ listNodePairing, approveNodePairing } = await loadNodePairingModule());
+  } catch (err) {
+    log.error(`loadNodePairingModule failed: ${err instanceof Error ? err.message : String(err)}`);
+    res.statusCode = 502;
+    res.setHeader("Content-Type", "application/json");
+    res.end(JSON.stringify({ error: "Failed to load node pairing module" }));
+    return true;
+  }
   try {
     listData = await listNodePairing();
   } catch (err) {

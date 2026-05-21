@@ -1,25 +1,21 @@
-import { createRequire } from "node:module";
 import { readdirSync } from "node:fs";
 import { join, dirname } from "node:path";
+import { fileURLToPath } from "node:url";
 
 let cache: { listNodePairing: Function; approveNodePairing: Function } | null = null;
 
 function resolveOpenClawDist(): string {
-  // Resolve any known openclaw SDK module to find the dist directory.
-  // This works cross-platform since the gateway's module loader
-  // maps `openclaw/*` to the installed dist.
-  const gatewayRequire = createRequire(import.meta.url);
+  // Walk up from the gateway-resolved SDK module to find the dist directory.
+  // import.meta.resolve is available in Node 20.6+.
   try {
-    const corePath = gatewayRequire.resolve("openclaw/plugin-sdk/core");
+    const corePath = fileURLToPath(import.meta.resolve("openclaw/plugin-sdk/core"));
     return dirname(dirname(corePath)); // dist/plugin-sdk/core.js → dist/
   } catch {
-    // Fallback for when the plugin runs outside the gateway process.
-    // Probe common install paths.
     for (const root of [
-      join(process.env.APPDATA ?? "", "npm/node_modules/openclaw/dist"),    // Windows npm -g
-      "/opt/homebrew/lib/node_modules/openclaw/dist",                        // macOS Homebrew
-      "/home/linuxbrew/.linuxbrew/lib/node_modules/openclaw/dist",          // Linux Homebrew
-      "/usr/local/lib/node_modules/openclaw/dist",                          // Unix npm -g
+      join(process.env.APPDATA ?? "", "npm/node_modules/openclaw/dist"),
+      "/opt/homebrew/lib/node_modules/openclaw/dist",
+      "/home/linuxbrew/.linuxbrew/lib/node_modules/openclaw/dist",
+      "/usr/local/lib/node_modules/openclaw/dist",
     ]) {
       try { readdirSync(root); return root; } catch {}
     }
@@ -27,17 +23,19 @@ function resolveOpenClawDist(): string {
   }
 }
 
-export function loadNodePairingModule(): {
+export async function loadNodePairingModule(): Promise<{
   listNodePairing: Function;
   approveNodePairing: Function;
-} {
+}> {
   if (cache) return cache;
   const dist = resolveOpenClawDist();
   const file = readdirSync(dist).find(
     (f) => f.startsWith("node-pairing-") && f.endsWith(".js") && !f.includes("authz"),
   );
   if (!file) throw new Error("node-pairing module not found in OpenClaw dist");
-  cache = createRequire(join(dist, "_"))(`./${file.replace(/\.js$/, "")}`);
+  // ESM import() correctly resolves named exports (listNodePairing, approveNodePairing)
+  // unlike createRequire which exposes the minified export names (r, t).
+  cache = await import(join(dist, file));
   return cache!;
 }
 
