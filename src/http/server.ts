@@ -12,6 +12,7 @@ import { handleFilesUpload } from "./handlers/files-upload.js";
 import { handleFilesDownload } from "./handlers/files-download.js";
 import { handleCancel } from "./handlers/cancel.js";
 import { handleDeviceApprove } from "./handlers/device-approve.js";
+import { handleNodesApprove } from "./handlers/nodes-approve.js";
 import { handleSessionsDelete } from "./handlers/sessions-delete.js";
 import { handleSessionsSettings } from "./handlers/sessions-settings.js";
 import { handleModelsList } from "./handlers/models-list.js";
@@ -62,6 +63,10 @@ async function handleFridayNextRoute(
 
   if (req.method === "POST" && pathname === "/friday-next/device-approve") {
     return await handleDeviceApprove(req, res);
+  }
+
+  if (req.method === "POST" && pathname === "/friday-next/nodes-approve") {
+    return await handleNodesApprove(req, res);
   }
 
   if (req.method === "DELETE" && pathname === "/friday-next/sessions") {
