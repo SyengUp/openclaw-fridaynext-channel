@@ -89,15 +89,14 @@ if (!hasOpenclaw()) {
   }
 }
 
-// --------------- install via openclaw plugins ---------------
+// --------------- install plugin package ---------------
 
-log("Installing Friday Next channel via openclaw plugins...");
+log("Installing Friday Next channel plugin...");
 let installed = false;
 
 try {
-  // --dangerously-force-unsafe-install needed for child_process in device-approve / nodes-approve
   const out = execSync(
-    `${openclawCmd} plugins install --dangerously-force-unsafe-install @syengup/friday-channel-next@latest`,
+    `${openclawCmd} plugins install @syengup/friday-channel-next@latest`,
     { encoding: "utf8", stdio: "pipe", timeout: 120000 }
   );
   if (out.trim()) console.log(out.trim());
@@ -117,113 +116,104 @@ if (!installed) {
     err("npm is required for manual install. Install Node.js first.");
     process.exit(1);
   }
+  warn("Manual install complete, but auto-upgrade is NOT available.");
+  warn("To enable auto-upgrade later, run: openclaw plugins install @syengup/friday-channel-next");
+}
 
-  if (!existsSync(OPENCLAW_CONFIG)) {
-    err(`OpenClaw config not found at ${OPENCLAW_CONFIG}`);
-    err("Run openclaw at least once before installing plugins.");
-    process.exit(1);
-  }
+// --------------- configure OpenClaw ---------------
 
-  // Configure OpenClaw
-  log("Configuring OpenClaw...");
+log("Configuring OpenClaw...");
 
-  let config;
-  try {
-    config = JSON.parse(readFileSync(OPENCLAW_CONFIG, "utf8"));
-  } catch {
-    err(`Failed to read ${OPENCLAW_CONFIG}.`);
-    process.exit(1);
-  }
+let config;
+try {
+  config = JSON.parse(readFileSync(OPENCLAW_CONFIG, "utf8"));
+} catch {
+  err(`Failed to read ${OPENCLAW_CONFIG}.`);
+  err("Make sure OpenClaw is installed and has been run at least once.");
+  process.exit(1);
+}
 
-  if (!config.plugins) config.plugins = {};
-  if (!Array.isArray(config.plugins.allow)) config.plugins.allow = [];
-  if (!config.plugins.allow.includes("friday-next")) {
-    config.plugins.allow.push("friday-next");
-    console.log("  + Added friday-next to plugins.allow");
-  }
+let configChanged = false;
 
-  if (!config.plugins.entries) config.plugins.entries = {};
-  if (!config.plugins.entries["friday-next"]) {
-    config.plugins.entries["friday-next"] = { enabled: true };
-    console.log("  + Added friday-next to plugins.entries (enabled)");
-  } else if (!config.plugins.entries["friday-next"].enabled) {
-    config.plugins.entries["friday-next"].enabled = true;
-    console.log("  + Enabled friday-next in plugins.entries");
-  }
-
-  if (!config.plugins.allow.includes("canvas")) {
-    config.plugins.allow.push("canvas");
-    console.log("  + Added canvas to plugins.allow");
-  }
-  if (!config.plugins.entries["canvas"]) {
-    config.plugins.entries["canvas"] = { enabled: true };
-    console.log("  + Added canvas to plugins.entries (enabled)");
-  } else if (!config.plugins.entries["canvas"].enabled) {
-    config.plugins.entries["canvas"].enabled = true;
-    console.log("  + Enabled canvas in plugins.entries");
-  }
-
-  if (!config.channels) config.channels = {};
-  if (!config.channels["friday-next"]) {
-    config.channels["friday-next"] = { enabled: true, transport: "http+sse" };
-    console.log("  + Added friday-next channel config");
-  } else {
-    if (!config.channels["friday-next"].enabled) {
-      config.channels["friday-next"].enabled = true;
-      console.log("  + Enabled friday-next channel");
+function setConfig(path, value) {
+  const keys = path.split(".");
+  let obj = config;
+  for (let i = 0; i < keys.length - 1; i++) {
+    if (!obj[keys[i]] || typeof obj[keys[i]] !== "object" || Array.isArray(obj[keys[i]])) {
+      obj[keys[i]] = {};
     }
-    if (!config.channels["friday-next"].transport) {
-      config.channels["friday-next"].transport = "http+sse";
-      console.log("  + Set friday-next transport to http+sse");
-    }
+    obj = obj[keys[i]];
   }
+  const last = keys[keys.length - 1];
+  if (JSON.stringify(obj[last]) !== JSON.stringify(value)) {
+    obj[last] = value;
+    configChanged = true;
+  }
+}
 
-  if (!config.gateway) config.gateway = {};
-  if (config.gateway.bind !== "lan") {
-    config.gateway.bind = "lan";
-    console.log("  + Set gateway.bind to lan");
-  }
-  if (!config.gateway.nodes) config.gateway.nodes = {};
-  if (!Array.isArray(config.gateway.nodes.allowCommands)) config.gateway.nodes.allowCommands = [];
-  for (const cmd of [
-    "canvas.navigate", "canvas.present", "canvas.hide", "canvas.eval",
-    "canvas.snapshot", "canvas.a2ui.push", "canvas.a2ui.reset", "canvas.a2ui.pushJSONL",
-  ]) {
-    if (!config.gateway.nodes.allowCommands.includes(cmd)) {
-      config.gateway.nodes.allowCommands.push(cmd);
-      console.log("  + Added " + cmd + " to gateway.nodes.allowCommands");
-    }
-  }
+function ensureArrayContains(arr, item) {
+  if (!arr.includes(item)) { arr.push(item); configChanged = true; }
+}
 
-  if (!config.agents) config.agents = {};
-  if (!Array.isArray(config.agents.list)) config.agents.list = [];
-  let mainAgent = config.agents.list.find((a) => a.id === "main");
-  if (!mainAgent) { mainAgent = { id: "main" }; config.agents.list.push(mainAgent); }
-  if (!mainAgent.tools) mainAgent.tools = {};
-  if (!Array.isArray(mainAgent.tools.alsoAllow)) mainAgent.tools.alsoAllow = [];
+// Plugins
+if (!config.plugins) config.plugins = {};
+if (!Array.isArray(config.plugins.allow)) config.plugins.allow = [];
+ensureArrayContains(config.plugins.allow, "friday-next");
+ensureArrayContains(config.plugins.allow, "canvas");
+
+if (!config.plugins.entries) config.plugins.entries = {};
+for (const id of ["friday-next", "canvas"]) {
+  if (!config.plugins.entries[id]) { config.plugins.entries[id] = { enabled: true }; configChanged = true; }
+  else if (!config.plugins.entries[id].enabled) { config.plugins.entries[id].enabled = true; configChanged = true; }
+}
+
+// Channel
+if (!config.channels) config.channels = {};
+if (!config.channels["friday-next"]) { config.channels["friday-next"] = { enabled: true, transport: "http+sse" }; configChanged = true; }
+else {
+  if (!config.channels["friday-next"].enabled) { config.channels["friday-next"].enabled = true; configChanged = true; }
+  if (!config.channels["friday-next"].transport) { config.channels["friday-next"].transport = "http+sse"; configChanged = true; }
+}
+
+// Gateway bind + nodes
+if (!config.gateway) config.gateway = {};
+if (config.gateway.bind !== "lan") { config.gateway.bind = "lan"; configChanged = true; }
+if (!config.gateway.nodes) config.gateway.nodes = {};
+if (!Array.isArray(config.gateway.nodes.allowCommands)) config.gateway.nodes.allowCommands = [];
+for (const cmd of [
+  "canvas.navigate", "canvas.present", "canvas.hide", "canvas.eval",
+  "canvas.snapshot", "canvas.a2ui.push", "canvas.a2ui.reset", "canvas.a2ui.pushJSONL",
+]) {
+  ensureArrayContains(config.gateway.nodes.allowCommands, cmd);
+}
+
+// Agent tools
+if (!config.agents) config.agents = {};
+if (!Array.isArray(config.agents.list)) config.agents.list = [];
+let mainAgent = config.agents.list.find((a) => a.id === "main");
+if (!mainAgent) { mainAgent = { id: "main" }; config.agents.list.push(mainAgent); configChanged = true; }
+if (!mainAgent.tools) mainAgent.tools = {};
+if (!Array.isArray(mainAgent.tools.alsoAllow)) mainAgent.tools.alsoAllow = [];
+for (const tool of ["canvas", "nodes"]) {
+  ensureArrayContains(mainAgent.tools.alsoAllow, tool);
+}
+if (Array.isArray(mainAgent.tools.deny)) {
   for (const tool of ["canvas", "nodes"]) {
-    if (!mainAgent.tools.alsoAllow.includes(tool)) {
-      mainAgent.tools.alsoAllow.push(tool);
-      console.log("  + Added " + tool + " to agent 'main' tools.alsoAllow");
-    }
+    const idx = mainAgent.tools.deny.indexOf(tool);
+    if (idx !== -1) { mainAgent.tools.deny.splice(idx, 1); configChanged = true; }
   }
-  if (Array.isArray(mainAgent.tools.deny)) {
-    for (const tool of ["canvas", "nodes"]) {
-      const idx = mainAgent.tools.deny.indexOf(tool);
-      if (idx !== -1) { mainAgent.tools.deny.splice(idx, 1); console.log("  - Removed " + tool + " from agent 'main' tools.deny"); }
-    }
-  }
+}
 
+if (configChanged) {
   try {
     writeFileSync(OPENCLAW_CONFIG, JSON.stringify(config, null, 2) + "\n", "utf8");
-    console.log("  Config updated.");
+    log("openclaw.json updated.");
   } catch {
     err(`Failed to write ${OPENCLAW_CONFIG}.`);
     process.exit(1);
   }
-
-  warn("Manual install complete, but auto-upgrade is not available.");
-  warn("To enable auto-upgrade, run: openclaw plugins install --dangerously-force-unsafe-install @syengup/friday-channel-next");
+} else {
+  log("openclaw.json already configured.");
 }
 
 // --------------- restart gateway ---------------
@@ -250,7 +240,6 @@ function getLanIp() {
   return "127.0.0.1";
 }
 
-let config;
 try { config = JSON.parse(readFileSync(OPENCLAW_CONFIG, "utf8")); } catch { config = {}; }
 
 const gatewayPort = config.gateway?.port || 18789;
