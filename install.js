@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { execSync } from "node:child_process";
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync, rmSync } from "node:fs";
 import { homedir, networkInterfaces } from "node:os";
 import { join } from "node:path";
 
@@ -102,6 +102,13 @@ try {
   if (out.trim()) console.log(out.trim());
   installed = true;
   log("Plugin registered with install record — auto-upgrade enabled.");
+
+  // Remove old manual install to avoid "duplicate plugin id" warning.
+  const legacyDir = join(USER_HOME, ".openclaw", "extensions", "friday-channel-next");
+  if (existsSync(legacyDir)) {
+    try { rmSync(legacyDir, { recursive: true, force: true }); log("Removed legacy manual install."); }
+    catch { /* non-critical */ }
+  }
 } catch (e) {
   const msg = (e.stderr || e.stdout || e.message || "").toString();
   warn("openclaw plugins install failed: " + msg.trim().split("\n").pop());
@@ -118,6 +125,11 @@ if (!installed) {
   }
   warn("Manual install complete, but auto-upgrade is NOT available.");
   warn("To enable auto-upgrade later, run: openclaw plugins install @syengup/friday-channel-next");
+  // Clean up legacy dir even in fallback to avoid duplicate warnings
+  if (existsSync(join(USER_HOME, ".openclaw", "extensions", "friday-channel-next"))) {
+    warn("Legacy install detected. Remove it to avoid duplicate warnings:");
+    warn("  rm -rf ~/.openclaw/extensions/friday-channel-next");
+  }
 }
 
 // --------------- configure OpenClaw ---------------
