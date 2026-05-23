@@ -483,38 +483,40 @@ export function forwardAgentEventRaw(evt: ForwardAgentEventArgs): void {
     }
   }
 
-  // Build sessionUsage: llm_output hook (primary, no race) → store read (fallback).
-  if (isTerminalLifecycle) {
-    const llmUsage = consumeRunUsage(evt.runId);
-    const memUsage = buildSessionUsageFromRunMetadata(evt.runId);
-    const hasRealTokens = llmUsage?.tokens && Object.keys(llmUsage.tokens).length > 1;
-
-    if (hasRealTokens) {
-      const usage = mergeUsage(llmUsage, memUsage);
-      if (usage) {
-        outgoingData = { ...outgoingData, sessionUsage: usage };
+  // Build sessionUsage: store (cumulative session totals) → llm_output (per-run fallback).
+  if (isTerminalLifecycle && getFridayAgentForwardRuntime()) {
+    // Defer to let store write complete, then read cumulative totals.
+    // llm_output data is per-run; store is cumulative across rounds.
+    setTimeout(() => {
+      let data = outgoingData;
+      const storeUsage = tryReadSessionUsageFromStore(sk);
+      const llmUsage = consumeRunUsage(evt.runId);
+      const memUsage = buildSessionUsageFromRunMetadata(evt.runId);
+      let usage: FridaySessionUsagePayload | undefined;
+      if (storeUsage) {
+        // Store provides cumulative session totals. Supplement with
+        // fresher model/provider from llm_output when available.
+        usage = storeUsage;
+        if (llmUsage?.modelId) usage.modelId = llmUsage.modelId;
+        if (llmUsage?.modelProvider) usage.modelProvider = llmUsage.modelProvider;
+      } else {
+        // First message in session — store not yet written, fall back
+        // to per-run llm_output + RunMetadata.
+        usage = mergeUsage(llmUsage, memUsage);
       }
-    } else if (getFridayAgentForwardRuntime()) {
-      // llm_output hook fires async ~20ms after lifecycle.end.
-      // Wait 100ms then re-check before falling back to store read.
-      setTimeout(() => {
-        let data = outgoingData;
-        const retryLlm = consumeRunUsage(evt.runId);
-        const usage = mergeUsage(retryLlm, memUsage) ?? tryReadSessionUsageFromStore(sk);
-        if (usage) {
-          data = { ...outgoingData, sessionUsage: usage };
-        }
-        completeAgentEventForward({
-          evt,
-          sk,
-          deviceIdRaw,
-          outgoingData: data,
-          isTerminalLifecycle: true,
-          subagentMeta,
-        });
-      }, 100);
-      return;
-    }
+      if (usage) {
+        data = { ...outgoingData, sessionUsage: usage };
+      }
+      completeAgentEventForward({
+        evt,
+        sk,
+        deviceIdRaw,
+        outgoingData: data,
+        isTerminalLifecycle: true,
+        subagentMeta,
+      });
+    }, 100);
+    return;
   }
 
   completeAgentEventForward({
