@@ -2,6 +2,7 @@
   "name": "@syengup/friday-channel-next",
   "version": "0.1.1",
   "description": "OpenClaw Friday Next Apple channel plugin",
+  "license": "MIT",
   "type": "module",
   "files": [
     "dist/",
