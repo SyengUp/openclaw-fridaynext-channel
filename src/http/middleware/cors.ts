@@ -8,5 +8,5 @@ export function applyCorsHeaders(res: ServerResponse): void {
   if (!cfg.corsEnabled) return;
   res.setHeader("Access-Control-Allow-Origin", cfg.corsAllowOrigin || "*");
   res.setHeader("Access-Control-Allow-Headers", "Authorization, Content-Type, Last-Event-ID");
-  res.setHeader("Access-Control-Allow-Methods", "GET,POST,DELETE,OPTIONS");
+  res.setHeader("Access-Control-Allow-Methods", "GET,POST,OPTIONS");
 }

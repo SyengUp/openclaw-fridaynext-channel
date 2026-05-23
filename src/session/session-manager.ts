@@ -1,6 +1,6 @@
 import { join } from "node:path";
 import os from "node:os";
-import { readFileSync, writeFileSync, unlinkSync } from "node:fs";
+import { readFileSync, writeFileSync } from "node:fs";
 
 const FRIDAY_AGENT_ID = "main";
 const SESSION_ID_RE = /^[a-z0-9][a-z0-9._-]{0,127}$/i;
@@ -109,50 +109,6 @@ export function ensureSessionLevels(
   historyDir?: string,
 ): void {
   setSessionSettings(sessionKey, { reasoningLevel, thinkingLevel }, historyDir);
-}
-
-export function resolveSessionsDir(historyDir?: string): string {
-  const base = deriveOpenClawBaseDir(historyDir);
-  return join(base, "agents/main/sessions");
-}
-
-export interface DeleteSessionResult {
-  sessionKey: string;
-  sessionId?: string;
-  transcriptDeleted?: boolean;
-}
-
-export function deleteFridaySession(
-  sessionKey: string,
-  historyDir?: string,
-): DeleteSessionResult {
-  const result: DeleteSessionResult = { sessionKey };
-  const sessionsFile = resolveSessionsFilePath(historyDir);
-  const data = readSessionsData(sessionsFile);
-  if (!data) return result;
-
-  const fileKey = toSessionStoreKey(sessionKey);
-  const entry = data[fileKey];
-  if (!entry) return result;
-
-  const sessionId = typeof entry["sessionId"] === "string" ? entry["sessionId"] : undefined;
-  const sessionFilePath = typeof entry["sessionFile"] === "string" ? entry["sessionFile"] : undefined;
-  result.sessionId = sessionId;
-
-  if (sessionFilePath) {
-    try { unlinkSync(sessionFilePath); result.transcriptDeleted = true; } catch { /* gone already */ }
-  }
-
-  if (sessionId) {
-    const dir = resolveSessionsDir(historyDir);
-    for (const suffix of [".trajectory.jsonl", ".trajectory-path.json"]) {
-      try { unlinkSync(join(dir, `${sessionId}${suffix}`)); } catch { /* optional */ }
-    }
-  }
-
-  delete data[fileKey];
-  writeSessionsData(sessionsFile, data);
-  return result;
 }
 
 export interface FridaySessionSettings {
