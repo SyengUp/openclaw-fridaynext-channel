@@ -4,7 +4,9 @@ import { toSessionStoreKey } from "./session/session-manager.js";
 import { getOpenClawAgentRunContext } from "./agent-run-context-bridge.js";
 import { observeAgentEventForActiveRuns } from "./agent/active-runs.js";
 import { getRunMetadata, ingestAgentEventMetadata } from "./run-metadata.js";
+import { consumeRunUsage } from "./agent/run-usage-accumulator.js";
 import { buildSessionUsageSnapshot } from "./session-usage-snapshot.js";
+import type { FridaySessionUsagePayload } from "./session-usage-snapshot.js";
 import {
   lookupByRunId,
   registerSessionKeyForRun,
@@ -178,7 +180,7 @@ function mergeRunMetadataIntoLifecycleEnd(
   return { ...base, ...extra };
 }
 
-function tryReadSessionUsageFromStore(sessionKeyForStore: string): ReturnType<typeof buildSessionUsageSnapshot> {
+function tryReadSessionUsageFromStore(sessionKeyForStore: string): FridaySessionUsagePayload | undefined {
   const access = getFridayAgentForwardRuntime();
   if (!access) return undefined;
   try {
@@ -193,6 +195,51 @@ function tryReadSessionUsageFromStore(sessionKeyForStore: string): ReturnType<ty
   } catch {
     return undefined;
   }
+}
+
+function buildSessionUsageFromRunMetadata(runId: string): FridaySessionUsagePayload | undefined {
+  const meta = getRunMetadata(runId);
+  if (!meta) return undefined;
+  const payload: FridaySessionUsagePayload = {};
+  if (typeof meta.modelName === "string" && meta.modelName.trim()) {
+    payload.modelId = meta.modelName.trim();
+  }
+  if (typeof meta.modelProvider === "string" && meta.modelProvider.trim()) {
+    payload.modelProvider = meta.modelProvider.trim();
+  }
+  const tokens: NonNullable<typeof payload.tokens> = {};
+  if (typeof meta.inputTokens === "number") tokens.input = meta.inputTokens;
+  if (typeof meta.outputTokens === "number") tokens.output = meta.outputTokens;
+  if (typeof meta.cacheReadTokens === "number") tokens.cacheRead = meta.cacheReadTokens;
+  if (typeof meta.cacheWriteTokens === "number") tokens.cacheWrite = meta.cacheWriteTokens;
+  if (typeof meta.totalTokens === "number") tokens.total = meta.totalTokens;
+  if (Object.keys(tokens).length > 0) payload.tokens = tokens;
+  const context: NonNullable<typeof payload.context> = {};
+  if (typeof meta.contextWindowMax === "number") context.windowMax = meta.contextWindowMax;
+  if (typeof meta.totalTokens === "number") context.used = meta.totalTokens;
+  if (Object.keys(context).length > 0) payload.context = context;
+  if (!payload.modelId && !payload.modelProvider && !payload.tokens && !payload.context) {
+    return undefined;
+  }
+  return payload;
+}
+
+function mergeUsage(
+  llmUsage: FridaySessionUsagePayload | undefined,
+  memUsage: FridaySessionUsagePayload | undefined,
+): FridaySessionUsagePayload | undefined {
+  if (!llmUsage && !memUsage) return undefined;
+  if (!llmUsage) return memUsage;
+  if (!memUsage) return llmUsage;
+  // llm_output tokens are authoritative (per API call, no race);
+  // RunMetadata fills context window gaps.
+  return {
+    modelId: llmUsage.modelId ?? memUsage.modelId,
+    modelProvider: llmUsage.modelProvider ?? memUsage.modelProvider,
+    tokens: llmUsage.tokens,
+    context: memUsage.context ?? llmUsage.context,
+    estimatedCostUsd: llmUsage.estimatedCostUsd ?? memUsage.estimatedCostUsd,
+  };
 }
 
 function completeAgentEventForward(params: {
@@ -436,23 +483,38 @@ export function forwardAgentEventRaw(evt: ForwardAgentEventArgs): void {
     }
   }
 
-  if (isTerminalLifecycle && getFridayAgentForwardRuntime()) {
-    setImmediate(() => {
-      let data = outgoingData;
-      const usage = tryReadSessionUsageFromStore(sk);
+  // Build sessionUsage: llm_output hook (primary, no race) → store read (fallback).
+  if (isTerminalLifecycle) {
+    const llmUsage = consumeRunUsage(evt.runId);
+    const memUsage = buildSessionUsageFromRunMetadata(evt.runId);
+    const hasRealTokens = llmUsage?.tokens && Object.keys(llmUsage.tokens).length > 1;
+
+    if (hasRealTokens) {
+      const usage = mergeUsage(llmUsage, memUsage);
       if (usage) {
-        data = { ...outgoingData, sessionUsage: usage };
+        outgoingData = { ...outgoingData, sessionUsage: usage };
       }
-      completeAgentEventForward({
-        evt,
-        sk,
-        deviceIdRaw,
-        outgoingData: data,
-        isTerminalLifecycle: true,
-        subagentMeta,
-      });
-    });
-    return;
+    } else if (getFridayAgentForwardRuntime()) {
+      // llm_output hook fires async ~20ms after lifecycle.end.
+      // Wait 100ms then re-check before falling back to store read.
+      setTimeout(() => {
+        let data = outgoingData;
+        const retryLlm = consumeRunUsage(evt.runId);
+        const usage = mergeUsage(retryLlm, memUsage) ?? tryReadSessionUsageFromStore(sk);
+        if (usage) {
+          data = { ...outgoingData, sessionUsage: usage };
+        }
+        completeAgentEventForward({
+          evt,
+          sk,
+          deviceIdRaw,
+          outgoingData: data,
+          isTerminalLifecycle: true,
+          subagentMeta,
+        });
+      }, 100);
+      return;
+    }
   }
 
   completeAgentEventForward({

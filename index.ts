@@ -16,6 +16,7 @@ import {
 } from "./src/friday-session.js";
 import { setFridayAgentForwardRuntime } from "./src/agent-forward-runtime.js";
 import { getOpenClawAgentRunContext } from "./src/agent-run-context-bridge.js";
+import { accumulateRunUsage } from "./src/agent/run-usage-accumulator.js";
 
 export { fridayNextChannelPlugin } from "./src/channel.js";
 export { setFridayNextRuntime } from "./src/runtime.js";
@@ -101,6 +102,21 @@ export default defineChannelPluginEntry({
         data: evt.data as Record<string, unknown>,
         sessionKey: evt.sessionKey,
       });
+    });
+
+    api.on("llm_output", (event: any) => {
+      accumulateRunUsage(
+        event.runId,
+        {
+          input: event.usage?.input,
+          output: event.usage?.output,
+          cacheRead: event.usage?.cacheRead,
+          cacheWrite: event.usage?.cacheWrite,
+          total: event.usage?.total,
+        },
+        event.model,
+        event.provider,
+      );
     });
 
     if (fridayNextToolHooksRegistered) {

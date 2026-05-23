@@ -179,6 +179,10 @@ for (const id of ["friday-next", "canvas"]) {
   else if (!config.plugins.entries[id].enabled) { config.plugins.entries[id].enabled = true; configChanged = true; }
 }
 
+// llm_output hook requires allowConversationAccess for non-bundled plugins.
+if (!config.plugins.entries["friday-next"].hooks) { config.plugins.entries["friday-next"].hooks = {}; configChanged = true; }
+if (!config.plugins.entries["friday-next"].hooks.allowConversationAccess) { config.plugins.entries["friday-next"].hooks.allowConversationAccess = true; configChanged = true; }
+
 // Channel
 if (!config.channels) config.channels = {};
 if (!config.channels["friday-next"]) { config.channels["friday-next"] = { enabled: true, transport: "http+sse" }; configChanged = true; }

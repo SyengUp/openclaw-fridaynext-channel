@@ -6,11 +6,17 @@ type RunRoute = {
 
 export type RunMetadata = {
   modelName?: string;
+  modelProvider?: string;
   totalTokens?: number;
   /** Tokens counted toward the model context window (prompt-side: input + cache read + cache write when present). */
   contextTokensUsed?: number;
   /** Resolved model context window limit when the runtime exposes it. */
   contextWindowMax?: number;
+  /** Detailed token breakdown captured from agent event usage (current run, not stale store read). */
+  inputTokens?: number;
+  outputTokens?: number;
+  cacheReadTokens?: number;
+  cacheWriteTokens?: number;
 };
 
 const runRouteById = new Map<string, RunRoute>();
@@ -142,6 +148,12 @@ export function ingestAgentEventMetadata(runId: string, data: Record<string, unk
     undefined;
   if (modelName) next.modelName = modelName;
 
+  const modelProvider =
+    (typeof data.modelProvider === "string" && data.modelProvider.trim()) ||
+    (typeof data.provider === "string" && data.provider.trim()) ||
+    undefined;
+  if (modelProvider) next.modelProvider = modelProvider;
+
   const usage = recordValue(data.usage);
   const totalTokens =
     finiteNumber(data.totalTokens) ??
@@ -152,6 +164,16 @@ export function ingestAgentEventMetadata(runId: string, data: Record<string, unk
   if (typeof totalTokens === "number" && totalTokens > 0) {
     next.totalTokens = Math.floor(totalTokens);
   }
+
+  const usageForTokens = usage ?? data;
+  const input = pickInputTokens(usageForTokens);
+  if (typeof input === "number" && input >= 0) next.inputTokens = Math.floor(input);
+  const output = pickOutputTokens(usageForTokens);
+  if (typeof output === "number" && output >= 0) next.outputTokens = Math.floor(output);
+  const cacheRead = pickCacheRead(usageForTokens);
+  if (typeof cacheRead === "number" && cacheRead >= 0) next.cacheReadTokens = Math.floor(cacheRead);
+  const cacheWrite = pickCacheWrite(usageForTokens);
+  if (typeof cacheWrite === "number" && cacheWrite >= 0) next.cacheWriteTokens = Math.floor(cacheWrite);
 
   const usageForContext = usage ?? data;
   const ctxUsed = contextTokensFromUsageRecord(usageForContext);
@@ -171,9 +193,14 @@ export function ingestAgentEventMetadata(runId: string, data: Record<string, unk
 
   if (
     next.modelName ||
+    next.modelProvider ||
     typeof next.totalTokens === "number" ||
     typeof next.contextTokensUsed === "number" ||
-    typeof next.contextWindowMax === "number"
+    typeof next.contextWindowMax === "number" ||
+    typeof next.inputTokens === "number" ||
+    typeof next.outputTokens === "number" ||
+    typeof next.cacheReadTokens === "number" ||
+    typeof next.cacheWriteTokens === "number"
   ) {
     setRunMetadata(runId, next);
   }

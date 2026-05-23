@@ -10,6 +10,7 @@ import {
   resetThinkingStreamAccumStateForTest,
 } from "./friday-session.js";
 import { resetRunMetadataForTest } from "./run-metadata.js";
+import { accumulateRunUsage, resetRunUsageAccumulatorForTest } from "./agent/run-usage-accumulator.js";
 import { sseEmitter } from "./sse/emitter.js";
 import { toSessionStoreKey } from "./session/session-manager.js";
 
@@ -24,6 +25,7 @@ describe("forwardAgentEventRaw (thinking delta rewrite)", () => {
     resetOpenClawRunDeviceMappingForTest();
     resetFridayAgentForwardRuntimeForTest();
     resetRunMetadataForTest();
+    resetRunUsageAccumulatorForTest();
     registerFridaySessionDeviceMapping(sessionKey, deviceId);
     vi.spyOn(sseEmitter, "broadcastToRun").mockImplementation(() => {});
   });
@@ -198,37 +200,10 @@ describe("forwardAgentEventRaw (thinking delta rewrite)", () => {
     expect("reasoningPrefixChars" in (payload.data as object)).toBe(false);
   });
 
-  it("merges sessionUsage from session store on lifecycle end after persist (deferred)", async () => {
-    const storeKey = toSessionStoreKey(sessionKey);
-    const store: Record<string, Record<string, unknown>> = {
-      [storeKey]: {
-        model: "my-model",
-        modelProvider: "openai",
-        inputTokens: 100,
-        outputTokens: 50,
-        totalTokens: 9999,
-        totalTokensFresh: true,
-        contextTokens: 128000,
-        estimatedCostUsd: 0.01,
-        cacheRead: 10,
-        cacheWrite: 0,
-      },
-    };
-    const loadSessionStore = vi.fn(() => store);
-    const mockApi = {
-      runtime: {
-        config: {
-          current: () => ({ session: {} }),
-        },
-        agent: {
-          session: {
-            resolveStorePath: () => "/tmp/sessions.json",
-            loadSessionStore,
-          },
-        },
-      },
-    };
-    setFridayAgentForwardRuntime(mockApi as never);
+  it("builds sessionUsage from llm_output accumulated usage on lifecycle end", () => {
+    // Simulate llm_output hook accumulating usage across API calls.
+    accumulateRunUsage(runId, { input: 100, output: 50, cacheRead: 10, total: 150 }, "my-model", "openai");
+    accumulateRunUsage(runId, { input: 30, output: 10, cacheRead: 0, total: 40 }, "my-model", "openai");
 
     forwardAgentEventRaw({
       runId,
@@ -237,28 +212,120 @@ describe("forwardAgentEventRaw (thinking delta rewrite)", () => {
       sessionKey,
       data: { phase: "end" },
     });
+
+    // Lifecycle events are synchronous now (no file I/O wait).
+    expect(sseEmitter.broadcastToRun).toHaveBeenCalledTimes(1);
+    const forwarded = (sseEmitter.broadcastToRun as ReturnType<typeof vi.fn>).mock.calls[0][1].data;
+    expect(forwarded.stream).toBe("lifecycle");
+    const sessionUsage = (forwarded.data as Record<string, unknown>).sessionUsage as Record<string, unknown>;
+    expect(sessionUsage).toBeDefined();
+    expect(sessionUsage.modelId).toBe("my-model");
+    expect(sessionUsage.modelProvider).toBe("openai");
+    // Accumulated totals across both API calls.
+    expect((sessionUsage.tokens as Record<string, unknown>).input).toBe(130);
+    expect((sessionUsage.tokens as Record<string, unknown>).output).toBe(60);
+    expect((sessionUsage.tokens as Record<string, unknown>).cacheRead).toBe(10);
+    expect((sessionUsage.tokens as Record<string, unknown>).total).toBe(190);
+    expect((sessionUsage.tokens as Record<string, unknown>).totalFresh).toBe(true);
+  });
+
+  it("merges llm_output usage with RunMetadata for sessionUsage on lifecycle end", () => {
+    // Simulate llm_output hook.
+    accumulateRunUsage(runId, { input: 500, output: 100, cacheRead: 200, cacheWrite: 0, total: 800 }, "llm-model", "llm-provider");
+
+    // Send an agent event that populates RunMetadata (model, context window).
+    forwardAgentEventRaw({
+      runId,
+      seq: 1,
+      stream: "assistant",
+      sessionKey,
+      data: {
+        model: "agent-model",
+        provider: "agent-provider",
+        usage: { input: 999, total: 999 },
+        contextWindow: 100000,
+      },
+    });
+
+    forwardAgentEventRaw({
+      runId,
+      seq: 2,
+      stream: "lifecycle",
+      sessionKey,
+      data: { phase: "end" },
+    });
+
+    // Assistant (1st) + lifecycle.end (2nd, synchronous).
+    expect(sseEmitter.broadcastToRun).toHaveBeenCalledTimes(2);
+    const lifecycleCall = (sseEmitter.broadcastToRun as ReturnType<typeof vi.fn>).mock.calls[1];
+    const lifecycleData = (lifecycleCall[1] as { data: { data: Record<string, unknown> } }).data.data;
+    const sessionUsage = lifecycleData.sessionUsage as Record<string, unknown> | undefined;
+    expect(sessionUsage).toBeDefined();
+    // llm_output tokens win (authoritative per-API-call data).
+    expect(sessionUsage!.modelId).toBe("llm-model");
+    expect(sessionUsage!.modelProvider).toBe("llm-provider");
+    expect((sessionUsage!.tokens as Record<string, unknown>).input).toBe(500);
+    expect((sessionUsage!.tokens as Record<string, unknown>).output).toBe(100);
+    expect((sessionUsage!.tokens as Record<string, unknown>).cacheRead).toBe(200);
+    expect((sessionUsage!.tokens as Record<string, unknown>).total).toBe(800);
+    // Context from RunMetadata (not available from llm_output).
+    expect((sessionUsage!.context as Record<string, unknown>).windowMax).toBe(100000);
+  });
+
+  it("falls back to store read when llm_output has no data (deferred)", async () => {
+    const storeKey = toSessionStoreKey(sessionKey);
+    const store: Record<string, Record<string, unknown>> = {
+      [storeKey]: {
+        model: "store-model",
+        modelProvider: "store-provider",
+        inputTokens: 200,
+        outputTokens: 80,
+        totalTokens: 5000,
+        totalTokensFresh: true,
+        contextTokens: 64000,
+        estimatedCostUsd: 0.05,
+        cacheRead: 20,
+        cacheWrite: 0,
+      },
+    };
+    setFridayAgentForwardRuntime({
+      runtime: {
+        config: { current: () => ({ session: {} }) },
+        agent: {
+          session: {
+            resolveStorePath: () => "/tmp/sessions.json",
+            loadSessionStore: vi.fn(() => store),
+          },
+        },
+      },
+    } as never);
+
+    // No llm_output data accumulated — store is the only token source.
+    forwardAgentEventRaw({
+      runId,
+      seq: 1,
+      stream: "lifecycle",
+      sessionKey,
+      data: { phase: "end" },
+    });
+    // Deferred: not broadcast yet (setTimeout 100ms hasn't fired).
     expect(sseEmitter.broadcastToRun).not.toHaveBeenCalled();
 
-    await new Promise<void>((resolve) => setImmediate(resolve));
+    await new Promise<void>((resolve) => setTimeout(resolve, 150));
 
     expect(sseEmitter.broadcastToRun).toHaveBeenCalledTimes(1);
     const forwarded = (sseEmitter.broadcastToRun as ReturnType<typeof vi.fn>).mock.calls[0][1].data;
     expect(forwarded.stream).toBe("lifecycle");
-    expect((forwarded.data as Record<string, unknown>).sessionUsage).toEqual({
-      modelId: "my-model",
-      modelProvider: "openai",
-      tokens: {
-        input: 100,
-        output: 50,
-        cacheRead: 10,
-        cacheWrite: 0,
-        total: 9999,
-        totalFresh: true,
-      },
-      context: { windowMax: 128000, used: 9999 },
-      estimatedCostUsd: 0.01,
-    });
-    expect(loadSessionStore).toHaveBeenCalledWith("/tmp/sessions.json", { skipCache: true });
+    const sessionUsage = (forwarded.data as Record<string, unknown>).sessionUsage as Record<string, unknown>;
+    expect(sessionUsage).toBeDefined();
+    expect(sessionUsage.modelId).toBe("store-model");
+    expect(sessionUsage.modelProvider).toBe("store-provider");
+    expect((sessionUsage.tokens as Record<string, unknown>).input).toBe(200);
+    expect((sessionUsage.tokens as Record<string, unknown>).output).toBe(80);
+    expect((sessionUsage.tokens as Record<string, unknown>).total).toBe(5000);
+    expect((sessionUsage.tokens as Record<string, unknown>).totalFresh).toBe(true);
+    expect((sessionUsage.context as Record<string, unknown>).windowMax).toBe(64000);
+    expect(sessionUsage.estimatedCostUsd).toBe(0.05);
   });
 });
 

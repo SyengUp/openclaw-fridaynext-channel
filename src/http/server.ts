@@ -17,6 +17,7 @@ import { handleSessionsDelete } from "./handlers/sessions-delete.js";
 import { handleSessionsSettings } from "./handlers/sessions-settings.js";
 import { handleModelsList } from "./handlers/models-list.js";
 import { handleStatus } from "./handlers/status.js";
+import { handleHealth } from "./handlers/health.js";
 import { applyCorsHeaders } from "./middleware/cors.js";
 import { resolveFridayNextConfig } from "../config.js";
 import { getHostOpenClawConfigSnapshot } from "../host-config.js";
@@ -83,6 +84,11 @@ async function handleFridayNextRoute(
 
   if (req.method === "GET" && pathname === "/friday-next/status") {
     return await handleStatus(req, res);
+  }
+
+  // Route: GET /friday-next/health?deviceId=...&nodeDeviceId=...&selfHeal=true
+  if (req.method === "GET" && pathname === "/friday-next/health") {
+    return await handleHealth(req, res);
   }
 
   // Not found
