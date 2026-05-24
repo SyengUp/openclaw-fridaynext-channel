@@ -43,7 +43,6 @@ iOS App ←--HTTP/SSE--→ Friday Plugin ←--OpenClaw Plugin API--→ Gateway +
    - `GET /friday-next/files/:id` — file download (`handleFilesDownload`)
    - `POST /friday-next/cancel` — abort a run (`handleCancel`)
    - `POST /friday-next/device-approve` — device trust approval (`handleDeviceApprove`)
-   - `DELETE /friday-next/sessions` — delete a session + transcript (`handleSessionsDelete`)
    - `PUT|GET /friday-next/sessions/settings` — read/write session settings (`handleSessionsSettings`)
    - `GET /friday-next/models` — list available models (`handleModelsList`)
    - `GET /friday-next/status` — active runs + connection count (`handleStatus`)

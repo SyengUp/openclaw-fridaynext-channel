@@ -59,6 +59,23 @@ export async function handleDeviceApprove(
   );
 
   if (!match) {
+    // Gateway may have already auto-approved the device (e.g. mode="local").
+    // Check the paired list before returning 404.
+    const pairedDevice = (pairing.paired ?? []).find(
+      (entry) => entry.deviceId.trim().toUpperCase() === normalizedDeviceId,
+    );
+    if (pairedDevice) {
+      res.statusCode = 200;
+      res.setHeader("Content-Type", "application/json");
+      res.end(JSON.stringify({
+        ok: true,
+        deviceId: normalizedDeviceId,
+        alreadyApproved: true,
+        approvedAtMs: (pairedDevice as any).approvedAtMs,
+      }));
+      return true;
+    }
+
     res.statusCode = 404;
     res.setHeader("Content-Type", "application/json");
     res.end(JSON.stringify({

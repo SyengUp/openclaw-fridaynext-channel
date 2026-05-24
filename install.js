@@ -96,7 +96,7 @@ let installed = false;
 
 try {
   const out = execSync(
-    `${openclawCmd} plugins install @syengup/friday-channel-next@latest`,
+    `${openclawCmd} plugins install @syengup/friday-channel-next@latest --force`,
     { encoding: "utf8", stdio: "pipe", timeout: 120000 }
   );
   if (out.trim()) console.log(out.trim());
@@ -124,7 +124,7 @@ if (!installed) {
     process.exit(1);
   }
   warn("Manual install complete, but auto-upgrade is NOT available.");
-  warn("To enable auto-upgrade later, run: openclaw plugins install @syengup/friday-channel-next");
+  warn("To enable auto-upgrade later, run: openclaw plugins install @syengup/friday-channel-next --force");
   // Clean up legacy dir even in fallback to avoid duplicate warnings
   if (existsSync(join(USER_HOME, ".openclaw", "extensions", "friday-channel-next"))) {
     warn("Legacy install detected. Remove it to avoid duplicate warnings:");
