@@ -1,22 +1,24 @@
-import { execSync } from "node:child_process";
-import { readdirSync, realpathSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { existsSync, readdirSync, realpathSync } from "node:fs";
+import { delimiter, dirname, join } from "node:path";
 
 let cache: { listNodePairing: Function; approveNodePairing: Function } | null = null;
 
-function resolveOpenClawDistFromBin(): string | null {
-  try {
-    const whichCmd = process.platform === "win32" ? "where" : "which";
-    const raw = execSync(`${whichCmd} openclaw`, { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).trim();
-    const binPath = raw.split("\n")[0].trim();
-    if (!binPath) return null;
-    const real = realpathSync(binPath);
-    const dist = join(dirname(real), "dist");
-    readdirSync(dist); // throw if not a readable directory
-    return dist;
-  } catch {
-    return null;
+function resolveOpenClawDistFromPath(): string | null {
+  // Walk PATH looking for the openclaw binary, then resolve its real
+  // location to find the dist/ directory.  No shell commands needed.
+  const binName = process.platform === "win32" ? "openclaw.cmd" : "openclaw";
+  const pathDirs = (process.env.PATH ?? "").split(delimiter);
+  for (const dir of pathDirs) {
+    const candidate = join(dir, binName);
+    if (!existsSync(candidate)) continue;
+    try {
+      const real = realpathSync(candidate);
+      const dist = join(dirname(real), "dist");
+      readdirSync(dist);
+      return dist;
+    } catch {}
   }
+  return null;
 }
 
 function resolveOpenClawDist(): string {
@@ -24,7 +26,7 @@ function resolveOpenClawDist(): string {
   //   1. OPENCLAW_DIST env var (explicit override, works everywhere)
   //   2. Resolve the `openclaw` binary on PATH → dist/ (robust, cross-platform)
   //   3. Platform-specific standard install paths
-  const fromBin = resolveOpenClawDistFromBin();
+  const fromBin = resolveOpenClawDistFromPath();
   const candidates: string[] = [
     process.env.OPENCLAW_DIST,
     fromBin,
