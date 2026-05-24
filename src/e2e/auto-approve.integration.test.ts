@@ -291,55 +291,6 @@ describe("e2e two-step auto-approval", () => {
 
   // ── Health endpoint with selfHeal ────────────────────────────────
 
-  it("GET /friday-next/health?selfHeal=true 自动批准 pending device", async () => {
-    mockListDevices.mockResolvedValueOnce({
-      pending: [{ requestId: DEVICE_REQUEST_ID, deviceId: FAKE_DEVICE_ID }],
-      paired: [],
-    });
-    mockApproveDevice.mockResolvedValueOnce({
-      status: "approved",
-      requestId: DEVICE_REQUEST_ID,
-      device: { deviceId: FAKE_DEVICE_ID, approvedAtMs: 1700000000000 },
-    });
-
-    const app = createAppSimulator({ token: "test-token" });
-    const res = await app.rawRequest({
-      method: "GET",
-      path: `/friday-next/health?deviceId=${FAKE_DEVICE_ID}&selfHeal=true`,
-    });
-
-    expect(res.status).toBe(200);
-    const body = JSON.parse(res.body);
-    expect(body.ok).toBe(true);
-    expect(body.devicePairing.status).toBe("ok");
-    expect(body.devicePairing.detail).toContain("auto-approved");
-    expect(body.repairActions).toHaveLength(1);
-    expect(body.repairActions[0].component).toBe("devicePairing");
-    expect(body.repairActions[0].result).toBe("ok");
-    expect(mockApproveDevice).toHaveBeenCalledWith(DEVICE_REQUEST_ID);
-  });
-
-  it("GET /friday-next/health 不带 selfHeal 时不自动批准 (只返回 pending)", async () => {
-    mockListDevices.mockResolvedValueOnce({
-      pending: [{ requestId: DEVICE_REQUEST_ID, deviceId: FAKE_DEVICE_ID }],
-      paired: [],
-    });
-
-    const app = createAppSimulator({ token: "test-token" });
-    const res = await app.rawRequest({
-      method: "GET",
-      path: `/friday-next/health?deviceId=${FAKE_DEVICE_ID}`,
-    });
-
-    expect(res.status).toBe(200);
-    const body = JSON.parse(res.body);
-    expect(body.devicePairing.status).toBe("pending");
-    expect(body.devicePairing.detail).toContain("pending approval");
-    expect(mockApproveDevice).not.toHaveBeenCalled();
-    // ok 仍为 true，因为 pending 也视为 ok
-    expect(body.ok).toBe(true);
-  });
-
   it("GET /friday-next/health?selfHeal=true 自动批准 pending node", async () => {
     mockListDevices.mockResolvedValue({ pending: [], paired: [] }); // device 不相关
 
@@ -371,19 +322,9 @@ describe("e2e two-step auto-approval", () => {
     expect(body.repairActions[0].result).toBe("ok");
   });
 
-  it("GET /friday-next/health?selfHeal=true 同时自动批准 device 和 node", async () => {
-    // Device is pending
-    mockListDevices.mockResolvedValueOnce({
-      pending: [{ requestId: DEVICE_REQUEST_ID, deviceId: FAKE_DEVICE_ID }],
-      paired: [],
-    });
-    mockApproveDevice.mockResolvedValueOnce({
-      status: "approved",
-      requestId: DEVICE_REQUEST_ID,
-      device: { deviceId: FAKE_DEVICE_ID, approvedAtMs: 1700000000000 },
-    });
-
-    // Node is pending
+  it("GET /friday-next/health?selfHeal=true 自动批准 pending node (忽略 deviceId)", async () => {
+    // Node is pending (deviceId is ignored — device approval is handled by
+    // the WebSocket hello-ok path, not by the health endpoint)
     const mockListNodePairing = vi.fn().mockResolvedValueOnce({
       pending: [{ requestId: NODE_REQUEST_ID, nodeId: FAKE_DEVICE_ID }],
       paired: [],
@@ -406,10 +347,9 @@ describe("e2e two-step auto-approval", () => {
     expect(res.status).toBe(200);
     const body = JSON.parse(res.body);
     expect(body.ok).toBe(true);
-    expect(body.devicePairing.status).toBe("ok");
+    expect(body.devicePairing).toBeUndefined();
     expect(body.nodePairing.status).toBe("ok");
-    expect(body.repairActions).toHaveLength(2);
-    expect(body.repairActions[0].component).toBe("devicePairing");
-    expect(body.repairActions[1].component).toBe("nodePairing");
+    expect(body.repairActions).toHaveLength(1);
+    expect(body.repairActions[0].component).toBe("nodePairing");
   });
 });
