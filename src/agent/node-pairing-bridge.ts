@@ -30,10 +30,16 @@ function resolveOpenClawDist(): string {
   const candidates: string[] = [
     process.env.OPENCLAW_DIST,
     fromBin,
+    // Windows: standard npm -g locations
     join(process.env.APPDATA ?? "", "npm/node_modules/openclaw/dist"),
+    join(process.env.LOCALAPPDATA ?? "", "npm/node_modules/openclaw/dist"),
+    // Cross-platform: version-manager paths detected from PATH resolution
+    // (nvm/fnm/asdf installs are found by resolveOpenClawDistFromPath via PATH)
     "/opt/homebrew/lib/node_modules/openclaw/dist",
     "/home/linuxbrew/.linuxbrew/lib/node_modules/openclaw/dist",
     "/usr/local/lib/node_modules/openclaw/dist",
+    // Linux: npm -g with prefix=/usr
+    "/usr/lib/node_modules/openclaw/dist",
   ].filter((v): v is string => typeof v === "string" && v.length > 0);
 
   for (const root of candidates) {

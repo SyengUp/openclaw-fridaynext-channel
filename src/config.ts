@@ -1,3 +1,5 @@
+import { homedir } from "node:os";
+
 export type FridayNextLogLevel = "debug" | "info" | "warn" | "error";
 
 export type FridayNextConfig = {
@@ -52,7 +54,7 @@ export function resolveFridayNextConfig(cfg: unknown): FridayNextConfig {
     historyLimit: asNumber(section.historyLimit, 25, 1, 200),
     historyDir: asString(
       section.historyDir,
-      `${process.env.HOME ?? ""}/.openclaw/friday-next/history`,
+      `${homedir()}/.openclaw/friday-next/history`,
     ),
     logLevel: asString(section.logLevel, "info") as FridayNextLogLevel,
     authToken,
