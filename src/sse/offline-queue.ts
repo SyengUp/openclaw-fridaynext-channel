@@ -55,7 +55,7 @@ export class FridaySseOfflineQueue {
     if (!fs.existsSync(file)) return 0;
     let max = 0;
     const content = fs.readFileSync(file, "utf8");
-    for (const line of content.split("\n")) {
+    for (const line of content.split(/\r?\n/)) {
       if (!line.trim()) continue;
       try {
         const o = JSON.parse(line) as { id?: number };
@@ -87,7 +87,7 @@ export class FridaySseOfflineQueue {
     if (!fs.existsSync(file)) return [];
     const out: PersistedSseEntry[] = [];
     const content = fs.readFileSync(file, "utf8");
-    for (const line of content.split("\n")) {
+    for (const line of content.split(/\r?\n/)) {
       if (!line.trim()) continue;
       try {
         const o = JSON.parse(line) as PersistedSseEntry;
@@ -115,7 +115,7 @@ export class FridaySseOfflineQueue {
     if (!fs.existsSync(file)) return;
     const all: PersistedSseEntry[] = [];
     const content = fs.readFileSync(file, "utf8");
-    for (const line of content.split("\n")) {
+    for (const line of content.split(/\r?\n/)) {
       if (!line.trim()) continue;
       try {
         const o = JSON.parse(line) as PersistedSseEntry;

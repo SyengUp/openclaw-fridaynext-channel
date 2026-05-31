@@ -6,6 +6,7 @@
 
 import crypto from "node:crypto";
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { createChatChannelPlugin } from "openclaw/plugin-sdk/core";
 import { createFridayNextLogger } from "./logging.js";
@@ -33,7 +34,7 @@ function pickFirstString(source: Record<string, unknown>, keys: string[]): strin
 
 function resolveLocalMediaPath(mediaUrl: string, localRoots?: string[]): string {
   if (path.isAbsolute(mediaUrl)) return mediaUrl;
-  const roots = localRoots ?? [process.cwd(), "/tmp"];
+  const roots = localRoots ?? [process.cwd(), os.tmpdir()];
   for (const root of roots) {
     const candidate = path.join(root, mediaUrl);
     if (fs.existsSync(candidate)) return candidate;

@@ -7,7 +7,7 @@ const SESSION_ID_RE = /^[a-z0-9][a-z0-9._-]{0,127}$/i;
 
 function deriveOpenClawBaseDir(historyDir?: string): string {
   if (historyDir) {
-    const match = historyDir.replace(/\/+$/, "").match(/(.*\/\.openclaw)\//);
+    const match = historyDir.replace(/[\\/]+$/, "").match(/(.*[\\/]\.openclaw)[\\/]/);
     if (match?.[1]) return match[1];
   }
   return join(os.homedir(), ".openclaw");
