@@ -15,6 +15,7 @@ import { handleDeviceApprove } from "./handlers/device-approve.js";
 import { handleNodesApprove } from "./handlers/nodes-approve.js";
 import { handleSessionsSettings } from "./handlers/sessions-settings.js";
 import { handleModelsList } from "./handlers/models-list.js";
+import { handleAgentsList } from "./handlers/agents-list.js";
 import { handleStatus } from "./handlers/status.js";
 import { handleHealth } from "./handlers/health.js";
 import { applyCorsHeaders } from "./middleware/cors.js";
@@ -75,6 +76,10 @@ async function handleFridayNextRoute(
 
   if (req.method === "GET" && pathname === "/friday-next/models") {
     return await handleModelsList(req, res);
+  }
+
+  if (req.method === "GET" && pathname === "/friday-next/agents") {
+    return await handleAgentsList(req, res);
   }
 
   if (req.method === "GET" && pathname === "/friday-next/status") {

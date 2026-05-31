@@ -22,6 +22,16 @@ pnpm vitest run --config vitest.e2e.config.ts src/e2e/send-text.e2e.test.ts
 
 Both vitest configs auto-detect the OpenClaw dist directory from standard install paths (`/opt/homebrew`, `/usr/local`, nvm). If your OpenClaw is installed elsewhere, set the `OPENCLAW_DIST` env var or update the candidates in both configs.
 
+### Local dev against a running gateway
+
+The gateway loads the plugin from `~/.openclaw/npm/node_modules/@syengup/friday-channel-next`, which `openclaw plugins install` populates as a **copy** by default — so edits to this repo do NOT take effect even after `pnpm build` + restart (requests to new routes fall through to the gateway's SPA catch-all and return Control UI HTML instead of JSON). Link the repo once so the gateway loads this working tree directly:
+
+```bash
+openclaw plugins install . --link    # symlink dev dir (cannot combine with --force; replaces any existing copy)
+```
+
+After that, the iterate loop is just: `pnpm build` → `openclaw gateway restart`. Verify a route returns JSON (not HTML), e.g. `curl -s -H "Authorization: Bearer <token>" http://127.0.0.1:<port>/friday-next/agents`. Port + token come from `~/.openclaw/openclaw.json` (`gateway.port`, `gateway.auth.token`).
+
 ## Architecture
 
 ### Data flow
@@ -34,7 +44,7 @@ iOS App ←--HTTP/SSE--→ Friday Plugin ←--OpenClaw Plugin API--→ Gateway +
                     [offline-queue] — JSONL per-device persistence for replay
 ```
 
-1. **`index.ts`** — Plugin entry. Registers HTTP routes, `onAgentEvent` → `forwardAgentEventRaw`, tool hooks (`before_tool_call`/`after_tool_call` → `tool-hook` SSE), and a `subagent_delivery_target` hook (routes sub-agent completion responses back to the Friday device that initiated the run). Uses Symbol-keyed dedupe guards (one route registration and one hook registration per process).
+1. **`index.ts`** — Plugin entry. Registers HTTP routes, `onAgentEvent` → `forwardAgentEventRaw`, an `llm_output` hook → `accumulateRunUsage` (per-run token usage), tool hooks (`before_tool_call`/`after_tool_call` → `tool-hook` SSE), and a `subagent_delivery_target` hook (routes sub-agent completion responses back to the Friday device that initiated the run). Routes are re-registered when `registerFull` receives a **new** `api` (compared via a `WeakRef`) so the plugin survives a health-monitor restart; the `onAgentEvent` listener is disposed+re-added each call, while tool hooks register at most once per process (boolean guard).
 2. **`src/channel.ts`** — Plugin channel definition; `sendText` / `sendMedia` → `sseEmitter.broadcast(..., type: "outbound")` (plus media URL handling via `saveMediaBuffer` / `resolveMediaAttachment`).
 3. **`src/http/server.ts`** + **`src/http/handlers/*`** — `/friday-next/*` routes. Full route table:
    - `GET /friday-next/events` — SSE stream (`handleSseStream`)
@@ -43,9 +53,14 @@ iOS App ←--HTTP/SSE--→ Friday Plugin ←--OpenClaw Plugin API--→ Gateway +
    - `GET /friday-next/files/:id` — file download (`handleFilesDownload`)
    - `POST /friday-next/cancel` — abort a run (`handleCancel`)
    - `POST /friday-next/device-approve` — device trust approval (`handleDeviceApprove`)
+   - `POST /friday-next/nodes-approve` — node pairing approval (`handleNodesApprove`)
    - `PUT|GET /friday-next/sessions/settings` — read/write session settings (`handleSessionsSettings`)
    - `GET /friday-next/models` — list available models (`handleModelsList`)
+   - `GET /friday-next/agents` — list configured agents (`handleAgentsList`); returns `{ ok, agents, defaultAgentId }` where each agent has `id`/`name`/`description`/`model`/`thinkingDefault`/`isDefault`/`emoji`/`avatar`. Reads `cfg.agents.list` directly from the runtime config (same pattern as models-list, not via gateway dispatch); falls back to a single implicit `main` agent when none are configured.
    - `GET /friday-next/status` — active runs + connection count (`handleStatus`)
+   - `GET /friday-next/health` — node-pairing health + optional self-heal (`handleHealth`; query: `deviceId`, `nodeDeviceId`, `selfHeal`)
+
+   The single registered route (`path: "/friday-next"`, `match: "prefix"`, `auth: "plugin"`) is dispatched by `handleFridayNextRoute` via method+pathname checks; the plugin does its own bearer auth.
 4. **`src/sse/emitter.ts`** — Singleton `sseEmitter`: connections, per-device monotonic SSE ids, `broadcast` / `broadcastToRun` / `broadcastToolEvent`, integrates **`src/sse/offline-queue.ts`** (JSONL writes before socket write; `connected` events are NOT persisted).
 5. **`src/friday-session.ts`** — `deviceId` ↔ `sessionKey` mapping (multiple lookup tables for different key forms); **`forwardAgentEventRaw`** handles:
    - **Thinking delta rewriting** — OpenClaw sends cumulative `data.text` for `stream: "thinking"`; this module computes true incremental `delta` by tracking per-run last-seen text and emitting only the suffix.
@@ -61,7 +76,10 @@ iOS App ←--HTTP/SSE--→ Friday Plugin ←--OpenClaw Plugin API--→ Gateway +
 13. **`src/agent-run-context-bridge.ts`** — Reads agent run context (`sessionKey`) from `Symbol.for("openclaw.agentEvents.state")` global singleton. Used when `onAgentEvent` payload has no `sessionKey` (Control-UI-hidden runs).
 14. **`src/session-usage-snapshot.ts`** — Builds `FridaySessionUsagePayload` DTO from session store entries for terminal lifecycle SSE frames (`data.sessionUsage`).
 15. **`src/agent/media-bridge.ts`** — `saveInboundMediaBuffer`: saves attachment buffers via `openclaw/plugin-sdk/media-store` (with tempdir fallback for tests).
-16. **`src/http/handlers/files.ts`** — Central file store: `attachments/` directory under plugin root, in-memory index, `storeFile`/`readFile`/`resolveMediaUrl`/`resolveMediaAttachment`. Handles `file://` URI resolution and `~/` expansion for agent-provided paths.
+16. **`src/http/handlers/files.ts`** — Central file store: `attachments/` directory under plugin root, in-memory index, `storeFile`/`readFile`/`resolveMediaUrl`/`resolveMediaAttachment`. Handles `file://` URI resolution and `~/` expansion for agent-provided paths. The HTTP route handlers are split out: **`files-upload.ts`** (`handleFilesUpload`, multipart `POST`) and **`files-download.ts`** (`handleFilesDownload`, `GET /files/:id`).
+17. **`src/agent/run-usage-accumulator.ts`** — Per-`runId` token-usage accumulator fed by the `llm_output` hook (`accumulateRunUsage`). `consumeRunUsage(runId)` drains it into a `FridaySessionUsagePayload` (with `tokens.totalFresh`) for terminal lifecycle frames.
+18. **`src/agent/abort-run.ts`** — `abortRun(runId)` dynamically imports `openclaw/plugin-sdk/agent-harness` and calls `abortAgentHarnessRun`; backs `POST /cancel`. No-op under Vitest.
+19. **`src/agent/node-pairing-bridge.ts`** — `loadNodePairingModule` lazy-loads OpenClaw's node-pairing module. Resolves the OpenClaw `dist/` cross-platform: `OPENCLAW_DIST` env → walk `PATH` for the `openclaw` binary → `realpathSync` → `dist/` → platform-standard install paths. Backs `GET /health` and `POST /nodes-approve`.
 
 ### Supporting modules
 
@@ -96,6 +114,10 @@ When `deliver(kind: "final")` fires before model/token metadata has arrived via 
 ## `subagent_delivery_target` hook
 
 When a sub-agent run completes and `expectsCompletionMessage` is true, this hook checks if the requester origin channel is `friday-next` and resolves the device ID from the requester's session key. Returns an `origin` descriptor so OpenClaw routes the sub-agent's completion message back to the correct Friday device.
+
+## Health & node pairing (`GET /health`, `POST /nodes-approve`)
+
+`handleHealth` checks node-pairing state for the given `deviceId`/`nodeDeviceId` against `REQUIRED_NODE_CAPS` (`location`, `canvas`) and `REQUIRED_NODE_COMMANDS` (location + canvas command set). With `selfHeal=true` it attempts repair actions (e.g. auto-approving a pending node) and reports each as a `RepairAction`. `handleNodesApprove` approves a pending node pairing request (scope-gated, returns `forbidden` with `missingScope` if not permitted). Both go through `node-pairing-bridge.ts`.
 
 ## Config (`src/config.ts`)
 
