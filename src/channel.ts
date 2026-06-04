@@ -19,6 +19,7 @@ import {
   resolveFridayDeviceIdForOutbound,
   resolveHistorySessionKeyForFridayDevice,
 } from "./friday-session.js";
+import { getRunRoute } from "./run-metadata.js";
 import { getLastFridayInboundAt } from "./friday-inbound-stats.js";
 
 const logger = createFridayNextLogger("channel");
@@ -30,6 +31,27 @@ function pickFirstString(source: Record<string, unknown>, keys: string[]): strin
     if (typeof val === "string" && val.trim()) return val.trim();
   }
   return undefined;
+}
+
+/**
+ * Resolve the sessionKey for an outbound message-tool send.
+ *
+ * OpenClaw's `ChannelOutboundContext` does not carry the originating run's sessionKey, so the raw
+ * ctx is almost always missing it. We recover the current run's session via the run-route registry
+ * (keyed by the device's last tracked runId) so message-tool text/media land in the session that
+ * triggered the run — not a device-level fallback. Falls back to the device's latest history session
+ * for cron / offline / no-run paths.
+ */
+function resolveOutboundSessionKey(
+  deviceId: string,
+  runId: string | undefined,
+  rawCtx: Record<string, unknown>,
+): string | undefined {
+  return (
+    (runId ? getRunRoute(runId)?.sessionKey : undefined) ??
+    pickFirstString(rawCtx, ["requesterSessionKey", "sessionKey"]) ??
+    resolveHistorySessionKeyForFridayDevice(deviceId)
+  );
 }
 
 function resolveLocalMediaPath(mediaUrl: string, localRoots?: string[]): string {
@@ -153,9 +175,7 @@ export const fridayNextChannelPlugin = createChatChannelPlugin({
           "runId",
         ]);
         const runId = runIdFromCtx ?? sseEmitter.getLastRunIdForDevice(deviceId) ?? undefined;
-        const sessionKey =
-          pickFirstString(rawCtx, ["requesterSessionKey", "sessionKey"]) ??
-          resolveHistorySessionKeyForFridayDevice(deviceId);
+        const sessionKey = resolveOutboundSessionKey(deviceId, runId, rawCtx);
 
         const conn = sseEmitter.getConnection(deviceId);
         const ts = new Date().toISOString();
@@ -203,9 +223,7 @@ export const fridayNextChannelPlugin = createChatChannelPlugin({
           "runId",
         ]);
         const runId = runIdFromCtx ?? sseEmitter.getLastRunIdForDevice(deviceId) ?? undefined;
-        const sessionKey =
-          pickFirstString(rawCtx, ["requesterSessionKey", "sessionKey"]) ??
-          resolveHistorySessionKeyForFridayDevice(deviceId);
+        const sessionKey = resolveOutboundSessionKey(deviceId, runId, rawCtx);
         const audioAsVoice = ctx.audioAsVoice === true;
         const caption = ctx.text ?? "";
 

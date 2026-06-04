@@ -2,6 +2,8 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import { sseEmitter } from "./sse/emitter.js";
 import { guessMimeType } from "./http/handlers/files.js";
+import { getRunRoute } from "./run-metadata.js";
+import { resolveHistorySessionKeyForFridayDevice } from "./friday-session.js";
 
 type MessageActionCtx = {
   action: string;
@@ -64,7 +66,14 @@ async function handleSend(ctx: MessageActionCtx): Promise<unknown> {
   }
 
   const runId = crypto.randomUUID();
-  const sessionKey = ctx.sessionKey ?? undefined;
+  // The `message` tool's send runs as a fresh action; `ctx.sessionKey` is the agent's base/main
+  // session, not the app session that started the active run on this device. Recover the latter via
+  // the device's last tracked run-route so attachments land in the user's current session.
+  const activeRunId = sseEmitter.getLastRunIdForDevice(to) ?? undefined;
+  const sessionKey =
+    (activeRunId ? getRunRoute(activeRunId)?.sessionKey : undefined) ??
+    ctx.sessionKey ??
+    resolveHistorySessionKeyForFridayDevice(to);
 
   // Send text via SSE outbound
   if (text) {
