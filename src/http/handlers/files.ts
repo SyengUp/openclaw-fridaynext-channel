@@ -1,7 +1,7 @@
 /**
  * File manager for Friday Next channel attachments.
  *
- * Files are copied under the plugin root `attachments/` and served at
+ * Files are copied under `~/.openclaw/friday-next/attachments/` and served at
  * GET /friday-next/files/{token} so the app can use stable gateway URLs after restarts.
  */
 
@@ -11,14 +11,30 @@ import os from "node:os";
 import { createFridayNextLogger } from "../../logging.js";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { resolveFridayNextConfig } from "../../config.js";
+import { getHostOpenClawConfigSnapshot } from "../../host-config.js";
+import { getFridayNextRuntime } from "../../runtime.js";
 
-function getPluginRootDir(): string {
-  return path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
+/** Test-only override for the attachments base directory. */
+let testAttachmentsDir: string | null = null;
+
+export function setAttachmentsDirForTest(dir: string | null): void {
+  testAttachmentsDir = dir;
 }
 
-/** Plugin-root `attachments/` directory; created on first use. */
+/** Resolve `<historyDir>/../attachments`, mirroring the offline-queue layout. */
+function resolveAttachmentsDir(): string {
+  try {
+    const cfg = resolveFridayNextConfig(getHostOpenClawConfigSnapshot(getFridayNextRuntime().config));
+    return path.join(path.dirname(cfg.historyDir), "attachments");
+  } catch {
+    return path.join(os.homedir(), ".openclaw", "friday-next", "attachments");
+  }
+}
+
+/** `~/.openclaw/friday-next/attachments/` directory; created on first use. */
 export function getAttachmentsDir(): string {
-  const dir = path.join(getPluginRootDir(), "attachments");
+  const dir = testAttachmentsDir ?? resolveAttachmentsDir();
   try {
     fs.mkdirSync(dir, { recursive: true });
   } catch {

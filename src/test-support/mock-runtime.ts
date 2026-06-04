@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { setFridayNextRuntime } from "../runtime.js";
 import { setOfflineQueueBaseDirForTest } from "../sse/offline-queue.js";
+import { setAttachmentsDirForTest } from "../http/handlers/files.js";
 import { sseEmitter } from "../sse/emitter.js";
 import { resetActiveRunsForTest } from "../agent/active-runs.js";
 import { resetRunMetadataForTest } from "../run-metadata.js";
@@ -36,6 +37,7 @@ export function setMockRuntime(opts: MockRuntimeOptions = {}): void {
   resetSubagentRegistryForTest();
   const historyDir = opts.historyDir ?? createTempHistoryDir();
   setOfflineQueueBaseDirForTest(path.join(historyDir, "events-queue"));
+  setAttachmentsDirForTest(path.join(historyDir, "attachments"));
   const cfg = {
     gateway: {
       auth: {
