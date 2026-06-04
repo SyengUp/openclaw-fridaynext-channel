@@ -6,6 +6,14 @@ export type FridayAgentForwardRuntime = {
     path: string,
     options?: { skipCache?: boolean; maintenanceConfig?: unknown; clone?: boolean },
   ) => Record<string, unknown>;
+  /** Cache-owning entry write (syncs the app session name → server `displayName`). */
+  updateSessionStoreEntry?: (params: {
+    storePath: string;
+    sessionKey: string;
+    update: (
+      entry: Record<string, unknown>,
+    ) => Record<string, unknown> | null | Promise<Record<string, unknown> | null>;
+  }) => Promise<Record<string, unknown> | null>;
   getConfig: () => unknown;
 };
 
@@ -16,6 +24,8 @@ export function setFridayAgentForwardRuntime(api: OpenClawPluginApi): void {
   forwardRuntime = {
     resolveStorePath: api.runtime.agent.session.resolveStorePath,
     loadSessionStore: api.runtime.agent.session.loadSessionStore,
+    updateSessionStoreEntry: (api.runtime.agent.session as Record<string, unknown>)
+      .updateSessionStoreEntry as FridayAgentForwardRuntime["updateSessionStoreEntry"],
     getConfig: () => api.runtime.config.current(),
   };
 }

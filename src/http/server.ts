@@ -16,6 +16,9 @@ import { handleNodesApprove } from "./handlers/nodes-approve.js";
 import { handleSessionsSettings } from "./handlers/sessions-settings.js";
 import { handleModelsList } from "./handlers/models-list.js";
 import { handleAgentsList } from "./handlers/agents-list.js";
+import { handleHistorySessions } from "./handlers/history-sessions.js";
+import { handleHistoryMessages } from "./handlers/history-messages.js";
+import { handleHistorySetTitle } from "./handlers/history-set-title.js";
 import { handleStatus } from "./handlers/status.js";
 import { handleHealth } from "./handlers/health.js";
 import { applyCorsHeaders } from "./middleware/cors.js";
@@ -84,6 +87,21 @@ async function handleFridayNextRoute(
 
   if (req.method === "GET" && pathname === "/friday-next/status") {
     return await handleStatus(req, res);
+  }
+
+  // Route: GET /friday-next/history/sessions (list all sessions across agents)
+  if (req.method === "GET" && pathname === "/friday-next/history/sessions") {
+    return await handleHistorySessions(req, res);
+  }
+
+  // Route: GET /friday-next/history/messages?sessionKey=&agentId=&limit=
+  if (req.method === "GET" && pathname === "/friday-next/history/messages") {
+    return await handleHistoryMessages(req, res);
+  }
+
+  // Route: PUT /friday-next/sessions/title (sync app session name → server displayName)
+  if ((req.method === "PUT" || req.method === "POST") && pathname === "/friday-next/sessions/title") {
+    return await handleHistorySetTitle(req, res);
   }
 
   // Route: GET /friday-next/health?deviceId=...&nodeDeviceId=...&selfHeal=true
