@@ -1,6 +1,6 @@
 import { sseEmitter } from "./sse/emitter.js";
 import { getFridayAgentForwardRuntime } from "./agent-forward-runtime.js";
-import { toSessionStoreKey } from "./session/session-manager.js";
+import { toSessionStoreKey, agentIdFromSessionKey } from "./session/session-manager.js";
 import { getOpenClawAgentRunContext } from "./agent-run-context-bridge.js";
 import { observeAgentEventForActiveRuns } from "./agent/active-runs.js";
 import { getRunMetadata, ingestAgentEventMetadata } from "./run-metadata.js";
@@ -138,8 +138,6 @@ export function resolveHistorySessionKeyForFridayDevice(deviceId: string): strin
   return `agent:main:friday-next-${did}`;
 }
 
-const DEFAULT_SESSION_STORE_AGENT_ID = "main";
-
 type ForwardAgentEventArgs = {
   runId: string;
   seq?: number;
@@ -186,9 +184,9 @@ function tryReadSessionUsageFromStore(sessionKeyForStore: string): FridaySession
   try {
     const cfg = access.getConfig() as { session?: { store?: string } } | null | undefined;
     const storeConfig = cfg?.session?.store;
-    const storePath = access.resolveStorePath(storeConfig, { agentId: DEFAULT_SESSION_STORE_AGENT_ID });
-    const store = access.loadSessionStore(storePath, { skipCache: true }) as Record<string, Record<string, unknown>>;
     const canonical = toSessionStoreKey(sessionKeyForStore);
+    const storePath = access.resolveStorePath(storeConfig, { agentId: agentIdFromSessionKey(canonical) });
+    const store = access.loadSessionStore(storePath, { skipCache: true }) as Record<string, Record<string, unknown>>;
     const entry = store[canonical] ?? store[sessionKeyForStore.trim()];
     if (!entry || typeof entry !== "object") return undefined;
     return buildSessionUsageSnapshot(entry);

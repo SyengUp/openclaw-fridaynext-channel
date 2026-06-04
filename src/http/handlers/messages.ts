@@ -28,7 +28,12 @@ import { resolveFridayNextConfig } from "../../config.js";
 import { getHostOpenClawConfigSnapshot } from "../../host-config.js";
 import { getFridayNextRuntime } from "../../runtime.js";
 import { getFridayAgentForwardRuntime } from "../../agent-forward-runtime.js";
-import { setSessionSettings, splitModelRef, toSessionStoreKey } from "../../session/session-manager.js";
+import {
+  agentIdFromSessionKey,
+  setSessionSettings,
+  splitModelRef,
+  toSessionStoreKey,
+} from "../../session/session-manager.js";
 import { sseEmitter } from "../../sse/emitter.js";
 import { extractBearerToken } from "../middleware/auth.js";
 import { readJsonBody } from "../middleware/body.js";
@@ -421,6 +426,10 @@ export async function handleMessages(req: IncomingMessage, res: ServerResponse):
   const cfg = resolveFridayNextConfig(getHostOpenClawConfigSnapshot(runtime.config));
 
   // Resolve defaults from the OpenClaw agent config so settings are never left empty.
+  // The target agent comes from the app-supplied sessionKey (`agent:<id>:<rest>`); prefer that
+  // agent's own configured model/thinking over the global defaults so non-main agents are not
+  // silently forced onto the global default model.
+  const targetAgentId = agentIdFromSessionKey(baseSessionKey);
   let defaultModel: string | undefined;
   let defaultThinking: string | undefined;
   try {
@@ -428,13 +437,32 @@ export async function handleMessages(req: IncomingMessage, res: ServerResponse):
     if (forwardRt) {
       const ocCfg = (forwardRt.getConfig() ?? {}) as Record<string, unknown>;
       const agents = ocCfg.agents as Record<string, unknown> | undefined;
+
+      const agentEntry = (agents?.list as Array<Record<string, unknown>> | undefined)?.find(
+        (a) => agentIdFromSessionKey(`agent:${String(a?.id ?? "")}:x`) === targetAgentId,
+      );
+      const agentModel = agentEntry?.model;
+      const perAgentModel =
+        typeof agentModel === "string"
+          ? agentModel
+          : typeof (agentModel as Record<string, unknown> | undefined)?.primary === "string"
+            ? ((agentModel as Record<string, unknown>).primary as string)
+            : undefined;
+      const perAgentThinking =
+        typeof agentEntry?.thinkingDefault === "string"
+          ? (agentEntry.thinkingDefault as string)
+          : undefined;
+
       const agentDefaults = agents?.defaults as Record<string, unknown> | undefined;
       const model = agentDefaults?.model as Record<string, unknown> | undefined;
-      defaultModel = typeof model?.primary === "string" ? (model.primary as string) : undefined;
-      defaultThinking =
+      const globalModel = typeof model?.primary === "string" ? (model.primary as string) : undefined;
+      const globalThinking =
         typeof agentDefaults?.thinkingDefault === "string"
           ? (agentDefaults.thinkingDefault as string)
           : undefined;
+
+      defaultModel = perAgentModel ?? globalModel;
+      defaultThinking = perAgentThinking ?? globalThinking;
     }
   } catch {
     // Config not available (tests) — leave defaults undefined.

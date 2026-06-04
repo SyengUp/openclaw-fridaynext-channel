@@ -4,6 +4,8 @@ import { readFileSync, writeFileSync } from "node:fs";
 
 const FRIDAY_AGENT_ID = "main";
 const SESSION_ID_RE = /^[a-z0-9][a-z0-9._-]{0,127}$/i;
+/** Path/shell-safe agent id (mirrors OpenClaw's `normalizeAgentId`). Anything else falls back to `main`. */
+const SAFE_AGENT_ID_RE = /^[a-z0-9][a-z0-9_-]*$/;
 
 function deriveOpenClawBaseDir(historyDir?: string): string {
   if (historyDir) {
@@ -41,6 +43,17 @@ export function toSessionStoreKey(rawSessionKey: string): string {
   return `agent:${FRIDAY_AGENT_ID}:${lowered}`;
 }
 
+/**
+ * Extract the agent id from a (possibly raw) session key. The downstream app now owns the
+ * full `agent:<id>:<rest>` key, so non-`main` agents must read/write their own session store
+ * directory. `agent:<id>:<rest>` → `<id>`; bare/legacy keys (or an unsafe id) → `main`.
+ */
+export function agentIdFromSessionKey(rawSessionKey: string): string {
+  const canonical = toSessionStoreKey(rawSessionKey);
+  const id = canonical.match(/^agent:([^:]+):/)?.[1];
+  return id && SAFE_AGENT_ID_RE.test(id) ? id : FRIDAY_AGENT_ID;
+}
+
 function toSafeSessionId(raw: string): string {
   const s = raw.trim();
   if (SESSION_ID_RE.test(s)) return s;
@@ -57,8 +70,8 @@ function sessionIdForSessionsFile(fileKey: string, rawSessionKey: string): strin
   const candidates = [rawSessionKey.trim(), fileKey.trim()];
   for (const c of candidates) {
     if (SESSION_ID_RE.test(c)) return c;
-    if (c.startsWith(`agent:${FRIDAY_AGENT_ID}:`)) {
-      const tail = c.slice(`agent:${FRIDAY_AGENT_ID}:`.length);
+    const tail = c.match(/^agent:[^:]+:(.+)$/)?.[1];
+    if (tail) {
       if (SESSION_ID_RE.test(tail)) return tail;
       return toSafeSessionId(tail);
     }
@@ -66,9 +79,9 @@ function sessionIdForSessionsFile(fileKey: string, rawSessionKey: string): strin
   return toSafeSessionId(rawSessionKey || fileKey);
 }
 
-function resolveSessionsFilePath(historyDir?: string): string {
+function resolveSessionsFilePath(historyDir: string | undefined, agentId: string): string {
   const base = deriveOpenClawBaseDir(historyDir);
-  return join(base, "agents/main/sessions/sessions.json");
+  return join(base, "agents", agentId, "sessions", "sessions.json");
 }
 
 function readSessionsData(path: string): Record<string, Record<string, unknown>> | null {
@@ -125,11 +138,11 @@ export function setSessionSettings(
   historyDir?: string,
 ): FridaySessionSettings {
   try {
-    const sessionsFile = resolveSessionsFilePath(historyDir);
+    const fileKey = toSessionStoreKey(sessionKey);
+    const sessionsFile = resolveSessionsFilePath(historyDir, agentIdFromSessionKey(fileKey));
     const data = readSessionsData(sessionsFile);
     if (!data) return {};
 
-    const fileKey = toSessionStoreKey(sessionKey);
     upsertSessionEntry(data, fileKey, sessionKey);
 
     const fieldKeys: (keyof FridaySessionSettings)[] = [
@@ -172,11 +185,11 @@ export function getSessionSettings(
   historyDir?: string,
 ): FridaySessionSettings {
   try {
-    const sessionsFile = resolveSessionsFilePath(historyDir);
+    const fileKey = toSessionStoreKey(sessionKey);
+    const sessionsFile = resolveSessionsFilePath(historyDir, agentIdFromSessionKey(fileKey));
     const data = readSessionsData(sessionsFile);
     if (!data) return {};
 
-    const fileKey = toSessionStoreKey(sessionKey);
     const entry = data[fileKey];
     if (!entry) return {};
     return readSettingsFromEntry(entry);
