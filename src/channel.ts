@@ -160,6 +160,15 @@ export const fridayNextChannelPlugin = createChatChannelPlugin({
       },
       parseExplicitTarget: () => ({ to: "friday-next" }),
       formatTargetDisplay: ({ display }: any) => display || "Friday Next",
+      // friday-next is a transparent proxy: outbound text/media already reach the app live
+      // via SSE (sendText/sendMedia/handleSend). The OpenClaw core additionally mirrors
+      // message-tool sends into the recipient's session transcript (model:"delivery-mirror").
+      // For friday-next that recipient session falls back to
+      // `agent:<agentId>:friday-next:direct:<deviceId>` — an orphan session unrelated to the
+      // app's real conversation — spawning a phantom session + a stray delivery-mirror message.
+      // The core checks this hook first; returning null short-circuits route resolution so no
+      // orphan session entry and no delivery-mirror are written.
+      resolveOutboundSessionRoute: () => null,
     },
   },
   outbound: {
