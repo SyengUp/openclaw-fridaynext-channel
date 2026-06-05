@@ -87,4 +87,46 @@ describe("per-agent session settings file routing", () => {
 
     expect(readEntry("main", "agent:main:main")?.thinkingLevel).toBe("low");
   });
+
+  it("clears a stored model override when the trio is set to null (default re-selected)", () => {
+    seedSessionsFile("main");
+
+    // Prior non-default selection.
+    setSessionSettings(
+      "main",
+      { modelRef: "openai/gpt-x", providerOverride: "openai", modelOverride: "gpt-x" },
+      historyDir,
+    );
+    expect(getSessionSettings("main", historyDir).modelRef).toBe("openai/gpt-x");
+
+    // Switching back to the agent default sends nulls → override is removed, not merged.
+    setSessionSettings(
+      "main",
+      { modelRef: null, providerOverride: null, modelOverride: null },
+      historyDir,
+    );
+
+    const entry = readEntry("main", "agent:main:main")!;
+    expect(entry.modelRef).toBeUndefined();
+    expect(entry.providerOverride).toBeUndefined();
+    expect(entry.modelOverride).toBeUndefined();
+    expect(getSessionSettings("main", historyDir).modelRef).toBeUndefined();
+  });
+
+  it("leaves the stored model override untouched when fields are undefined", () => {
+    seedSessionsFile("main");
+
+    setSessionSettings(
+      "main",
+      { modelRef: "openai/gpt-x", providerOverride: "openai", modelOverride: "gpt-x" },
+      historyDir,
+    );
+    // A thinking-only update (model fields undefined) must not disturb the override.
+    setSessionSettings("main", { thinkingLevel: "high" }, historyDir);
+
+    const entry = readEntry("main", "agent:main:main")!;
+    expect(entry.thinkingLevel).toBe("high");
+    expect(entry.modelRef).toBe("openai/gpt-x");
+    expect(entry.providerOverride).toBe("openai");
+  });
 });

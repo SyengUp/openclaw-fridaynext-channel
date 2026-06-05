@@ -3,6 +3,8 @@ import {
   setSessionSettings,
   getSessionSettings,
   splitModelRef,
+  resolveAgentDefaults,
+  type FridaySessionSettingsUpdate,
 } from "../../session/session-manager.js";
 import { readJsonBody } from "../middleware/body.js";
 import { extractBearerToken } from "../middleware/auth.js";
@@ -57,7 +59,7 @@ export async function handleSessionsSettings(
 
   const reasoningLevel = typeof body?.reasoningLevel === "string" ? body.reasoningLevel : undefined;
   const thinkingLevel = typeof body?.thinkingLevel === "string" ? body.thinkingLevel : undefined;
-  const modelRef = typeof body?.modelRef === "string" ? body.modelRef : undefined;
+  const modelRef = typeof body?.modelRef === "string" ? body.modelRef.trim() : undefined;
 
   const errors: string[] = [];
   if (reasoningLevel !== undefined && !VALID_REASONING.has(reasoningLevel)) {
@@ -74,11 +76,26 @@ export async function handleSessionsSettings(
     return true;
   }
 
-  const settings: Record<string, string | undefined> = { reasoningLevel, thinkingLevel, modelRef };
-  if (modelRef) {
-    const split = splitModelRef(modelRef);
-    settings["providerOverride"] = split.provider;
-    settings["modelOverride"] = split.modelId;
+  // The app omits (or empties) modelRef to mean "use the agent's default model". Resolve that
+  // default and write it as an *explicit* override, identical in shape to any other selection — so
+  // the agent runs the default exactly the way it runs an explicitly-picked model. Do NOT just
+  // clear the override here: the session entry is shared with the OpenClaw core, which stamps it
+  // with provenance fields (`modelOverrideSource`, `model`, `modelProvider`); deleting only our
+  // three fields leaves those dangling and the core mis-resolves to a fallback model.
+  const effectiveModelRef = modelRef || resolveAgentDefaults(sessionKey).model;
+
+  const settings: FridaySessionSettingsUpdate = { reasoningLevel, thinkingLevel };
+  if (effectiveModelRef) {
+    const split = splitModelRef(effectiveModelRef);
+    settings.modelRef = effectiveModelRef;
+    // `?? null` clears a stale provider when the ref is bare (no `provider/` prefix).
+    settings.providerOverride = split.provider ?? null;
+    settings.modelOverride = split.modelId;
+  } else {
+    // No configured default to resolve (e.g. config unavailable) — clear rather than pin a stale model.
+    settings.modelRef = null;
+    settings.providerOverride = null;
+    settings.modelOverride = null;
   }
 
   const result = setSessionSettings(sessionKey, settings);

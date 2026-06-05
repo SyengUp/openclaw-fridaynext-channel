@@ -27,12 +27,12 @@ export type FridayReplyPayload = {
 import { resolveFridayNextConfig } from "../../config.js";
 import { getHostOpenClawConfigSnapshot } from "../../host-config.js";
 import { getFridayNextRuntime } from "../../runtime.js";
-import { getFridayAgentForwardRuntime } from "../../agent-forward-runtime.js";
 import {
-  agentIdFromSessionKey,
+  resolveAgentDefaults,
   setSessionSettings,
   splitModelRef,
   toSessionStoreKey,
+  type FridaySessionSettingsUpdate,
 } from "../../session/session-manager.js";
 import { sseEmitter } from "../../sse/emitter.js";
 import { extractBearerToken } from "../middleware/auth.js";
@@ -425,58 +425,20 @@ export async function handleMessages(req: IncomingMessage, res: ServerResponse):
 
   const cfg = resolveFridayNextConfig(getHostOpenClawConfigSnapshot(runtime.config));
 
-  // Resolve defaults from the OpenClaw agent config so settings are never left empty.
-  // The target agent comes from the app-supplied sessionKey (`agent:<id>:<rest>`); prefer that
-  // agent's own configured model/thinking over the global defaults so non-main agents are not
-  // silently forced onto the global default model.
-  const targetAgentId = agentIdFromSessionKey(baseSessionKey);
-  let defaultModel: string | undefined;
-  let defaultThinking: string | undefined;
-  try {
-    const forwardRt = getFridayAgentForwardRuntime();
-    if (forwardRt) {
-      const ocCfg = (forwardRt.getConfig() ?? {}) as Record<string, unknown>;
-      const agents = ocCfg.agents as Record<string, unknown> | undefined;
-
-      const agentEntry = (agents?.list as Array<Record<string, unknown>> | undefined)?.find(
-        (a) => agentIdFromSessionKey(`agent:${String(a?.id ?? "")}:x`) === targetAgentId,
-      );
-      const agentModel = agentEntry?.model;
-      const perAgentModel =
-        typeof agentModel === "string"
-          ? agentModel
-          : typeof (agentModel as Record<string, unknown> | undefined)?.primary === "string"
-            ? ((agentModel as Record<string, unknown>).primary as string)
-            : undefined;
-      const perAgentThinking =
-        typeof agentEntry?.thinkingDefault === "string"
-          ? (agentEntry.thinkingDefault as string)
-          : undefined;
-
-      const agentDefaults = agents?.defaults as Record<string, unknown> | undefined;
-      const model = agentDefaults?.model as Record<string, unknown> | undefined;
-      const globalModel = typeof model?.primary === "string" ? (model.primary as string) : undefined;
-      const globalThinking =
-        typeof agentDefaults?.thinkingDefault === "string"
-          ? (agentDefaults.thinkingDefault as string)
-          : undefined;
-
-      defaultModel = perAgentModel ?? globalModel;
-      defaultThinking = perAgentThinking ?? globalThinking;
-    }
-  } catch {
-    // Config not available (tests) — leave defaults undefined.
-  }
+  // Resolve defaults from the OpenClaw agent config so settings are never left empty. Prefers the
+  // target agent's own model/thinking over the global defaults (see resolveAgentDefaults).
+  const { model: defaultModel, thinking: defaultThinking } = resolveAgentDefaults(baseSessionKey);
 
   const modelRef = payload.modelRef ?? defaultModel;
   const reasoningLevel = payload.reasoningLevel ?? "stream";
   const thinkingLevel = payload.thinkingLevel ?? defaultThinking;
 
-  const settings: Record<string, string | undefined> = {};
+  const settings: FridaySessionSettingsUpdate = {};
   if (modelRef) {
     settings.modelRef = modelRef;
     const split = splitModelRef(modelRef);
-    settings.providerOverride = split.provider;
+    // `?? null` clears a stale provider when the resolved ref is bare (no `provider/` prefix).
+    settings.providerOverride = split.provider ?? null;
     settings.modelOverride = split.modelId;
   }
   if (reasoningLevel) settings.reasoningLevel = reasoningLevel;

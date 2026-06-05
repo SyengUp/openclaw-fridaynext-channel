@@ -1,6 +1,7 @@
 import { join } from "node:path";
 import os from "node:os";
 import { readFileSync, writeFileSync } from "node:fs";
+import { getFridayAgentForwardRuntime } from "../agent-forward-runtime.js";
 
 const FRIDAY_AGENT_ID = "main";
 const SESSION_ID_RE = /^[a-z0-9][a-z0-9._-]{0,127}$/i;
@@ -132,9 +133,24 @@ export interface FridaySessionSettings {
   modelOverride?: string;
 }
 
+/**
+ * Update shape for {@link setSessionSettings}. A field set to a string writes that value, a field
+ * left `undefined` is untouched, and a field set to `null` **clears** the stored value. The `null`
+ * case is what lets the app reset a model override back to the agent default — without it the merge
+ * could only ever add/replace overrides, never remove them (the cause of "selecting the default
+ * model doesn't take effect": a prior `provider/model` override survived and was read back).
+ */
+export type FridaySessionSettingsUpdate = {
+  reasoningLevel?: string | null;
+  thinkingLevel?: string | null;
+  modelRef?: string | null;
+  providerOverride?: string | null;
+  modelOverride?: string | null;
+};
+
 export function setSessionSettings(
   sessionKey: string,
-  settings: FridaySessionSettings,
+  settings: FridaySessionSettingsUpdate,
   historyDir?: string,
 ): FridaySessionSettings {
   try {
@@ -145,13 +161,22 @@ export function setSessionSettings(
 
     upsertSessionEntry(data, fileKey, sessionKey);
 
-    const fieldKeys: (keyof FridaySessionSettings)[] = [
+    const fieldKeys: (keyof FridaySessionSettingsUpdate)[] = [
       "reasoningLevel", "thinkingLevel", "modelRef", "providerOverride", "modelOverride",
     ];
     let updated = false;
     for (const key of fieldKeys) {
       const value = settings[key];
-      if (value !== undefined && data[fileKey][key] !== value) {
+      if (value === undefined) continue; // leave the stored value untouched
+      if (value === null) {
+        // Explicit clear — remove the override so the agent falls back to its default.
+        if (key in data[fileKey]) {
+          delete data[fileKey][key];
+          updated = true;
+        }
+        continue;
+      }
+      if (data[fileKey][key] !== value) {
         data[fileKey][key] = value;
         updated = true;
       }
@@ -194,6 +219,51 @@ export function getSessionSettings(
     if (!entry) return {};
     return readSettingsFromEntry(entry);
   } catch {
+    return {};
+  }
+}
+
+/**
+ * Resolve the configured default model + thinking level for the agent that owns `sessionKey`,
+ * reading the live OpenClaw config. Prefers the target agent's own `model`/`thinkingDefault` over
+ * the global `agents.defaults`, so non-main agents aren't silently forced onto the global default.
+ *
+ * Used to write the default model as an **explicit** override when the app selects it (the app
+ * sends no modelRef for the default). Writing it explicitly — rather than clearing the stored
+ * override — keeps the shared session entry consistent with the core's provenance fields
+ * (`modelOverrideSource`, `model`, `modelProvider`); a bare clear leaves those dangling and the
+ * agent mis-resolves to a fallback model.
+ */
+export function resolveAgentDefaults(sessionKey: string): { model?: string; thinking?: string } {
+  try {
+    const forwardRt = getFridayAgentForwardRuntime();
+    if (!forwardRt) return {};
+    const ocCfg = (forwardRt.getConfig() ?? {}) as Record<string, unknown>;
+    const agents = ocCfg.agents as Record<string, unknown> | undefined;
+    const targetAgentId = agentIdFromSessionKey(sessionKey);
+
+    const agentEntry = (agents?.list as Array<Record<string, unknown>> | undefined)?.find(
+      (a) => agentIdFromSessionKey(`agent:${String(a?.id ?? "")}:x`) === targetAgentId,
+    );
+    const agentModel = agentEntry?.model;
+    const perAgentModel =
+      typeof agentModel === "string"
+        ? agentModel
+        : typeof (agentModel as Record<string, unknown> | undefined)?.primary === "string"
+          ? ((agentModel as Record<string, unknown>).primary as string)
+          : undefined;
+    const perAgentThinking =
+      typeof agentEntry?.thinkingDefault === "string" ? (agentEntry.thinkingDefault as string) : undefined;
+
+    const agentDefaults = agents?.defaults as Record<string, unknown> | undefined;
+    const model = agentDefaults?.model as Record<string, unknown> | undefined;
+    const globalModel = typeof model?.primary === "string" ? (model.primary as string) : undefined;
+    const globalThinking =
+      typeof agentDefaults?.thinkingDefault === "string" ? (agentDefaults.thinkingDefault as string) : undefined;
+
+    return { model: perAgentModel ?? globalModel, thinking: perAgentThinking ?? globalThinking };
+  } catch {
+    // Config not available (e.g. unit tests) — caller decides the fallback.
     return {};
   }
 }
