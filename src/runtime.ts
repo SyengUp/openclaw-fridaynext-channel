@@ -1,7 +1,9 @@
 import { createPluginRuntimeStore } from "./vendor/runtime-store.js";
 
 type FridayRuntime = {
-  config: { loadConfig: () => unknown };
+  // `current()` is the modern OpenClaw API; `loadConfig()` is the deprecated fallback
+  // kept for older gateways.
+  config: { current?: () => unknown; loadConfig?: () => unknown };
   logger?: { info?: (...args: unknown[]) => void; warn?: (...args: unknown[]) => void };
 };
 

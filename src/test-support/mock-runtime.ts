@@ -66,6 +66,8 @@ export function setMockRuntime(opts: MockRuntimeOptions = {}): void {
   };
   setFridayNextRuntime({
     config: {
+      // Mirror modern OpenClaw (current()) plus the deprecated alias so both paths resolve.
+      current: () => cfg,
       loadConfig: () => cfg,
     },
     logger: {
