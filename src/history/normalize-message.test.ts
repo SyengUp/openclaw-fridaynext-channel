@@ -108,6 +108,36 @@ describe("normalizeHistoryMessage", () => {
     });
   });
 
+  it("drops base64 image blocks from a canvas snapshot toolResult (agent-only, never a chat attachment)", () => {
+    const out = normalizeHistoryMessage(
+      {
+        role: "toolResult",
+        toolCallId: "tc-canvas",
+        toolName: "canvas",
+        content: [{ type: "image", mimeType: "image/jpeg", data: "BASE64SNAPSHOT" }],
+        ...meta("entry-canvas", 5),
+      },
+      0,
+    );
+    expect(out?.role).toBe("toolResult");
+    expect(out?.toolResult).toEqual({ toolCallId: "tc-canvas", toolName: "canvas" });
+    expect(out?.toolResult?.images).toBeUndefined();
+  });
+
+  it("keeps image blocks on non-canvas toolResults", () => {
+    const out = normalizeHistoryMessage(
+      {
+        role: "toolResult",
+        toolCallId: "tc-img",
+        toolName: "image_generation",
+        content: [{ type: "image", mimeType: "image/png", data: "REALIMG" }],
+        ...meta("entry-img", 6),
+      },
+      0,
+    );
+    expect(out?.toolResult?.images).toEqual([{ mimeType: "image/png", data: "REALIMG" }]);
+  });
+
   it("strips MEDIA: lines from text into mediaPaths", () => {
     const out = normalizeHistoryMessage(
       {

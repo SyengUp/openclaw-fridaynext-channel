@@ -253,15 +253,24 @@ export function normalizeHistoryMessage(
 
   if (role === "toolResult") {
     const split = splitMediaLines(parsed.text);
+    const toolName = readString(record.toolName);
+    // Canvas snapshots come back as base64 image blocks on the `canvas` tool result so the *agent*
+    // can "see" the rendered page — they must never surface as chat attachments on history rebuild.
+    // The streaming deliver path already drops the temp-file form (see isCanvasSnapshotMediaPath in
+    // http/handlers/messages.ts); this is the transcript-rebuild counterpart. The canvas tool has no
+    // other image-returning action, so all images on a canvas result are snapshots.
+    const isCanvasResult = toolName === "canvas";
+    const images = isCanvasResult ? [] : parsed.images;
+    const mediaPaths = isCanvasResult ? [] : split.paths;
     const toolResult: FridayHistoryToolResult = {
       ...(readString(record.toolCallId) ? { toolCallId: readString(record.toolCallId) } : {}),
-      ...(readString(record.toolName) ? { toolName: readString(record.toolName) } : {}),
+      ...(toolName ? { toolName } : {}),
       ...(record.isError === true ? { isError: true } : {}),
       ...(split.text ? { text: split.text } : {}),
-      ...(parsed.images.length ? { images: parsed.images } : {}),
+      ...(images.length ? { images } : {}),
     };
     message.toolResult = toolResult;
-    if (split.paths.length) message.mediaPaths = split.paths;
+    if (mediaPaths.length) message.mediaPaths = mediaPaths;
     return message;
   }
 
