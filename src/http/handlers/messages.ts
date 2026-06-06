@@ -132,11 +132,34 @@ function inferFridayNextMediaKind(params: {
 }
 
 /** Map local / gateway paths to public `/friday-next/files/...` URLs where possible. */
-function translateDeliverPayload(
+/**
+ * Canvas snapshots are captured so the *agent* can "see" the rendered canvas. OpenClaw core surfaces
+ * any image tool result as deliverable media on the assistant reply block, which for Friday Next would
+ * make the snapshot auto-appear as an attachment mid-stream — not what we want. Snapshot temp files are
+ * named `openclaw-canvas-snapshot-<uuid>.<ext>`, so we detect them by basename and drop them from the
+ * delivered payload (the assistant text is preserved). Agent-initiated media sends are unaffected —
+ * those flow through the `outbound` channel action, not the deliver block path.
+ */
+export function isCanvasSnapshotMediaPath(url: unknown): boolean {
+  if (typeof url !== "string") return false;
+  const base = url.split(/[/\\]/).pop() ?? url;
+  return /canvas-snapshot-/i.test(base);
+}
+
+export function translateDeliverPayload(
   pl: FridayReplyPayload,
   kind: string,
   meta?: { modelName?: string; totalTokens?: number; contextTokensUsed?: number; contextWindowMax?: number },
 ): Record<string, unknown> {
+  // Strip canvas-snapshot tool-result images before any media resolution (paths here are still the
+  // original `/tmp/openclaw/openclaw-canvas-snapshot-*.jpg` temp paths, not yet copied to friday files).
+  const filteredSingle =
+    typeof pl.mediaUrl === "string" && !isCanvasSnapshotMediaPath(pl.mediaUrl) ? pl.mediaUrl : null;
+  const filteredArr = Array.isArray(pl.mediaUrls)
+    ? pl.mediaUrls.filter((u) => !isCanvasSnapshotMediaPath(u))
+    : pl.mediaUrls;
+  pl = { ...pl, mediaUrl: filteredSingle, mediaUrls: filteredArr };
+
   const raw = { ...pl } as Record<string, unknown>;
   const originalUrls = collectReplyPayloadMediaUrls(pl);
   if (typeof pl.mediaUrl === "string" && pl.mediaUrl.trim()) {
