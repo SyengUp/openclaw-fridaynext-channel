@@ -96,7 +96,6 @@ if (!hasOpenclaw()) {
 // --------------- install plugin package ---------------
 
 log("Installing Friday Next channel plugin...");
-let installed = false;
 
 try {
   const out = execSync(
@@ -104,7 +103,6 @@ try {
     { encoding: "utf8", stdio: "pipe", timeout: 120000 }
   );
   if (out.trim()) console.log(out.trim());
-  installed = true;
   log("Plugin registered with install record — auto-upgrade enabled.");
 
   // Remove old manual install to avoid "duplicate plugin id" warning.
@@ -115,25 +113,9 @@ try {
   }
 } catch (e) {
   const msg = (e.stderr || e.stdout || e.message || "").toString();
-  warn("openclaw plugins install failed: " + msg.trim().split("\n").pop());
-  warn("Falling back to manual install...");
-}
-
-// --------------- fallback: manual install ---------------
-
-if (!installed) {
-  const PKG = has("npm") ? "npm" : has("pnpm") ? "pnpm" : null;
-  if (!PKG) {
-    err("npm is required for manual install. Install Node.js first.");
-    process.exit(1);
-  }
-  warn("Manual install complete, but auto-upgrade is NOT available.");
-  warn("To enable auto-upgrade later, run: openclaw plugins install @syengup/friday-channel-next --force");
-  // Clean up legacy dir even in fallback to avoid duplicate warnings
-  if (existsSync(join(USER_HOME, ".openclaw", "extensions", "friday-channel-next"))) {
-    warn("Legacy install detected. Remove it to avoid duplicate warnings:");
-    warn("  rm -rf ~/.openclaw/extensions/friday-channel-next");
-  }
+  err("Plugin install failed: " + (msg.trim().split("\n").pop() || "unknown error"));
+  err("Fix the error above and re-run: npx -y @syengup/friday-channel-next");
+  process.exit(1);
 }
 
 // --------------- configure OpenClaw ---------------
@@ -326,17 +308,24 @@ async function verifyGateway(url, token, retries = 30) {
 log("Verifying gateway...");
 const verified = await verifyGateway(verifyUrl, gatewayToken);
 
-// --------------- show connection info ---------------
-
 const BOLD_YELLOW = (s) => `\x1b[1;33m${s}\x1b[0m`;
 
-log("--------------------------------------------------");
-if (verified) {
-  log("Installation complete! Friday Next channel is now active.");
-} else {
-  warn("Installation complete, but gateway verification failed.");
-  warn("Check 'openclaw gateway status' and restart if needed.");
+// Hard gate: if the gateway didn't verify, the install did NOT succeed — stop here
+// with a non-zero exit and do NOT print the QR / URL / "complete" block, so a failure
+// can never look like a success.
+if (!verified) {
+  log("--------------------------------------------------");
+  err("Installation FAILED: the Friday Next gateway did not come up.");
+  err("Diagnose with:  openclaw gateway status");
+  err("Then restart:   openclaw gateway restart");
+  err("And re-run:     npx -y @syengup/friday-channel-next");
+  process.exit(1);
 }
+
+// --------------- show connection info ---------------
+
+log("--------------------------------------------------");
+log("Installation complete! Friday Next channel is now active.");
 log("");
 
 // --------------- QR code ---------------
