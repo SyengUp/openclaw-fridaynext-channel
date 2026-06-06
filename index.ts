@@ -17,6 +17,9 @@ import {
 import { setFridayAgentForwardRuntime } from "./src/agent-forward-runtime.js";
 import { getOpenClawAgentRunContext } from "./src/agent-run-context-bridge.js";
 import { accumulateRunUsage } from "./src/agent/run-usage-accumulator.js";
+import { createFridayNextLogger } from "./src/logging.js";
+
+const hookLogger = createFridayNextLogger("hook");
 
 export { fridayNextChannelPlugin } from "./src/channel.js";
 export { setFridayNextRuntime } from "./src/runtime.js";
@@ -148,9 +151,8 @@ export default defineChannelPluginEntry({
       const runId = ctx.runId ?? "(unknown)";
 
       const logLine = (detail: string) => {
-        const ts = new Date().toISOString();
-        console.error(
-          `[Friday-HOOK] [${ts}] [TOOL_CALL] toolName=${event.toolName} runId=${runId} deviceId=${deviceId ?? "(unknown)"} detail=${detail}`,
+        hookLogger.debug(
+          `[TOOL_CALL] toolName=${event.toolName} runId=${runId} deviceId=${deviceId ?? "(unknown)"} detail=${detail}`,
         );
       };
 
@@ -180,9 +182,8 @@ export default defineChannelPluginEntry({
       const runId = ctx.runId ?? "(unknown)";
 
       const logLine = (detail: string) => {
-        const ts = new Date().toISOString();
-        console.error(
-          `[Friday-HOOK] [${ts}] [TOOL_DONE] toolName=${event.toolName} runId=${runId} deviceId=${deviceId ?? "(unknown)"} detail=${detail}`,
+        hookLogger.debug(
+          `[TOOL_DONE] toolName=${event.toolName} runId=${runId} deviceId=${deviceId ?? "(unknown)"} detail=${detail}`,
         );
       };
 
