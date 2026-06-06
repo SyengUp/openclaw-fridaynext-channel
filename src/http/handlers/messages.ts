@@ -57,14 +57,23 @@ import {
   registerRunRoute,
   setRunMetadata,
 } from "../../run-metadata.js";
-import { createFridayNextLogger } from "../../logging.js";
+import { createFridayNextLogger, setFridayNextLogLevel } from "../../logging.js";
 
 const logger = createFridayNextLogger("messages");
 
-const log = (action: string, deviceId: string, runId?: string, detail?: string) => {
+// Routine per-message / per-stream lifecycle events log at "debug" so they stay out of
+// the default ("info") OpenClaw log; only genuine problems (rejections, run errors) surface.
+// Raise the friday-next channel logLevel to "debug" to see the full per-message trace.
+const log = (
+  action: string,
+  deviceId: string,
+  runId?: string,
+  detail?: string,
+  level: "debug" | "info" | "warn" | "error" = "debug",
+) => {
   const runPart = runId ? ` runId=${runId}` : "";
   const detailPart = detail ? ` detail=${detail}` : "";
-  logger.info(`[${action}] deviceId=${deviceId}${runPart}${detailPart}`);
+  logger[level](`[${action}] deviceId=${deviceId}${runPart}${detailPart}`);
 };
 
 function collectReplyPayloadMediaUrls(pl: { mediaUrls?: string[]; mediaUrl?: string | null }): string[] {
@@ -381,7 +390,7 @@ export async function handleMessages(req: IncomingMessage, res: ServerResponse):
 
   const token = extractBearerToken(req);
   if (!token) {
-    log("AUTH_FAILED", "(unknown)", undefined, "missing or invalid token");
+    log("AUTH_FAILED", "(unknown)", undefined, "missing or invalid token", "warn");
     res.statusCode = 401;
     res.setHeader("Content-Type", "application/json");
     res.end(JSON.stringify({ error: "Unauthorized: bearer token mismatch" }));
@@ -390,7 +399,7 @@ export async function handleMessages(req: IncomingMessage, res: ServerResponse):
 
   const payload = (await readJsonBody(req)) as FridayMessagePayload | null;
   if (!payload) {
-    log("BAD_REQUEST", "(unknown)", undefined, "invalid JSON body");
+    log("BAD_REQUEST", "(unknown)", undefined, "invalid JSON body", "warn");
     res.statusCode = 400;
     res.setHeader("Content-Type", "application/json");
     res.end(JSON.stringify({ error: "Invalid JSON body" }));
@@ -401,7 +410,7 @@ export async function handleMessages(req: IncomingMessage, res: ServerResponse):
   const normalizedDeviceId = deviceId?.trim().toUpperCase();
 
   if (typeof rawSessionKey !== "string" || !rawSessionKey.length) {
-    log("BAD_REQUEST", "(unknown)", undefined, "missing sessionKey");
+    log("BAD_REQUEST", "(unknown)", undefined, "missing sessionKey", "warn");
     res.statusCode = 400;
     res.setHeader("Content-Type", "application/json");
     res.end(JSON.stringify({ error: "Missing required field: sessionKey" }));
@@ -412,7 +421,7 @@ export async function handleMessages(req: IncomingMessage, res: ServerResponse):
   const baseSessionKey = toSessionStoreKey(appSessionKey);
 
   if (!normalizedDeviceId) {
-    log("BAD_REQUEST", "(unknown)", undefined, "missing deviceId");
+    log("BAD_REQUEST", "(unknown)", undefined, "missing deviceId", "warn");
     res.statusCode = 400;
     res.setHeader("Content-Type", "application/json");
     res.end(JSON.stringify({ error: "Missing required field: deviceId" }));
@@ -420,7 +429,7 @@ export async function handleMessages(req: IncomingMessage, res: ServerResponse):
   }
 
   if (!text || !text.trim()) {
-    log("BAD_REQUEST", normalizedDeviceId, undefined, "missing text");
+    log("BAD_REQUEST", normalizedDeviceId, undefined, "missing text", "warn");
     res.statusCode = 400;
     res.setHeader("Content-Type", "application/json");
     res.end(JSON.stringify({ error: "Missing required field: text" }));
@@ -447,6 +456,7 @@ export async function handleMessages(req: IncomingMessage, res: ServerResponse):
   );
 
   const cfg = resolveFridayNextConfig(getHostOpenClawConfigSnapshot(runtime.config));
+  setFridayNextLogLevel(cfg.logLevel);
 
   // Resolve defaults from the OpenClaw agent config so settings are never left empty. Prefers the
   // target agent's own model/thinking over the global defaults (see resolveAgentDefaults).
@@ -544,7 +554,7 @@ export async function handleMessages(req: IncomingMessage, res: ServerResponse):
             }
           },
           onError: (err: unknown) => {
-            log("RUN_ERROR", normalizedDeviceId, runId, String(err));
+            log("RUN_ERROR", normalizedDeviceId, runId, String(err), "error");
             sseEmitter.broadcastToRun(
               runId,
               {
@@ -588,7 +598,7 @@ export async function handleMessages(req: IncomingMessage, res: ServerResponse):
       });
       log("RUN_COMPLETE", normalizedDeviceId, runId);
     } catch (err) {
-      log("RUN_ERROR", normalizedDeviceId, runId, String(err));
+      log("RUN_ERROR", normalizedDeviceId, runId, String(err), "error");
       sseEmitter.broadcastToRun(
         runId,
         {
@@ -610,7 +620,7 @@ export async function handleMessages(req: IncomingMessage, res: ServerResponse):
   };
 
   runAgent().catch((err) => {
-    log("RUN_ERROR", normalizedDeviceId, runId, String(err));
+    log("RUN_ERROR", normalizedDeviceId, runId, String(err), "error");
     sseEmitter.untrackRun(runId);
   });
 

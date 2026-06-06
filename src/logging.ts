@@ -7,9 +7,20 @@ const levelOrder: Record<FridayNextLogLevel, number> = {
   error: 40,
 };
 
-export function createFridayNextLogger(scope: string, level: FridayNextLogLevel = "info") {
+// Process-wide active level, honored by every logger at call time. Handlers call
+// setFridayNextLogLevel() once the friday-next channel config resolves, so
+// `channels.friday-next.logLevel: "debug"` turns the full per-message trace back on.
+let activeLevel: FridayNextLogLevel = "info";
+
+export function setFridayNextLogLevel(level: FridayNextLogLevel): void {
+  activeLevel = level;
+}
+
+// The optional `level` arg is accepted for call-site compatibility but the effective
+// threshold is the process-wide active level (single knob driven by config.logLevel).
+export function createFridayNextLogger(scope: string, _level?: FridayNextLogLevel) {
   const base = `[friday-next:${scope}]`;
-  const enabled = (current: FridayNextLogLevel) => levelOrder[current] >= levelOrder[level];
+  const enabled = (current: FridayNextLogLevel) => levelOrder[current] >= levelOrder[activeLevel];
   return {
     debug: (message: string) => {
       if (enabled("debug")) console.debug(`${base} ${message}`);
