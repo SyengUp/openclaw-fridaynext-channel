@@ -238,14 +238,22 @@ if (configChanged) {
 
 // --------------- restart gateway ---------------
 
-log("Restarting OpenClaw gateway...");
+log("Restarting OpenClaw gateway... (this can take 20-30s)");
 try {
-  const out = execSync(`${openclawCmd} gateway restart`, { encoding: "utf8", stdio: "pipe", timeout: 15000 });
+  // A full gateway restart commonly takes 20s+ on a fresh boot; give it plenty of room
+  // so we don't kill it mid-restart and report a false failure.
+  const out = execSync(`${openclawCmd} gateway restart`, { encoding: "utf8", stdio: "pipe", timeout: 90000 });
   if (out.trim()) console.log(out.trim());
 } catch (e) {
   if (e.stdout?.trim()) console.log(e.stdout.trim());
   if (e.stderr?.trim()) console.error(e.stderr.trim());
-  warn("Gateway restart failed. Restart manually: openclaw gateway restart");
+  // ETIMEDOUT/SIGTERM here usually means the restart is simply slow, not broken —
+  // the verify step below will confirm whether the gateway actually came up.
+  if (e.code === "ETIMEDOUT" || e.signal === "SIGTERM") {
+    warn("Gateway restart is taking a while — will verify below.");
+  } else {
+    warn("Gateway restart failed. Restart manually: openclaw gateway restart");
+  }
 }
 
 // --------------- verify ---------------
@@ -270,7 +278,11 @@ const gatewayUrl = bindMode === "lan"
   ? `http://${getLanIp()}:${gatewayPort}`
   : `http://127.0.0.1:${gatewayPort}`;
 
-async function verifyGateway(url, token, retries = 6) {
+// Always verify against loopback: the gateway binds 0.0.0.0 so it's reachable here,
+// and this avoids false negatives from LAN/NAT routing of the advertised IP.
+const verifyUrl = `http://127.0.0.1:${gatewayPort}`;
+
+async function verifyGateway(url, token, retries = 30) {
   const http = await import("node:http");
   const { hostname, port } = new URL(url);
   for (let i = 1; i <= retries; i++) {
@@ -312,7 +324,7 @@ async function verifyGateway(url, token, retries = 6) {
 }
 
 log("Verifying gateway...");
-const verified = await verifyGateway(gatewayUrl, gatewayToken);
+const verified = await verifyGateway(verifyUrl, gatewayToken);
 
 // --------------- show connection info ---------------
 
@@ -372,4 +384,45 @@ if (ipType === "tailscale") {
 } else {
   log("This URL appears to be publicly accessible (" + ip + ").");
 }
+
+// The advertised IP is the local/NAT address, which a phone over the internet
+// can't reach. Best-effort: detect the network's public-facing IP. NOTE: an echo
+// service only reports the egress address — on a cloud VPS that's a routable 1:1
+// NAT, but on a home/carrier-grade NAT (CGNAT) it's a shared egress IP that is
+// NOT reachable inbound. So we present it as a hint, not a guarantee.
+if (ipType === "private" || ipType === "loopback") {
+  const publicIp = await detectPublicIp();
+  if (publicIp && publicIp !== ip) {
+    log("");
+    log(BOLD_YELLOW("Network public-facing IP detected — for remote access try:"));
+    log(BOLD_YELLOW("检测到网络出口公网 IP —— 远程连接可尝试："));
+    log("Public URL:   " + BOLD_YELLOW(`http://${publicIp}:${gatewayPort}`));
+    log("First open inbound TCP port " + gatewayPort + " in your firewall / cloud security group.");
+    log("请先在防火墙 / 云安全组放行入站 TCP 端口 " + gatewayPort + "。");
+    log("If this is a home/carrier network (CGNAT), this IP may NOT be reachable from outside —");
+    log("use a tunnel like Tailscale instead.");
+    log("若为家庭宽带 / 运营商大内网(CGNAT)，此地址可能无法从外部入站访问，");
+    log("请改用 Tailscale 等内网穿透方案。");
+  }
+}
 log("--------------------------------------------------");
+
+async function detectPublicIp() {
+  const endpoints = ["http://api.ipify.org", "http://ifconfig.me/ip", "http://icanhazip.com"];
+  const http = await import("node:http");
+  for (const url of endpoints) {
+    try {
+      const ipStr = await new Promise((resolve, reject) => {
+        const req = http.get(url, { timeout: 3000 }, (res) => {
+          let body = "";
+          res.on("data", (c) => body += c);
+          res.on("end", () => resolve(body.trim()));
+        });
+        req.on("error", reject);
+        req.on("timeout", () => { req.destroy(); reject(new Error("timeout")); });
+      });
+      if (/^\d{1,3}(\.\d{1,3}){3}$/.test(ipStr)) return ipStr;
+    } catch { /* try next */ }
+  }
+  return null;
+}
