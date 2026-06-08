@@ -2,6 +2,7 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import { sseEmitter } from "./sse/emitter.js";
 import { guessMimeType } from "./http/handlers/files.js";
+import { downloadRemoteMedia, isHttpUrl } from "./media-fetch.js";
 import { getRunRoute } from "./run-metadata.js";
 import { resolveHistorySessionKeyForFridayDevice } from "./friday-session.js";
 
@@ -39,6 +40,9 @@ async function readMediaFile(
   mediaPath: string,
   ctx: MessageActionCtx,
 ): Promise<{ buffer: Buffer; mimeType: string } | null> {
+  if (isHttpUrl(mediaPath)) {
+    return downloadRemoteMedia(mediaPath);
+  }
   if (ctx.mediaReadFile) {
     try {
       const buffer = await ctx.mediaReadFile(mediaPath);
@@ -58,7 +62,7 @@ async function readMediaFile(
 async function handleSend(ctx: MessageActionCtx): Promise<unknown> {
   const to = pickString(ctx.params, ["to", "target"]).toUpperCase();
   const text = pickString(ctx.params, ["message", "text", "content"]);
-  const mediaPath = pickString(ctx.params, ["media", "path", "filePath", "fileUrl"]);
+  const mediaPath = pickString(ctx.params, ["media", "url", "path", "filePath", "fileUrl"]);
   const caption = pickString(ctx.params, ["caption"]);
 
   if (!to) {

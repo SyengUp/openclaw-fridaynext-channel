@@ -15,6 +15,7 @@ import { saveMediaBuffer } from "openclaw/plugin-sdk/media-store";
 import { sseEmitter } from "./sse/emitter.js";
 import { describeMessageActions, handleMessageAction } from "./channel-actions.js";
 import { guessMimeType, resolveMediaAttachment } from "./http/handlers/files.js";
+import { downloadRemoteMedia, isHttpUrl } from "./media-fetch.js";
 import {
   resolveFridayDeviceIdForOutbound,
   resolveHistorySessionKeyForFridayDevice,
@@ -245,12 +246,21 @@ export const fridayNextChannelPlugin = createChatChannelPlugin({
         }
 
         let buffer: Buffer | null = null;
+        let downloadedMimeType: string | null = null;
 
         if (ctx.mediaReadFile) {
           try {
             buffer = await ctx.mediaReadFile(mediaUrl);
           } catch {
-            // fall through to fs
+            // fall through to remote download / fs
+          }
+        }
+
+        if (!buffer && isHttpUrl(mediaUrl)) {
+          const remote = await downloadRemoteMedia(mediaUrl);
+          if (remote) {
+            buffer = remote.buffer;
+            downloadedMimeType = remote.mimeType;
           }
         }
 
@@ -264,7 +274,7 @@ export const fridayNextChannelPlugin = createChatChannelPlugin({
         }
 
         if (buffer) {
-          const mimeType = guessMimeType(mediaUrl);
+          const mimeType = downloadedMimeType ?? guessMimeType(mediaUrl);
           const saved = await saveMediaBuffer(buffer, mimeType, "inbound");
           if (saved.id) {
             const fileUrl = `/friday-next/files/${encodeURIComponent(saved.id)}`;

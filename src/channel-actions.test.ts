@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { EventEmitter } from "node:events";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { handleMessageAction } from "./channel-actions.js";
 import { sseEmitter } from "./sse/emitter.js";
 import { setOfflineQueueBaseDirForTest } from "./sse/offline-queue.js";
@@ -60,6 +60,7 @@ describe("channel-actions handleSend sessionKey routing", () => {
   });
 
   afterEach(() => {
+    vi.unstubAllGlobals();
     setOfflineQueueBaseDirForTest(null);
     removeTempHistoryDir(historyDir);
   });
@@ -93,6 +94,40 @@ describe("channel-actions handleSend sessionKey routing", () => {
     expect(media?.data.sessionKey).toBe(appSession);
     expect(text?.data.sessionKey).toBe(appSession);
     expect(media?.data.deviceId).toBe(deviceId);
+  });
+
+  it("send media via an https `url` direct link downloads it and emits op:media", async () => {
+    const deviceId = "DEV-ACT-URL";
+    const runId = "run-act-url";
+    const appSession = "agent:operator:friday:direct:dev-act-url:1780561609";
+    registerRunRoute({ runId, deviceId, sessionKey: appSession });
+    sseEmitter.trackDeviceForRun(deviceId, runId);
+    const res = connect(deviceId);
+
+    // 8-byte PNG magic header so saveMediaBuffer's magic-byte detection recognizes an image.
+    const pngBytes = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x01]);
+    const directLink = "https://picsum.photos/600/400";
+    const fetchMock = vi.fn(async () =>
+      new Response(pngBytes, { status: 200, headers: { "content-type": "image/png" } }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await handleMessageAction({
+      action: "send",
+      // The agent sends a direct link via the `url` param, not `media`.
+      params: { to: deviceId, message: "直链图来了", url: directLink },
+      sessionKey: "agent:operator:main",
+    });
+
+    expect((result as { ok?: boolean }).ok).toBe(true);
+    expect(fetchMock).toHaveBeenCalledWith(directLink, expect.anything());
+
+    const frames = parseOutboundFrames(res);
+    const media = frames.find((f) => f.type === "outbound" && f.data.op === "media");
+    expect(media).toBeTruthy();
+    expect(String(media?.data.mediaUrl)).toMatch(/^\/friday-next\/files\//);
+    expect((media?.data.ctx as { originalMediaUrl?: string })?.originalMediaUrl).toBe(directLink);
+    expect(media?.data.sessionKey).toBe(appSession);
   });
 
   it("falls back to ctx.sessionKey when the device has no active run-route", async () => {
