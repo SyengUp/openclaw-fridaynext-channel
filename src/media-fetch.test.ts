@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { downloadRemoteMedia, isHttpUrl } from "./media-fetch.js";
+import { decodeBase64Media, downloadRemoteMedia, isHttpUrl } from "./media-fetch.js";
 
 describe("isHttpUrl", () => {
   it("matches http/https links, rejects local paths", () => {
@@ -74,5 +74,34 @@ describe("downloadRemoteMedia", () => {
       }),
     );
     expect(await downloadRemoteMedia("https://example.com/x.png")).toBeNull();
+  });
+});
+
+describe("decodeBase64Media", () => {
+  const jpegBytes = Buffer.from([0xff, 0xd8, 0xff, 0xe0, 0x00, 0x10]);
+
+  it("decodes a bare base64 string with a mime hint", () => {
+    const result = decodeBase64Media(jpegBytes.toString("base64"), "image/jpeg");
+    expect(result?.mimeType).toBe("image/jpeg");
+    expect(result?.buffer.equals(jpegBytes)).toBe(true);
+  });
+
+  it("decodes a data: URL and infers the mime from it", () => {
+    const dataUrl = `data:image/png;base64,${jpegBytes.toString("base64")}`;
+    const result = decodeBase64Media(dataUrl);
+    expect(result?.mimeType).toBe("image/png");
+    expect(result?.buffer.equals(jpegBytes)).toBe(true);
+  });
+
+  it("defaults to octet-stream when no mime is known", () => {
+    expect(decodeBase64Media(jpegBytes.toString("base64"))?.mimeType).toBe(
+      "application/octet-stream",
+    );
+  });
+
+  it("rejects local paths and URLs (not base64)", () => {
+    expect(decodeBase64Media("/tmp/test.jpg")).toBeNull();
+    expect(decodeBase64Media("https://example.com/a.png")).toBeNull();
+    expect(decodeBase64Media("")).toBeNull();
   });
 });

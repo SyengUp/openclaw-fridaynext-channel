@@ -130,6 +130,39 @@ describe("channel-actions handleSend sessionKey routing", () => {
     expect(media?.data.sessionKey).toBe(appSession);
   });
 
+  it("send media via an inline base64 `buffer` param decodes it and emits op:media", async () => {
+    const deviceId = "DEV-ACT-BUF";
+    const runId = "run-act-buf";
+    const appSession = "agent:operator:friday:direct:dev-act-buf:1780561609";
+    registerRunRoute({ runId, deviceId, sessionKey: appSession });
+    sseEmitter.trackDeviceForRun(deviceId, runId);
+    const res = connect(deviceId);
+
+    const jpegBytes = Buffer.from([0xff, 0xd8, 0xff, 0xe0, 0x00, 0x10]);
+
+    const result = await handleMessageAction({
+      action: "send",
+      params: {
+        to: deviceId,
+        message: "base64 图来了",
+        buffer: jpegBytes.toString("base64"),
+        mimeType: "image/jpeg",
+        filename: "test-small.jpg",
+      },
+      sessionKey: "agent:operator:main",
+    });
+
+    expect((result as { ok?: boolean }).ok).toBe(true);
+    const frames = parseOutboundFrames(res);
+    const media = frames.find((f) => f.type === "outbound" && f.data.op === "media");
+    expect(media).toBeTruthy();
+    expect(String(media?.data.mediaUrl)).toMatch(/^\/friday-next\/files\//);
+    expect((media?.data.ctx as { originalMediaUrl?: string })?.originalMediaUrl).toBe(
+      "test-small.jpg",
+    );
+    expect(media?.data.sessionKey).toBe(appSession);
+  });
+
   it("falls back to ctx.sessionKey when the device has no active run-route", async () => {
     const deviceId = "DEV-ACT-2";
     const res = connect(deviceId);

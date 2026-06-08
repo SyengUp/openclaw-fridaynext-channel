@@ -2,7 +2,7 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import { sseEmitter } from "./sse/emitter.js";
 import { guessMimeType } from "./http/handlers/files.js";
-import { downloadRemoteMedia, isHttpUrl } from "./media-fetch.js";
+import { decodeBase64Media, downloadRemoteMedia, isHttpUrl } from "./media-fetch.js";
 import { getRunRoute } from "./run-metadata.js";
 import { resolveHistorySessionKeyForFridayDevice } from "./friday-session.js";
 
@@ -63,6 +63,9 @@ async function handleSend(ctx: MessageActionCtx): Promise<unknown> {
   const to = pickString(ctx.params, ["to", "target"]).toUpperCase();
   const text = pickString(ctx.params, ["message", "text", "content"]);
   const mediaPath = pickString(ctx.params, ["media", "url", "path", "filePath", "fileUrl"]);
+  const inlineBase64 = pickString(ctx.params, ["buffer", "base64", "data"]);
+  const mediaMimeHint = pickString(ctx.params, ["mimeType", "contentType"]);
+  const filename = pickString(ctx.params, ["filename", "name"]);
   const caption = pickString(ctx.params, ["caption"]);
 
   if (!to) {
@@ -98,33 +101,45 @@ async function handleSend(ctx: MessageActionCtx): Promise<unknown> {
     );
   }
 
+  // Resolve media from an inline base64 buffer or a path/url reference. (`attachments[]` arrays are
+  // normalized by the OpenClaw core and arrive via outbound.sendMedia, so they're not handled here.)
+  let media: { buffer: Buffer; mimeType: string } | null = null;
+  let originalMediaUrl = "";
+  if (inlineBase64) {
+    media = decodeBase64Media(
+      inlineBase64,
+      mediaMimeHint || (filename ? guessMimeType(filename) : ""),
+    );
+    originalMediaUrl = filename || "inline-buffer";
+  } else if (mediaPath) {
+    media = await readMediaFile(mediaPath, ctx);
+    originalMediaUrl = mediaPath;
+  }
+
   // Send media via SSE outbound
-  if (mediaPath) {
-    const result = await readMediaFile(mediaPath, ctx);
-    if (result) {
-      const { saveMediaBuffer } = await import("openclaw/plugin-sdk/media-store");
-      const saved = await saveMediaBuffer(result.buffer, result.mimeType, "inbound");
-      if (saved.id) {
-        const publicUrl = `/friday-next/files/${encodeURIComponent(saved.id)}`;
-        sseEmitter.broadcast(
-          {
-            type: "outbound",
-            data: {
-              op: "media",
-              ts: Date.now(),
-              runId,
-              deviceId: to,
-              sessionKey,
-              audioAsVoice: false,
-              caption: caption || text,
-              mediaUrl: publicUrl,
-              ctx: { to, text: caption || text, originalMediaUrl: mediaPath },
-            },
+  if (media) {
+    const { saveMediaBuffer } = await import("openclaw/plugin-sdk/media-store");
+    const saved = await saveMediaBuffer(media.buffer, media.mimeType, "inbound");
+    if (saved.id) {
+      const publicUrl = `/friday-next/files/${encodeURIComponent(saved.id)}`;
+      sseEmitter.broadcast(
+        {
+          type: "outbound",
+          data: {
+            op: "media",
+            ts: Date.now(),
+            runId,
+            deviceId: to,
+            sessionKey,
+            audioAsVoice: false,
+            caption: caption || text,
+            mediaUrl: publicUrl,
+            ctx: { to, text: caption || text, originalMediaUrl },
           },
-          to,
-          true,
-        );
-      }
+        },
+        to,
+        true,
+      );
     }
   }
 

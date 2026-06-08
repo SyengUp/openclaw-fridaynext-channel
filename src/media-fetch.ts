@@ -17,6 +17,44 @@ export function isHttpUrl(value: string): boolean {
   return /^https?:\/\//i.test(value.trim());
 }
 
+const DATA_URL_PREFIX_RE = /^data:([^;,]+)?(;base64)?,/i;
+
+/**
+ * Decode an inline base64 attachment (the `message` tool's `buffer` param). Accepts both a bare
+ * base64 string and a `data:<mime>;base64,...` data URL.
+ *
+ * The charset guard rejects local paths / http URLs (which contain `:`/`.`), so callers can pass a
+ * possibly-misused value safely — those fall through to the path/url resolver instead of being
+ * decoded into garbage bytes. Like remote downloads, the mime is only a hint; `saveMediaBuffer`
+ * re-detects the real type from magic bytes.
+ */
+export function decodeBase64Media(
+  raw: string,
+  mimeHint?: string,
+): { buffer: Buffer; mimeType: string } | null {
+  let body = raw.trim();
+  let dataUrlMime = "";
+  const match = body.match(DATA_URL_PREFIX_RE);
+  if (match) {
+    dataUrlMime = (match[1] ?? "").trim().toLowerCase();
+    body = body.slice(match[0].length);
+  }
+  body = body.replace(/\s+/g, "");
+  if (!body || !/^[A-Za-z0-9+/]+={0,2}$/.test(body)) return null;
+
+  let buffer: Buffer;
+  try {
+    buffer = Buffer.from(body, "base64");
+  } catch {
+    return null;
+  }
+  if (!buffer.length) return null;
+
+  const mimeType =
+    mimeHint?.trim().toLowerCase() || dataUrlMime || "application/octet-stream";
+  return { buffer, mimeType };
+}
+
 /**
  * Download an http/https URL into a buffer. Returns null on any failure (non-2xx, oversize, timeout,
  * network error) so callers degrade to text-only rather than throwing.
