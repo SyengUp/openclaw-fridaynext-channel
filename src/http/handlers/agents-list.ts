@@ -1,5 +1,10 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
-import { getFridayAgentForwardRuntime } from "../../agent-forward-runtime.js";
+import fs from "node:fs";
+import path from "node:path";
+import {
+  getFridayAgentForwardRuntime,
+  type FridayAgentForwardRuntime,
+} from "../../agent-forward-runtime.js";
 import { extractBearerToken } from "../middleware/auth.js";
 
 const DEFAULT_AGENT_ID = "main";
@@ -54,6 +59,60 @@ function readString(value: unknown): string | undefined {
   return typeof value === "string" && value.trim() ? value.trim() : undefined;
 }
 
+/** Unfilled IDENTITY.md template prompts that must not surface as a real name. */
+const IDENTITY_NAME_PLACEHOLDERS = new Set(["pick something you like"]);
+
+/**
+ * Extract the `Name` field from an agent's IDENTITY.md, mirroring OpenClaw's
+ * `parseIdentityMarkdown` (src/agents/identity-file.ts) for the name label only:
+ * drop the leading "- ", split on the first ":", strip markdown emphasis, and
+ * skip the unfilled template placeholder. Returns the raw value verbatim (e.g.
+ * "星期五 (Friday)") so it matches what ControlUI shows under "身份名称".
+ */
+export function parseIdentityNameFromMarkdown(content: string): string | undefined {
+  for (const rawLine of content.split(/\r?\n/)) {
+    const cleaned = rawLine.trim().replace(/^\s*-\s*/, "");
+    const colonIndex = cleaned.indexOf(":");
+    if (colonIndex === -1) continue;
+    const label = cleaned.slice(0, colonIndex).replace(/[*_`]/g, "").trim().toLowerCase();
+    if (label !== "name") continue;
+    const value = cleaned
+      .slice(colonIndex + 1)
+      .replace(/^[*_`\s]+|[*_`\s]+$/g, "")
+      .trim();
+    if (!value) continue;
+    let normalized = value.replace(/[–—]/g, "-");
+    if (normalized.startsWith("(") && normalized.endsWith(")")) {
+      normalized = normalized.slice(1, -1).trim();
+    }
+    if (IDENTITY_NAME_PLACEHOLDERS.has(normalized.toLowerCase())) continue;
+    return value;
+  }
+  return undefined;
+}
+
+/**
+ * Name fallback for agents with no `name`/`identity.name` in config (e.g. the
+ * implicit `main`): resolve the agent's workspace and parse its IDENTITY.md, the
+ * same source ControlUI reads. Best-effort — any failure yields undefined.
+ */
+function readWorkspaceIdentityName(
+  rt: FridayAgentForwardRuntime,
+  cfg: unknown,
+  agentId: string,
+): string | undefined {
+  const resolveWorkspace = rt.resolveAgentWorkspaceDir;
+  if (!resolveWorkspace) return undefined;
+  try {
+    const workspace = resolveWorkspace(cfg, agentId);
+    if (!workspace) return undefined;
+    const content = fs.readFileSync(path.join(workspace, "IDENTITY.md"), "utf-8");
+    return parseIdentityNameFromMarkdown(content);
+  } catch {
+    return undefined;
+  }
+}
+
 /**
  * Reads the configured agents directly from the runtime config (same approach as
  * models-list.ts). When no agents are configured OpenClaw runs an implicit "main"
@@ -89,7 +148,10 @@ function resolveConfiguredAgents(): ResolvedAgents {
     const identity = agent.identity as Record<string, unknown> | undefined;
     entries.push({
       id,
-      name: readString(agent.name) ?? readString(identity?.name),
+      name:
+        readString(agent.name) ??
+        readString(identity?.name) ??
+        readWorkspaceIdentityName(rt, cfg, id),
       description: readString(agent.description),
       model: resolvePrimaryModel(agent.model),
       thinkingDefault: readString(agent.thinkingDefault),

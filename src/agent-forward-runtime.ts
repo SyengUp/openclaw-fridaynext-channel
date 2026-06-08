@@ -14,6 +14,8 @@ export type FridayAgentForwardRuntime = {
       entry: Record<string, unknown>,
     ) => Record<string, unknown> | null | Promise<Record<string, unknown> | null>;
   }) => Promise<Record<string, unknown> | null>;
+  /** Resolves an agent's workspace dir — used to read IDENTITY.md for the name fallback. */
+  resolveAgentWorkspaceDir?: (cfg: unknown, agentId: string) => string;
   getConfig: () => unknown;
 };
 
@@ -26,6 +28,8 @@ export function setFridayAgentForwardRuntime(api: OpenClawPluginApi): void {
     loadSessionStore: api.runtime.agent.session.loadSessionStore,
     updateSessionStoreEntry: (api.runtime.agent.session as Record<string, unknown>)
       .updateSessionStoreEntry as FridayAgentForwardRuntime["updateSessionStoreEntry"],
+    resolveAgentWorkspaceDir: (api.runtime.agent as Record<string, unknown>)
+      .resolveAgentWorkspaceDir as FridayAgentForwardRuntime["resolveAgentWorkspaceDir"],
     getConfig: () => api.runtime.config.current(),
   };
 }

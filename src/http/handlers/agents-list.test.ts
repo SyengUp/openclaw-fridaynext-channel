@@ -1,6 +1,9 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { EventEmitter } from "node:events";
-import { handleAgentsList } from "./agents-list.js";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { handleAgentsList, parseIdentityNameFromMarkdown } from "./agents-list.js";
 import { setMockRuntime } from "../../test-support/mock-runtime.js";
 import {
   setFridayAgentForwardRuntime,
@@ -108,6 +111,33 @@ describe("handleAgentsList", () => {
     ]);
   });
 
+  it("falls back to the IDENTITY.md name when config has none", async () => {
+    const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "friday-identity-"));
+    fs.writeFileSync(
+      path.join(workspace, "IDENTITY.md"),
+      "# IDENTITY.md\n\n- **Name:** 星期五 (Friday)\n- **Emoji:** 🌿\n",
+    );
+    try {
+      setFridayAgentForwardRuntime({
+        runtime: {
+          agent: {
+            session: { resolveStorePath: () => "", loadSessionStore: () => ({}) },
+            resolveAgentWorkspaceDir: () => workspace,
+          },
+          config: { current: () => ({ agents: { list: [{ id: "main" }] } }) },
+        },
+      } as any);
+
+      const res = new MockRes();
+      await handleAgentsList(makeReq(AUTH), res as any);
+
+      const body = JSON.parse(res.body);
+      expect(body.agents).toEqual([{ id: "main", name: "星期五 (Friday)", isDefault: true }]);
+    } finally {
+      fs.rmSync(workspace, { recursive: true, force: true });
+    }
+  });
+
   it("defaults to the first entry when none is marked default and dedups ids", async () => {
     setConfig({
       agents: {
@@ -125,5 +155,26 @@ describe("handleAgentsList", () => {
     expect(body.defaultAgentId).toBe("alpha");
     expect(body.agents.map((a: { id: string }) => a.id)).toEqual(["alpha", "beta"]);
     expect(body.agents[0].isDefault).toBe(true);
+  });
+});
+
+describe("parseIdentityNameFromMarkdown", () => {
+  it("extracts the Name value from the OpenClaw template format", () => {
+    const md = "# IDENTITY.md\n\n- **Name:** 星期五 (Friday)\n- **Emoji:** 🌿\n";
+    expect(parseIdentityNameFromMarkdown(md)).toBe("星期五 (Friday)");
+  });
+
+  it("handles a plain unstyled `Name:` line", () => {
+    expect(parseIdentityNameFromMarkdown("Name: Jarvis")).toBe("Jarvis");
+  });
+
+  it("returns undefined when there is no Name field", () => {
+    expect(parseIdentityNameFromMarkdown("- **Emoji:** 🌿\n- **Vibe:** calm")).toBeUndefined();
+  });
+
+  it("skips the unfilled template placeholder", () => {
+    expect(
+      parseIdentityNameFromMarkdown("- **Name:** _(pick something you like)_"),
+    ).toBeUndefined();
   });
 });
