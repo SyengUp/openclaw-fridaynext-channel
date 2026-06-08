@@ -114,6 +114,45 @@ describe("handleHistoryMessages", () => {
     expect(body.messages[1].text).toBe("hello");
   });
 
+  it("returns the cumulative sessionUsage snapshot from the store", async () => {
+    const file = writeTranscript("usage.jsonl", [
+      { type: "message", id: "u1", message: { role: "user", content: "hi" } },
+      { type: "message", id: "a1", message: { role: "assistant", content: [{ type: "text", text: "yo" }], model: "openai/gpt-4" } },
+    ]);
+    setForward({
+      "agent:main:main": {
+        sessionId: "s",
+        sessionFile: file,
+        model: "openai/gpt-4",
+        totalTokens: 12_480,
+        contextTokens: 128_000,
+        inputTokens: 9_000,
+        outputTokens: 3_480,
+      },
+    });
+
+    const res = new MockRes();
+    await handleHistoryMessages(makeReq("/friday-next/history/messages?sessionKey=agent:main:main", AUTH), res as any);
+    expect(res.statusCode).toBe(200);
+    const body = JSON.parse(res.body);
+    expect(body.sessionUsage).toBeDefined();
+    expect(body.sessionUsage.modelId).toBe("openai/gpt-4");
+    expect(body.sessionUsage.context).toEqual({ windowMax: 128_000, used: 12_480 });
+    expect(body.sessionUsage.tokens.total).toBe(12_480);
+  });
+
+  it("omits sessionUsage when the store has no entry", async () => {
+    const file = writeTranscript("nousage.jsonl", [
+      { type: "message", id: "u1", message: { role: "user", content: "hi" } },
+    ]);
+    setForward({ "agent:main:main": { sessionId: "s", sessionFile: file } });
+
+    const res = new MockRes();
+    await handleHistoryMessages(makeReq("/friday-next/history/messages?sessionKey=agent:main:main", AUTH), res as any);
+    const body = JSON.parse(res.body);
+    expect(body.sessionUsage).toBeUndefined();
+  });
+
   it("resolves the entry case-insensitively (app upper-cases deviceId)", async () => {
     const file = writeTranscript("fd.jsonl", [
       { type: "message", id: "u1", message: { role: "user", content: "from app" } },

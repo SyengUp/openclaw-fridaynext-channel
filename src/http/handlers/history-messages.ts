@@ -16,6 +16,7 @@ import { extractBearerToken } from "../middleware/auth.js";
 import { normalizeHistoryMessages } from "../../history/normalize-message.js";
 import { readSessionTranscriptRawMessages, resolveSessionId } from "../../history/read-transcript.js";
 import { resolveMediaAttachment } from "./files.js";
+import { readSessionUsageSnapshotFromStore } from "../../session-usage-store.js";
 
 const DEFAULT_LIMIT = 200;
 const MAX_LIMIT = 1000;
@@ -107,6 +108,13 @@ export async function handleHistoryMessages(
 
   const sessionId = resolveSessionId(sessionKey);
 
+  // Cumulative session-usage snapshot (model + context window/used) read from the
+  // session store — the SAME source the live `lifecycle.end` frame uses. The
+  // transcript carries per-message model/tokens but NOT the context-window figures,
+  // so the app stamps this snapshot onto the latest assistant turn on rebuild to
+  // keep the nav-bar context ring correct (and surviving app restarts).
+  const sessionUsage = readSessionUsageSnapshotFromStore(sessionKey);
+
   res.statusCode = 200;
   res.setHeader("Content-Type", "application/json");
   res.end(
@@ -117,6 +125,7 @@ export async function handleHistoryMessages(
       ...(sessionId ? { sessionId } : {}),
       totalMessages: messages.length,
       messages,
+      ...(sessionUsage ? { sessionUsage } : {}),
     }),
   );
   return true;

@@ -1,12 +1,12 @@
 import { sseEmitter } from "./sse/emitter.js";
 import { getFridayAgentForwardRuntime } from "./agent-forward-runtime.js";
-import { toSessionStoreKey, agentIdFromSessionKey } from "./session/session-manager.js";
+import { toSessionStoreKey } from "./session/session-manager.js";
 import { getOpenClawAgentRunContext } from "./agent-run-context-bridge.js";
 import { observeAgentEventForActiveRuns } from "./agent/active-runs.js";
 import { getRunMetadata, ingestAgentEventMetadata } from "./run-metadata.js";
 import { consumeRunUsage } from "./agent/run-usage-accumulator.js";
-import { buildSessionUsageSnapshot } from "./session-usage-snapshot.js";
 import type { FridaySessionUsagePayload } from "./session-usage-snapshot.js";
+import { readSessionUsageSnapshotFromStore } from "./session-usage-store.js";
 import {
   lookupByRunId,
   registerSessionKeyForRun,
@@ -176,23 +176,6 @@ function mergeRunMetadataIntoLifecycleEnd(
   }
   if (Object.keys(extra).length === 0) return base;
   return { ...base, ...extra };
-}
-
-function tryReadSessionUsageFromStore(sessionKeyForStore: string): FridaySessionUsagePayload | undefined {
-  const access = getFridayAgentForwardRuntime();
-  if (!access) return undefined;
-  try {
-    const cfg = access.getConfig() as { session?: { store?: string } } | null | undefined;
-    const storeConfig = cfg?.session?.store;
-    const canonical = toSessionStoreKey(sessionKeyForStore);
-    const storePath = access.resolveStorePath(storeConfig, { agentId: agentIdFromSessionKey(canonical) });
-    const store = access.loadSessionStore(storePath, { skipCache: true }) as Record<string, Record<string, unknown>>;
-    const entry = store[canonical] ?? store[sessionKeyForStore.trim()];
-    if (!entry || typeof entry !== "object") return undefined;
-    return buildSessionUsageSnapshot(entry);
-  } catch {
-    return undefined;
-  }
 }
 
 function buildSessionUsageFromRunMetadata(runId: string): FridaySessionUsagePayload | undefined {
@@ -487,7 +470,7 @@ export function forwardAgentEventRaw(evt: ForwardAgentEventArgs): void {
     // llm_output data is per-run; store is cumulative across rounds.
     setTimeout(() => {
       let data = outgoingData;
-      const storeUsage = tryReadSessionUsageFromStore(sk);
+      const storeUsage = readSessionUsageSnapshotFromStore(sk);
       const llmUsage = consumeRunUsage(evt.runId);
       const memUsage = buildSessionUsageFromRunMetadata(evt.runId);
       let usage: FridaySessionUsagePayload | undefined;
