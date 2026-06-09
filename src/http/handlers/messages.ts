@@ -362,6 +362,16 @@ export interface FridayMessagePayload {
   thinkingLevel?: string;
 }
 
+/**
+ * 把可选文本与媒体引用拼成给 agent 的最终 body。纯附件（文本为空）场景下
+ * 不能带前导空行，否则 agent 收到的是 `\n\n[media…]`——故拆成可测纯函数。
+ */
+export function composeBodyWithMediaRefs(text: string, mediaRefs: string[]): string {
+  const trimmed = text.trim();
+  if (mediaRefs.length === 0) return trimmed;
+  return trimmed ? `${trimmed}\n\n${mediaRefs.join("\n")}` : mediaRefs.join("\n");
+}
+
 async function buildBodyForAgentWithAttachments(text: string, attachmentIds: string[]): Promise<string> {
   if (attachmentIds.length === 0) return text.trim();
 
@@ -376,8 +386,7 @@ async function buildBodyForAgentWithAttachments(text: string, attachmentIds: str
     }
   }
 
-  if (mediaRefs.length === 0) return text.trim();
-  return `${text.trim()}\n\n${mediaRefs.join("\n")}`;
+  return composeBodyWithMediaRefs(text, mediaRefs);
 }
 
 export async function handleMessages(req: IncomingMessage, res: ServerResponse): Promise<boolean> {
@@ -428,15 +437,18 @@ export async function handleMessages(req: IncomingMessage, res: ServerResponse):
     return true;
   }
 
-  if (!text || !text.trim()) {
-    log("BAD_REQUEST", normalizedDeviceId, undefined, "missing text", "warn");
+  // 允许"只发附件、不发文本"：text 与 attachments 不能同时为空，但任一非空即放行。
+  const hasText = Boolean(text && text.trim());
+  const hasAttachments = Array.isArray(attachments) && attachments.length > 0;
+  if (!hasText && !hasAttachments) {
+    log("BAD_REQUEST", normalizedDeviceId, undefined, "missing text and attachments", "warn");
     res.statusCode = 400;
     res.setHeader("Content-Type", "application/json");
-    res.end(JSON.stringify({ error: "Missing required field: text" }));
+    res.end(JSON.stringify({ error: "Missing required field: text or attachments" }));
     return true;
   }
 
-  const trimmedText = text.trim();
+  const trimmedText = (text ?? "").trim();
   touchFridayInbound();
 
   const isSlashCommand = trimmedText.startsWith("/");
@@ -492,7 +504,7 @@ export async function handleMessages(req: IncomingMessage, res: ServerResponse):
   sseEmitter.trackDeviceForRun(normalizedDeviceId, runId);
   registerRunRoute({ runId, deviceId: normalizedDeviceId, sessionKey: baseSessionKey });
 
-  const bodyForAgent = await buildBodyForAgentWithAttachments(text, attachments);
+  const bodyForAgent = await buildBodyForAgentWithAttachments(trimmedText, attachments);
 
   const msgContext = {
     Body: trimmedText,

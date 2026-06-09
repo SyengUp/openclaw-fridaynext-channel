@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { EventEmitter } from "node:events";
 import { PassThrough } from "node:stream";
 import type { IncomingMessage, ServerResponse } from "node:http";
-import { handleMessages } from "./messages.js";
+import { handleMessages, composeBodyWithMediaRefs } from "./messages.js";
 import { clearFridayNextRuntime, setFridayNextRuntime } from "../../runtime.js";
 import {
   __resetMockFridayDispatchForTests,
@@ -22,6 +22,24 @@ class MockRes extends EventEmitter {
     this.emit("finish");
   }
 }
+
+describe("composeBodyWithMediaRefs", () => {
+  it("returns trimmed text alone when no media refs", () => {
+    expect(composeBodyWithMediaRefs("  hi  ", [])).toBe("hi");
+  });
+
+  it("joins text and media refs with a blank line", () => {
+    expect(composeBodyWithMediaRefs("hi", ["[media attached: file:///a]"])).toBe(
+      "hi\n\n[media attached: file:///a]",
+    );
+  });
+
+  it("omits the leading blank line when text is empty (attachment-only)", () => {
+    expect(composeBodyWithMediaRefs("", ["[media attached: file:///a]", "[media attached: file:///b]"])).toBe(
+      "[media attached: file:///a]\n[media attached: file:///b]",
+    );
+  });
+});
 
 describe("handleMessages dispatch context (owner fields)", () => {
   afterEach(() => {
@@ -68,6 +86,62 @@ describe("handleMessages dispatch context (owner fields)", () => {
     expect(capturedCtx!.SenderId).toBe(want);
     expect(capturedCtx!.OwnerAllowFrom).toEqual([want]);
     expect(capturedCtx!.From).toBe(want);
+  });
+
+  it("accepts attachment-only messages (empty text + attachments) and dispatches", async () => {
+    setFridayNextRuntime({
+      config: { loadConfig: () => ({ gateway: { auth: { token: "tok" } }, channels: {} }) },
+    } as never);
+
+    let dispatched = false;
+    const dispatchCalled = new Promise<void>((resolve) => {
+      __setMockFridayDispatchForTests(() => {
+        dispatched = true;
+        resolve();
+        return Promise.resolve();
+      });
+    });
+
+    const req = new PassThrough() as unknown as IncomingMessage;
+    req.method = "POST";
+    req.headers = { authorization: "Bearer tok" };
+    const res = new MockRes() as unknown as ServerResponse;
+    const p = handleMessages(req, res);
+
+    req.end(
+      JSON.stringify({
+        deviceId: "AA11",
+        text: "",
+        attachments: ["att-1"],
+        sessionKey: "default",
+      }),
+    );
+
+    await p;
+    await dispatchCalled;
+
+    expect((res as unknown as MockRes).statusCode).toBe(202);
+    expect(dispatched).toBe(true);
+  });
+
+  it("rejects messages with neither text nor attachments", async () => {
+    setFridayNextRuntime({
+      config: { loadConfig: () => ({ gateway: { auth: { token: "tok" } }, channels: {} }) },
+    } as never);
+
+    const req = new PassThrough() as unknown as IncomingMessage;
+    req.method = "POST";
+    req.headers = { authorization: "Bearer tok" };
+    const res = new MockRes() as unknown as ServerResponse;
+    const p = handleMessages(req, res);
+
+    req.end(
+      JSON.stringify({ deviceId: "AA11", text: "   ", attachments: [], sessionKey: "default" }),
+    );
+
+    await p;
+
+    expect((res as unknown as MockRes).statusCode).toBe(400);
   });
 
   it("adds fridayNext mediaKind metadata for audio deliver payload", async () => {
