@@ -125,9 +125,13 @@ function readAgentSessions(agentId: string): FridayHistorySessionSummary[] {
     const entry = rawEntry as Record<string, unknown>;
     const canonicalKey = toCanonicalSessionKey(agentId, storeKey);
 
-    // Drop internal/system sessions and subagent links.
+    // Drop internal/system sessions and subagent links. We key only on
+    // `spawnedBy`/`subagentRole` (plus the `subagent:` prefix in
+    // isInternalSessionKey) — NOT on `parentSessionKey`, which real user
+    // conversations (e.g. webchat sessions branched off another session) also
+    // carry and which would otherwise be wrongly excluded from the sidebar.
     if (isInternalSessionKey(canonicalKey, storeKey)) continue;
-    if (entry.spawnedBy || entry.subagentRole || entry.parentSessionKey) continue;
+    if (entry.spawnedBy || entry.subagentRole) continue;
     // Drop archived/empty sessions (transcript moved away or never written).
     if (!hasLiveTranscript(entry, storePath)) continue;
 

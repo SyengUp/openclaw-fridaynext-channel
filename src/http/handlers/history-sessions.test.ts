@@ -143,4 +143,34 @@ describe("handleHistorySessions", () => {
     const keys = JSON.parse(res.body).sessions.map((s: any) => s.sessionKey);
     expect(keys).toEqual(["agent:main:main"]);
   });
+
+  it("keeps real conversations that merely carry a parentSessionKey", async () => {
+    setForward(
+      { agents: { list: [{ id: "main" }] } },
+      {
+        main: {
+          // Webchat session branched off another session: has parentSessionKey
+          // but is a genuine user conversation — must be surfaced.
+          "agent:main:dashboard:b91ad945": {
+            sessionId: "wc",
+            updatedAt: 9,
+            parentSessionKey: "agent:main:fridaynext:mq5zn7dp",
+            sessionFile: transcript("wc.jsonl"),
+          },
+          // Real subagent fork (spawnedBy) must still be filtered.
+          "agent:main:fork": {
+            sessionId: "fk",
+            updatedAt: 8,
+            spawnedBy: "agent:main:main",
+            parentSessionKey: "agent:main:main",
+            sessionFile: transcript("fk.jsonl"),
+          },
+        },
+      },
+    );
+    const res = new MockRes();
+    await handleHistorySessions(makeReq(AUTH), res as any);
+    const keys = JSON.parse(res.body).sessions.map((s: any) => s.sessionKey);
+    expect(keys).toEqual(["agent:main:dashboard:b91ad945"]);
+  });
 });
