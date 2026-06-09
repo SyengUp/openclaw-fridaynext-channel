@@ -11,6 +11,7 @@
  */
 
 import type { IncomingMessage, ServerResponse } from "node:http";
+import { fileURLToPath } from "node:url";
 import { getFridayNextRuntime } from "../../runtime.js";
 import { extractBearerToken } from "../middleware/auth.js";
 import { normalizeHistoryMessages } from "../../history/normalize-message.js";
@@ -27,6 +28,26 @@ type SubagentSessionApi = {
     limit?: number;
   }) => Promise<{ messages?: unknown[] }>;
 };
+
+/**
+ * For an `images[].url` produced from a `[media attached: …]` marker: returns the
+ * server-local filesystem path to resolve (`file://…` or a bare absolute path), or
+ * null to leave the image untouched. Already-served `/friday-next/files/…` URLs and
+ * remote `http(s)://` / `data:` URLs are NOT local paths — never feed them to
+ * `resolveMediaAttachment` (it would mis-treat them as paths and break valid URLs).
+ */
+function serverLocalPathForImageUrl(url: string): string | null {
+  if (url.startsWith("file://")) {
+    try {
+      return fileURLToPath(url);
+    } catch {
+      return url.slice("file://".length);
+    }
+  }
+  if (url.startsWith("/friday-next/files/")) return null;
+  if (url.startsWith("/")) return url;
+  return null;
+}
 
 function resolveSubagentApi(): SubagentSessionApi | undefined {
   try {
@@ -95,15 +116,32 @@ export async function handleHistoryMessages(
   // (copies the file into the plugin's attachments/ dir — the same mechanism the
   // live deliver path uses), then drop the raw paths from the wire.
   for (const message of messages) {
-    if (!message.mediaPaths?.length) continue;
-    const resolved = message.mediaPaths
-      .map((p) => resolveMediaAttachment(p))
-      .filter((r): r is NonNullable<typeof r> => Boolean(r))
-      .map((r) => ({ url: r.url, filename: r.fileName }));
-    if (resolved.length) {
-      message.images = [...(message.images ?? []), ...resolved];
+    if (message.mediaPaths?.length) {
+      const resolved = message.mediaPaths
+        .map((p) => resolveMediaAttachment(p))
+        .filter((r): r is NonNullable<typeof r> => Boolean(r))
+        .map((r) => ({ url: r.url, filename: r.fileName }));
+      if (resolved.length) {
+        message.images = [...(message.images ?? []), ...resolved];
+      }
+      delete message.mediaPaths;
     }
-    delete message.mediaPaths;
+
+    // User attachments arrive as `[media attached: file://<server-path>]` markers,
+    // which normalize-message extracts into images[].url as a RAW server-local path.
+    // Unlike MEDIA: paths (resolved above), these were never copied into the file
+    // store, so the app would try to load a path that only exists on the gateway host
+    // and the attachment bubble is lost on history sync. Resolve them the same way.
+    if (message.images?.length) {
+      message.images = message.images.map((img) => {
+        if (!img.url || img.data) return img;
+        const local = serverLocalPathForImageUrl(img.url);
+        if (!local) return img;
+        const resolved = resolveMediaAttachment(local);
+        if (!resolved) return img;
+        return { ...img, url: resolved.url, filename: img.filename ?? resolved.fileName };
+      });
+    }
   }
 
   const sessionId = resolveSessionId(sessionKey);

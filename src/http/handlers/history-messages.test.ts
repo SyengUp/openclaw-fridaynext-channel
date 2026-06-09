@@ -170,6 +170,39 @@ describe("handleHistoryMessages", () => {
     expect(body.messages[0].text).toBe("from app");
   });
 
+  it("resolves user [media attached: file://] markers into downloadable /friday-next/files URLs", async () => {
+    // The server-local source the marker points at (only exists on the gateway host).
+    const srcDir = fs.mkdtempSync(path.join(os.tmpdir(), "friday-inbound-"));
+    const srcFile = path.join(srcDir, "ce1ff405-28ad-48b9-b4a7-4f2228d77649.jpg");
+    fs.writeFileSync(srcFile, Buffer.from([0xff, 0xd8, 0xff, 0xe0, 0x00, 0x10]));
+    const file = writeTranscript("media.jsonl", [
+      {
+        type: "message",
+        id: "u1",
+        message: {
+          role: "user",
+          content: `你见过这个可乐吗？\n\n[media attached: file://${srcFile}]`,
+        },
+      },
+    ]);
+    setForward({ "agent:main:main": { sessionId: "s", sessionFile: file } });
+
+    const res = new MockRes();
+    await handleHistoryMessages(
+      makeReq("/friday-next/history/messages?sessionKey=agent:main:main", AUTH),
+      res as any,
+    );
+    expect(res.statusCode).toBe(200);
+    const body = JSON.parse(res.body);
+    const userMsg = body.messages.find((m: any) => m.role === "user");
+    expect(userMsg.images?.length).toBe(1);
+    // The raw server-local file:// path must be resolved to a gateway-served URL the
+    // app can actually download — otherwise the attachment bubble is lost on history sync.
+    expect(userMsg.images[0].url.startsWith("file://")).toBe(false);
+    expect(userMsg.images[0].url.startsWith("/friday-next/files/")).toBe(true);
+    fs.rmSync(srcDir, { recursive: true, force: true });
+  });
+
   it("falls back to getSessionMessages when the transcript is not on disk", async () => {
     setForward({}); // no entry → disk read yields nothing
     setRuntime(async () => ({
