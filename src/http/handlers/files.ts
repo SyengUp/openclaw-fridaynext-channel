@@ -328,6 +328,7 @@ export function guessMimeType(filename: string): string {
     ".jpeg": "image/jpeg",
     ".gif": "image/gif",
     ".webp": "image/webp",
+    ".ico": "image/x-icon",
     ".heic": "image/heic",
     ".pdf": "application/pdf",
     ".mp4": "video/mp4",
