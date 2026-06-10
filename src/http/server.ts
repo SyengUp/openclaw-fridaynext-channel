@@ -20,6 +20,7 @@ import { handleHistorySessions } from "./handlers/history-sessions.js";
 import { handleHistoryMessages } from "./handlers/history-messages.js";
 import { handleHistorySetTitle } from "./handlers/history-set-title.js";
 import { handleStatus } from "./handlers/status.js";
+import { handleLinkPreview } from "./handlers/link-preview.js";
 import { handleHealth } from "./handlers/health.js";
 import { handlePluginInfo } from "./handlers/plugin-info.js";
 import { handlePluginUpgrade } from "./handlers/plugin-upgrade.js";
@@ -104,6 +105,11 @@ async function handleFridayNextRoute(
   // Route: PUT /friday-next/sessions/title (sync app session name → server displayName)
   if ((req.method === "PUT" || req.method === "POST") && pathname === "/friday-next/sessions/title") {
     return await handleHistorySetTitle(req, res);
+  }
+
+  // Route: GET /friday-next/link-preview?url=... (Open Graph metadata for preview cards)
+  if (req.method === "GET" && pathname === "/friday-next/link-preview") {
+    return await handleLinkPreview(req, res);
   }
 
   // Route: GET /friday-next/health?deviceId=...&nodeDeviceId=...&selfHeal=true
