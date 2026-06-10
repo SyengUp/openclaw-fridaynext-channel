@@ -10,10 +10,33 @@ import { PLUGIN_ID, PLUGIN_PACKAGE_NAME } from "./version.js";
 export type InstallSource = "npm" | "path" | "archive" | "clawhub" | "git" | "marketplace" | "unknown";
 
 /**
- * Read the install source for this plugin from the live config snapshot.
- * Returns "unknown" when the record can't be resolved (e.g. runtime not captured).
- * Only "npm" is auto-upgradable; "path" means a dev (load.paths) install which must
- * never be npm-upgraded (would duplicate-install and break agent media sends).
+ * Infer the install source from the loaded plugin's filesystem path (`api.source`).
+ *
+ * OpenClaw copies non-dev installs (npm/archive/clawhub/git) into
+ * `~/.openclaw/npm/projects/<hash>/node_modules/...`, whereas a dev install
+ * (`load.paths` / `plugins install --link`) is loaded directly from the source
+ * checkout. For this plugin's purposes the only distinction that matters is
+ * npm-managed (auto-upgradable) vs dev (must never npm-upgrade — see
+ * dev-no-duplicate-plugin-install), so anything under the managed projects dir
+ * is treated as "npm".
+ */
+export function classifyInstallSourceFromLoadedPath(loadedPath: string | null | undefined): InstallSource {
+  if (!loadedPath) return "unknown";
+  return loadedPath.includes("/.openclaw/npm/projects/") ? "npm" : "path";
+}
+
+/**
+ * Resolve the install source for this plugin (npm vs dev path).
+ * Returns "unknown" when it can't be resolved (e.g. runtime not captured).
+ * Only "npm" is auto-upgradable; "path" means a dev (load.paths / --link) install
+ * which must never be npm-upgraded (would duplicate-install and break agent media sends).
+ *
+ * Resolution order:
+ *  1. The explicit `plugins.installs[<id>].source` config record — present on older
+ *     OpenClaw builds that surface install records in the runtime config snapshot.
+ *  2. Fallback: OpenClaw 2026.6.x moved install records out of the config snapshot
+ *     into a separate registry (~/.openclaw/state.db), leaving `plugins.installs`
+ *     unset — so infer from the loaded plugin path (`api.source`) instead.
  */
 export function getInstallSource(): InstallSource {
   const rt = getUpgradeRuntime();
@@ -33,10 +56,10 @@ export function getInstallSource(): InstallSource {
     ) {
       return source;
     }
-    return "unknown";
   } catch {
-    return "unknown";
+    // fall through to the path-based heuristic
   }
+  return classifyInstallSourceFromLoadedPath(rt.pluginSource);
 }
 
 /** Compare dotted numeric versions. Returns true if `a` is strictly greater than `b`. */

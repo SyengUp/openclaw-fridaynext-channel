@@ -30,6 +30,12 @@ export type UpgradeRuntime = {
     afterWrite: ConfigAfterWrite;
     mutate: (draft: unknown) => unknown | void;
   }) => Promise<unknown>;
+  /**
+   * Filesystem path of THIS loaded plugin (`api.source`). Used to infer the install
+   * source (npm vs dev) on OpenClaw builds (2026.6.x+) that no longer surface
+   * `plugins.installs` in the config snapshot. See `getInstallSource`.
+   */
+  pluginSource: string | undefined;
 };
 
 let upgradeRuntime: UpgradeRuntime | null = null;
@@ -56,6 +62,7 @@ export function setUpgradeRuntime(api: OpenClawPluginApi): void {
       if (!mutate) throw new Error("runtime.config.mutateConfigFile unavailable");
       return mutate(params);
     },
+    pluginSource: typeof api.source === "string" ? api.source : undefined,
   };
 }
 
