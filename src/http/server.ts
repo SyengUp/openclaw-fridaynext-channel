@@ -21,6 +21,8 @@ import { handleHistoryMessages } from "./handlers/history-messages.js";
 import { handleHistorySetTitle } from "./handlers/history-set-title.js";
 import { handleStatus } from "./handlers/status.js";
 import { handleHealth } from "./handlers/health.js";
+import { handlePluginInfo } from "./handlers/plugin-info.js";
+import { handlePluginUpgrade } from "./handlers/plugin-upgrade.js";
 import { applyCorsHeaders } from "./middleware/cors.js";
 import { resolveFridayNextConfig } from "../config.js";
 import { getHostOpenClawConfigSnapshot } from "../host-config.js";
@@ -107,6 +109,16 @@ async function handleFridayNextRoute(
   // Route: GET /friday-next/health?deviceId=...&nodeDeviceId=...&selfHeal=true
   if (req.method === "GET" && pathname === "/friday-next/health") {
     return await handleHealth(req, res);
+  }
+
+  // Route: GET /friday-next/plugin/info (current/latest version + upgradability)
+  if (req.method === "GET" && pathname === "/friday-next/plugin/info") {
+    return await handlePluginInfo(req, res);
+  }
+
+  // Route: POST /friday-next/plugin/upgrade (npm install @latest + safe gateway restart)
+  if (req.method === "POST" && pathname === "/friday-next/plugin/upgrade") {
+    return await handlePluginUpgrade(req, res);
   }
 
   // Not found

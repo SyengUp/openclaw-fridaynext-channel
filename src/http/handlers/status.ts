@@ -2,6 +2,7 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import { getActiveRunIds } from "../../agent/active-runs.js";
 import { sseEmitter } from "../../sse/emitter.js";
 import { extractBearerToken } from "../middleware/auth.js";
+import { PLUGIN_VERSION } from "../../version.js";
 
 export async function handleStatus(req: IncomingMessage, res: ServerResponse): Promise<boolean> {
   if (req.method !== "GET") {
@@ -24,6 +25,7 @@ export async function handleStatus(req: IncomingMessage, res: ServerResponse): P
       ok: true,
       channel: "friday-next",
       version: "v2",
+      pluginVersion: PLUGIN_VERSION,
       connections: sseEmitter.getConnectionCount(),
       activeRuns,
       activeRunCount: activeRuns.length,

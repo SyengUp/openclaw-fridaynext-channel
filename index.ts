@@ -15,6 +15,7 @@ import {
   resolveFridayDeviceIdForSessionKey,
 } from "./src/friday-session.js";
 import { setFridayAgentForwardRuntime } from "./src/agent-forward-runtime.js";
+import { setUpgradeRuntime } from "./src/upgrade-runtime.js";
 import { getOpenClawAgentRunContext } from "./src/agent-run-context-bridge.js";
 import { accumulateRunUsage } from "./src/agent/run-usage-accumulator.js";
 import { createFridayNextLogger } from "./src/logging.js";
@@ -86,6 +87,7 @@ export default defineChannelPluginEntry({
   setRuntime: setFridayNextRuntime,
   registerFull: (api: OpenClawPluginApi) => {
     setFridayAgentForwardRuntime(api);
+    setUpgradeRuntime(api);
     const sameApi = lastApiRoutesRegistered?.deref() === api;
     if (!sameApi) {
       lastApiRoutesRegistered = new WeakRef(api);

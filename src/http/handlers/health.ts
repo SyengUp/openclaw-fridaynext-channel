@@ -2,6 +2,7 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import { extractBearerToken } from "../middleware/auth.js";
 import { loadNodePairingModule } from "../../agent/node-pairing-bridge.js";
 import { createFridayNextLogger } from "../../logging.js";
+import { PLUGIN_VERSION } from "../../version.js";
 
 const REQUIRED_NODE_CAPS = ["location", "canvas"];
 const REQUIRED_NODE_COMMANDS = [
@@ -34,6 +35,7 @@ export interface HealthCheckResult {
   timestamp: number;
   deviceId: string;
   nodeDeviceId: string;
+  pluginVersion: string;
   nodePairing?: HealthComponentStatus;
   repairActions?: RepairAction[];
 }
@@ -64,6 +66,7 @@ export async function handleHealth(req: IncomingMessage, res: ServerResponse): P
     timestamp: Date.now(),
     deviceId,
     nodeDeviceId,
+    pluginVersion: PLUGIN_VERSION,
   };
 
   const log = createFridayNextLogger("health");

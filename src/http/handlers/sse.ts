@@ -4,6 +4,7 @@ import { getHostOpenClawConfigSnapshot } from "../../host-config.js";
 import { getFridayNextRuntime } from "../../runtime.js";
 import { sseEmitter } from "../../sse/emitter.js";
 import { extractBearerToken } from "../middleware/auth.js";
+import { PLUGIN_VERSION } from "../../version.js";
 
 function parseLastEventId(req: IncomingMessage, url: URL): number {
   const query = Number.parseInt(url.searchParams.get("lastEventId") ?? "", 10);
@@ -56,6 +57,7 @@ export async function handleSseStream(req: IncomingMessage, res: ServerResponse)
         deviceId: normalized,
         serverTime: Date.now(),
         lastSeq,
+        pluginVersion: PLUGIN_VERSION,
       },
     },
     deviceId,
