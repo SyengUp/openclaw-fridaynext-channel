@@ -8,9 +8,9 @@ import {
 } from "../../session/session-manager.js";
 import { readJsonBody } from "../middleware/body.js";
 import { extractBearerToken } from "../middleware/auth.js";
+import { resolveModelThinkingForRef } from "../../thinking-levels.js";
 
 const VALID_REASONING = new Set(["on", "off", "stream"]);
-const VALID_THINKING = new Set(["off", "minimal", "low", "medium", "high"]);
 
 export async function handleSessionsSettings(
   req: IncomingMessage,
@@ -61,12 +61,25 @@ export async function handleSessionsSettings(
   const thinkingLevel = typeof body?.thinkingLevel === "string" ? body.thinkingLevel : undefined;
   const modelRef = typeof body?.modelRef === "string" ? body.modelRef.trim() : undefined;
 
+  // The app omits (or empties) modelRef to mean "use the agent's default model". Resolve that
+  // default and write it as an *explicit* override, identical in shape to any other selection — so
+  // the agent runs the default exactly the way it runs an explicitly-picked model. Do NOT just
+  // clear the override here: the session entry is shared with the OpenClaw core, which stamps it
+  // with provenance fields (`modelOverrideSource`, `model`, `modelProvider`); deleting only our
+  // three fields leaves those dangling and the core mis-resolves to a fallback model.
+  const effectiveModelRef = modelRef || resolveAgentDefaults(sessionKey).model;
+
   const errors: string[] = [];
   if (reasoningLevel !== undefined && !VALID_REASONING.has(reasoningLevel)) {
     errors.push(`reasoningLevel must be one of: ${[...VALID_REASONING].join(", ")}`);
   }
-  if (thinkingLevel !== undefined && !VALID_THINKING.has(thinkingLevel)) {
-    errors.push(`thinkingLevel must be one of: ${[...VALID_THINKING].join(", ")}`);
+  if (thinkingLevel !== undefined) {
+    // Thinking levels vary per model, so validate against the levels the *effective* model supports
+    // (resolved from the running gateway). Falls back to the base five levels when unresolvable.
+    const supported = resolveModelThinkingForRef(effectiveModelRef).levels.map((l) => l.id);
+    if (!supported.includes(thinkingLevel)) {
+      errors.push(`thinkingLevel must be one of: ${supported.join(", ")}`);
+    }
   }
 
   if (errors.length > 0) {
@@ -75,14 +88,6 @@ export async function handleSessionsSettings(
     res.end(JSON.stringify({ error: errors.join("; ") }));
     return true;
   }
-
-  // The app omits (or empties) modelRef to mean "use the agent's default model". Resolve that
-  // default and write it as an *explicit* override, identical in shape to any other selection — so
-  // the agent runs the default exactly the way it runs an explicitly-picked model. Do NOT just
-  // clear the override here: the session entry is shared with the OpenClaw core, which stamps it
-  // with provenance fields (`modelOverrideSource`, `model`, `modelProvider`); deleting only our
-  // three fields leaves those dangling and the core mis-resolves to a fallback model.
-  const effectiveModelRef = modelRef || resolveAgentDefaults(sessionKey).model;
 
   const settings: FridaySessionSettingsUpdate = { reasoningLevel, thinkingLevel };
   if (effectiveModelRef) {

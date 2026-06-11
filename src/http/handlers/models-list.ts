@@ -1,6 +1,7 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { getFridayAgentForwardRuntime } from "../../agent-forward-runtime.js";
 import { splitModelRef } from "../../session/session-manager.js";
+import { resolveModelThinking, type ThinkingLevelOption } from "../../thinking-levels.js";
 import { extractBearerToken } from "../middleware/auth.js";
 
 export interface FridayModelEntry {
@@ -10,6 +11,10 @@ export interface FridayModelEntry {
   reasoning?: boolean;
   contextWindow?: number;
   maxTokens?: number;
+  /** Thinking levels this model supports (varies per model). Omitted when only the base set applies. */
+  thinkingLevels?: ThinkingLevelOption[];
+  /** Provider/model default thinking level, when the gateway reports one. */
+  thinkingDefault?: string;
 }
 
 interface ResolvedModels {
@@ -87,6 +92,13 @@ function resolveConfiguredModels(): ResolvedModels {
       contextWindow: meta?.contextWindow,
       maxTokens: meta?.maxTokens,
     });
+  }
+
+  for (const entry of entries) {
+    const split = splitModelRef(entry.id);
+    const thinking = resolveModelThinking(entry.provider || split.provider, split.modelId);
+    entry.thinkingLevels = thinking.levels;
+    if (thinking.default) entry.thinkingDefault = thinking.default;
   }
 
   return { models: entries, defaultModel };

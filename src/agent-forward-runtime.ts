@@ -16,6 +16,15 @@ export type FridayAgentForwardRuntime = {
   }) => Promise<Record<string, unknown> | null>;
   /** Resolves an agent's workspace dir — used to read IDENTITY.md for the name fallback. */
   resolveAgentWorkspaceDir?: (cfg: unknown, agentId: string) => string;
+  /**
+   * Resolves the thinking-level options + default for a provider/model pair, driven by the running
+   * gateway's provider plugins + model catalog (so the option set varies per model). Optional: older
+   * gateways don't expose it, in which case callers fall back to the base five levels.
+   */
+  resolveThinkingPolicy?: (params: { provider?: string | null; model?: string | null }) => {
+    levels: Array<{ id: string; label: string }>;
+    defaultLevel?: string | null;
+  };
   getConfig: () => unknown;
 };
 
@@ -30,6 +39,8 @@ export function setFridayAgentForwardRuntime(api: OpenClawPluginApi): void {
       .updateSessionStoreEntry as FridayAgentForwardRuntime["updateSessionStoreEntry"],
     resolveAgentWorkspaceDir: (api.runtime.agent as Record<string, unknown>)
       .resolveAgentWorkspaceDir as FridayAgentForwardRuntime["resolveAgentWorkspaceDir"],
+    resolveThinkingPolicy: (api.runtime.agent as Record<string, unknown>)
+      .resolveThinkingPolicy as FridayAgentForwardRuntime["resolveThinkingPolicy"],
     getConfig: () => api.runtime.config.current(),
   };
 }
