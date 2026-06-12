@@ -57,10 +57,17 @@ iOS App ←--HTTP/SSE--→ Friday Plugin ←--OpenClaw Plugin API--→ Gateway +
    - `PUT|GET /friday-next/sessions/settings` — read/write session settings (`handleSessionsSettings`)
    - `GET /friday-next/models` — list available models (`handleModelsList`)
    - `GET /friday-next/agents` — list configured agents (`handleAgentsList`); returns `{ ok, agents, defaultAgentId }` where each agent has `id`/`name`/`description`/`model`/`thinkingDefault`/`isDefault`/`emoji`/`avatar`. Reads `cfg.agents.list` directly from the runtime config (same pattern as models-list, not via gateway dispatch); falls back to a single implicit `main` agent when none are configured.
+   - `GET|PUT /friday-next/agents/{id}/config` — read/edit one agent's config (`handleAgentConfig`): `model`/`thinkingDefault`/`tools`/`skills` + discovered `availableSkills`. PUT is a partial patch (explicit `null` clears a field → inherits `agents.defaults`); writes via `api.runtime.config.mutateConfigFile` (`afterWrite: { mode: "auto" }`, in-place draft mutation → hot-reload). Implicit `main` with no list entry gets a bare `{id}` created (never `default: true`).
+   - `GET /friday-next/agents/{id}/files` · `GET|PUT /friday-next/agents/{id}/files/{name}` — list/read/write the agent's whitelisted core `.md` workspace files (`handleAgentFiles`): `AGENTS/IDENTITY/SOUL/TOOLS/MEMORY/USER/HEARTBEAT/BOOTSTRAP.md`. Direct fs write into `resolveAgentWorkspaceDir(cfg, id)` (main → workspace root; others → `workspace/agents/{id}`), traversal-guarded, 256 KiB cap, no restart.
+   - `GET /friday-next/agents/{id}/tools/catalog` — full tool catalog for the toolbox editor (`handleAgentToolsCatalog`): core + plugin tools grouped by category, with descriptions, the 4 profiles (minimal/coding/messaging/full), and per-tool `enabled`/`inProfile`. Built from core's `buildToolsCatalogResult`.
    - `GET /friday-next/status` — active runs + connection count (`handleStatus`)
    - `GET /friday-next/health` — node-pairing health + optional self-heal (`handleHealth`; query: `deviceId`, `nodeDeviceId`, `selfHeal`)
+   - `GET /friday-next/history/sessions` · `GET /friday-next/history/messages` · `PUT|POST /friday-next/sessions/title` — history sync (list sessions across agents, read a session's messages, sync app title → server `displayName`).
+   - `GET /friday-next/link-preview?url=...` — Open Graph metadata for link-preview cards.
+   - `GET /friday-next/plugin/info` · `POST /friday-next/plugin/upgrade` — self-version report + in-process npm upgrade & safe restart (npm installs only; dev/`--link` installs return 409).
+   - `POST /friday-next/device-approve` · `POST /friday-next/nodes-approve` — device/node pairing approval.
 
-   The single registered route (`path: "/friday-next"`, `match: "prefix"`, `auth: "plugin"`) is dispatched by `handleFridayNextRoute` via method+pathname checks; the plugin does its own bearer auth.
+   The single registered route (`path: "/friday-next"`, `match: "prefix"`, `auth: "plugin"`) is dispatched by `handleFridayNextRoute` via method+pathname checks; the plugin does its own bearer auth. The `/friday-next/agents/{id}/...` subpaths are parsed segment-wise in `server.ts`.
 4. **`src/sse/emitter.ts`** — Singleton `sseEmitter`: connections, per-device monotonic SSE ids, `broadcast` / `broadcastToRun` / `broadcastToolEvent`, integrates **`src/sse/offline-queue.ts`** (JSONL writes before socket write; `connected` events are NOT persisted).
 5. **`src/friday-session.ts`** — `deviceId` ↔ `sessionKey` mapping (multiple lookup tables for different key forms); **`forwardAgentEventRaw`** handles:
    - **Thinking delta rewriting** — OpenClaw sends cumulative `data.text` for `stream: "thinking"`; this module computes true incremental `delta` by tracking per-run last-seen text and emitting only the suffix.
@@ -90,6 +97,16 @@ iOS App ←--HTTP/SSE--→ Friday Plugin ←--OpenClaw Plugin API--→ Gateway +
 - **`src/openclaw.d.ts`** — Ambient module declarations for `openclaw/plugin-sdk/*` imports (avoids depending on the full SDK type bundle).
 - **`src/collect-message-media-paths.ts`** — Extracts local filesystem paths (`/Users/.../file.ext`, `mediaUrl`, `filePath`, `audioPath`) from tool result JSON/strings. Used by outbound media delivery to resolve agent-generated files.
 - **`openclaw.plugin.json`** — Plugin manifest declaring channel metadata, config schema (auth token, CORS, SSE keepalive/backlog), UI hints (sensitive fields), and env vars (`FRIDAY_NEXT_AUTH_TOKEN`).
+
+### Agent config editing (`/friday-next/agents/{id}/…`)
+
+Lets the app edit a single agent the way ControlUI does — model / core files / tool permissions / skills — entirely through the plugin's own config + workspace access, **zero OpenClaw core changes** (config edits land in `agents.list[]` via `mutateConfigFile`; files write straight to the workspace).
+
+- **`src/agent-id.ts`** — shared `normalizeAgentId` (mirrors core's session-key agent-id rule); used by `agents-list`, the config/files/tools handlers, and discovery. Empty → `main`.
+- **`src/http/handlers/agent-config.ts`** — `GET|PUT …/config`. Reads the `agents.list[]` entry; PUT applies a partial patch (null = delete key). Writes go through `getUpgradeRuntime().mutateConfigFile`.
+- **`src/http/handlers/agent-files.ts`** — `GET|PUT …/files[/{name}]`. Whitelisted core `.md` files via `resolveAgentWorkspaceDir` + Node fs.
+- **`src/skills-discovery.ts`** — `discoverAvailableSkills(cfg, agentId)` returns `{ id, source, description }[]` by **scanning the same dirs core scans** (core's skill-discovery is only in hash chunks, not a stable plugin-sdk export — but skills are directory data, so we scan instead of deep-import). Sources: `workspace` (agent + shared default-agent `skills/`), `installed` (`<configDir>/skills`), `extra` (enabled-extension `dist/extensions/<ext>/skills` + `skills.load.extraDirs`), `built-in` (`<openclaw>/skills`). id = `SKILL.md` frontmatter `name` (recursive). Extension skills gated by `enabledExtensionNames` (= `plugins.allow` ∪ `entries.enabled`) to match ControlUI. Also exports `resolveOpenClawRoot` (shared with tool-catalog).
+- **`src/tool-catalog.ts`** + **`src/http/handlers/agent-tools-catalog.ts`** — `GET …/tools/catalog`. The tool catalog is **code, not scannable data**, so this **resilient-deep-imports** core's `buildToolsCatalogResult` (scan `<openclaw>/dist/*.js` for the chunk defining it → dynamic `import()` hits the gateway's already-loaded module instance, no side effects → cache; degrade to 503 on failure). Per-tool `enabled`/`inProfile` are resolved here from the agent's `tools` config so the app renders simple toggles and computes the allow/deny delta.
 
 ## SSE event names
 
