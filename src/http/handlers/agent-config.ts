@@ -22,7 +22,7 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import { getFridayAgentForwardRuntime } from "../../agent-forward-runtime.js";
 import { getUpgradeRuntime } from "../../upgrade-runtime.js";
 import { normalizeAgentId } from "../../agent-id.js";
-import { discoverAvailableSkills } from "../../skills-discovery.js";
+import { discoverAvailableSkills, type DiscoveredSkill } from "../../skills-discovery.js";
 import { extractBearerToken } from "../middleware/auth.js";
 import { readJsonBody } from "../middleware/body.js";
 import { createFridayNextLogger } from "../../logging.js";
@@ -50,8 +50,8 @@ interface AgentConfigView {
   tools?: AgentToolsConfig;
   /** Configured skills allow-list; undefined = inherit defaults, [] = all disabled. */
   skills?: string[];
-  /** Skill ids discovered in the agent's workspace `skills/` dir (best-effort). */
-  availableSkills: string[];
+  /** Full catalog of loadable skills (id + source category + description), best-effort. */
+  availableSkills: DiscoveredSkill[];
 }
 
 function readString(value: unknown): string | undefined {

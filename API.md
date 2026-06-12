@@ -391,7 +391,7 @@ Read and edit a single agent's configuration the same way OpenClaw's ControlUI d
 - `exists` — whether a matching `agents.list[]` entry exists (an implicit agent like `main` may have none yet).
 - `model` — verbatim config value: a string or `{ "primary", "fallbacks" }`. `undefined` ⇒ inherits `agents.defaults`.
 - `skills` — configured allow-list. `undefined` ⇒ inherit defaults; `[]` ⇒ all skills disabled.
-- `availableSkills` — full catalog of skill ids the agent can load (for a skills picker). Aggregates the agent's workspace `skills/`, the shared default-agent workspace, the managed dir, `skills.load.extraDirs`, and bundled core/extension skills; each id is the `SKILL.md` frontmatter `name` (recursively discovered). Excludes ClawHub-remote-only skills and eligibility flags.
+- `availableSkills` — full catalog of loadable skills (for a skills picker), each `{ id, source, description? }`. `source` is `"workspace" | "installed" | "extra" | "built-in"` (deduped by id, workspace wins). `id`/`description` come from the `SKILL.md` frontmatter `name`/`description` (recursively discovered). Aggregates the agent's workspace `skills/`, the shared default-agent workspace, the managed dir (`<configDir>/skills`), `skills.load.extraDirs`, and bundled core/extension skills. Excludes ClawHub-remote-only skills and eligibility flags.
 
 ### PUT /friday-next/agents/{id}/config
 

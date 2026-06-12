@@ -108,7 +108,7 @@ data: {"runId":"...","seq":1,"ts":...,"stream":"lifecycle","data":{"phase":"star
 
 ### GET /friday-next/agents/{id}/config
 
-返回可编辑字段：`exists`（是否存在 `agents.list[]` 条目，`main` 等隐式 agent 可能尚无）、`model`（字符串或 `{primary,fallbacks}`；`undefined`=继承 `agents.defaults`）、`thinkingDefault`、`tools`、`skills`（`undefined`=继承、`[]`=全禁）、`availableSkills`（agent 可加载技能的完整目录，供技能选择器用：聚合 agent workspace、共享默认 agent workspace、managed 目录、`skills.load.extraDirs` 与 bundled 核心/扩展技能；id 取 `SKILL.md` frontmatter 的 `name`，递归发现；不含 ClawHub 远端独有技能与可用性标记）。
+返回可编辑字段：`exists`（是否存在 `agents.list[]` 条目，`main` 等隐式 agent 可能尚无）、`model`（字符串或 `{primary,fallbacks}`；`undefined`=继承 `agents.defaults`）、`thinkingDefault`、`tools`、`skills`（`undefined`=继承、`[]`=全禁）、`availableSkills`（agent 可加载技能的完整目录，供技能选择器用，每项 `{ id, source, description? }`；`source` 为 `workspace|installed|extra|built-in`，按 id 去重 workspace 优先；`id`/`description` 取自 `SKILL.md` frontmatter 的 `name`/`description`，递归发现；聚合 agent workspace、共享默认 agent workspace、managed 目录(`<configDir>/skills`)、`skills.load.extraDirs` 与 bundled 核心/扩展技能；不含 ClawHub 远端独有技能与可用性标记）。
 
 ### PUT /friday-next/agents/{id}/config
 

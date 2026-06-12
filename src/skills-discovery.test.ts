@@ -2,7 +2,11 @@ import { describe, it, expect, afterEach } from "vitest";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { discoverAvailableSkills, resetOpenClawRootCacheForTest } from "./skills-discovery.js";
+import {
+  discoverAvailableSkills,
+  enabledExtensionNames,
+  resetOpenClawRootCacheForTest,
+} from "./skills-discovery.js";
 import {
   setFridayAgentForwardRuntime,
   resetFridayAgentForwardRuntimeForTest,
@@ -61,13 +65,16 @@ describe("discoverAvailableSkills", () => {
     };
     wire(configRoot, cfg);
 
-    expect(discoverAvailableSkills(cfg, "operator")).toEqual([
-      "alpha",
-      "beta",
-      "gamma",
-      "managed-one",
-      "opencli",
-    ]);
+    const result = discoverAvailableSkills(cfg, "operator");
+    expect(result.map((s) => s.id)).toEqual(["alpha", "beta", "gamma", "managed-one", "opencli"]);
+    const bySource = Object.fromEntries(result.map((s) => [s.id, s.source]));
+    expect(bySource).toEqual({
+      alpha: "workspace",
+      beta: "workspace",
+      opencli: "workspace",
+      "managed-one": "installed",
+      gamma: "extra",
+    });
   });
 
   it("ignores directories without SKILL.md", () => {
@@ -80,7 +87,7 @@ describe("discoverAvailableSkills", () => {
     const cfg = { agents: { list: [{ id: "main", default: true }] } };
     wire(configRoot, cfg);
 
-    expect(discoverAvailableSkills(cfg, "main")).toEqual(["real"]);
+    expect(discoverAvailableSkills(cfg, "main").map((s) => s.id)).toEqual(["real"]);
   });
 
   it("uses the SKILL.md frontmatter name over the dir name, and finds nested skills", () => {
@@ -102,11 +109,40 @@ describe("discoverAvailableSkills", () => {
     const cfg = { agents: { list: [{ id: "main", default: true }] } };
     wire(configRoot, cfg);
 
-    expect(discoverAvailableSkills(cfg, "main")).toEqual(["my-coffee", "self-improvement"]);
+    const result = discoverAvailableSkills(cfg, "main");
+    expect(result.map((s) => s.id)).toEqual(["my-coffee", "self-improvement"]);
+    expect(result.find((s) => s.id === "self-improvement")?.description).toBe("x");
   });
 
   it("returns [] without throwing when nothing is resolvable", () => {
     resetFridayAgentForwardRuntimeForTest();
     expect(discoverAvailableSkills({}, "main")).toEqual([]);
+  });
+});
+
+describe("enabledExtensionNames", () => {
+  it("unions plugins.allow with entries[name].enabled === true", () => {
+    const cfg = {
+      plugins: {
+        allow: ["browser", "canvas"],
+        entries: {
+          browser: { enabled: true },
+          telegram: { enabled: true },
+          tavily: { enabled: false },
+          "open-prose": {},
+        },
+      },
+    };
+    const names = enabledExtensionNames(cfg);
+    expect(names.has("browser")).toBe(true);
+    expect(names.has("canvas")).toBe(true);
+    expect(names.has("telegram")).toBe(true); // from entries.enabled
+    expect(names.has("tavily")).toBe(false); // enabled:false
+    expect(names.has("open-prose")).toBe(false); // no enabled flag
+  });
+
+  it("returns an empty set when plugins config is absent", () => {
+    expect(enabledExtensionNames({}).size).toBe(0);
+    expect(enabledExtensionNames(undefined).size).toBe(0);
   });
 });

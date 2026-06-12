@@ -197,7 +197,7 @@ describe("handleAgentConfig", () => {
       setRuntimes({ agents: { list: [{ id: "main" }] } }, workspace);
       const res = new MockRes();
       await handleAgentConfig(makeReq(AUTH), res as any, "main");
-      expect(JSON.parse(res.body).availableSkills).toEqual(["deep-research", "verify"]);
+      expect(JSON.parse(res.body).availableSkills.map((s: { id: string }) => s.id)).toEqual(["deep-research", "verify"]);
     } finally {
       fs.rmSync(workspace, { recursive: true, force: true });
     }

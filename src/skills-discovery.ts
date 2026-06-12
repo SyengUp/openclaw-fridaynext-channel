@@ -11,20 +11,23 @@
  * rather than an error. A skill is a sub-directory containing `SKILL.md` (the same
  * marker core's `loadSkillsFromDir` uses).
  *
- * Sources scanned (deduped by skill id):
- *  1. the agent's own workspace `skills/`
- *  2. the default agent's workspace `skills/`  (the shared root pool non-default
- *     agents also resolve from — e.g. operator inherits `opencli` from here)
- *  3. managed skills dir  (`<configDir>/skills`, sibling of the workspace)
- *  4. config `skills.load.extraDirs`
- *  5. bundled core skills  (`<openclaw>/skills`)
- *  6. bundled extension skills  (`<openclaw>/dist/extensions/<ext>/skills`)
+ * Each discovered skill is tagged with a `source` category for the UI:
+ *  - workspace : the agent's own + the shared default-agent workspace `skills/`
+ *  - installed : managed skills dir (`<configDir>/skills`, sibling of the workspace)
+ *  - built-in  : bundled core skills (`<openclaw>/skills`)
+ *  - extra     : skills from ENABLED extensions (`<openclaw>/dist/extensions/<ext>/skills`,
+ *                gated by `plugins.allow`/`entries.enabled` like ControlUI) + config
+ *                `skills.load.extraDirs` — mirrors ControlUI's "EXTRA" bucket
+ *                (core tags extension skills `source: "extension"`).
+ *
+ * Dedup is by skill id, first source wins (workspace > installed > extra > built-in).
  *
  * A skill's id is the `name:` field in its `SKILL.md` frontmatter (falling back to
  * the containing dir name) — NOT the dir name itself, which often differs (e.g. the
- * `self-improving-agent/` dir declares `name: self-improvement`). Discovery is
- * RECURSIVE (mirroring core's `loadSkills`): some skills nest the `SKILL.md` a few
- * levels deep (e.g. redskill installs at `<pkg>/<sub>/<skill>/SKILL.md`).
+ * `self-improving-agent/` dir declares `name: self-improvement`). The `description:`
+ * frontmatter field is surfaced too. Discovery is RECURSIVE (mirroring core's
+ * `loadSkills`): some skills nest the `SKILL.md` a few levels deep (e.g. redskill
+ * installs at `<pkg>/<sub>/<skill>/SKILL.md`).
  *
  * NOT included (out of scope for a name catalog): ClawHub remote-only skills and
  * per-skill eligibility/`disabled` flags. The enabled set is the agent's own
@@ -41,29 +44,43 @@ import { DEFAULT_AGENT_ID, normalizeAgentId } from "./agent-id.js";
 const MAX_SKILL_WALK_DEPTH = 6;
 const IGNORED_WALK_DIRS = new Set(["node_modules", ".git"]);
 
-/** Extract the `name:` value from a SKILL.md YAML frontmatter block. */
-function parseSkillName(content: string): string | undefined {
+export type SkillSource = "workspace" | "built-in" | "installed" | "extra";
+
+export interface DiscoveredSkill {
+  id: string;
+  description?: string;
+  source: SkillSource;
+}
+
+/** Extract `name`/`description` from a SKILL.md YAML frontmatter block. */
+function parseSkillFrontmatter(content: string): { name?: string; description?: string } {
   const lines = content.split(/\r?\n/);
-  if (lines[0]?.trim() !== "---") return undefined;
+  if (lines[0]?.trim() !== "---") return {};
+  let name: string | undefined;
+  let description: string | undefined;
   for (let i = 1; i < lines.length; i++) {
     if (lines[i].trim() === "---") break;
-    const m = /^name\s*:\s*(.+?)\s*$/.exec(lines[i]);
+    const m = /^(name|description)\s*:\s*(.+?)\s*$/.exec(lines[i]);
     if (!m) continue;
-    let v = m[1].trim();
+    let v = m[2].trim();
     if ((v.startsWith('"') && v.endsWith('"')) || (v.startsWith("'") && v.endsWith("'"))) {
       v = v.slice(1, -1);
     }
-    return v.trim() || undefined;
+    v = v.trim();
+    if (!v) continue;
+    if (m[1] === "name" && name === undefined) name = v;
+    else if (m[1] === "description" && description === undefined) description = v;
   }
-  return undefined;
+  return { name, description };
 }
 
 /**
- * Collect skill ids reachable under `root`. A directory containing `SKILL.md` IS a
- * skill (its id = frontmatter `name`, else the dir name) and is not descended into
- * further; other directories are recursed up to a bounded depth. Best-effort.
+ * Collect skills reachable under `root`, tagging each with `source`. A directory
+ * containing `SKILL.md` IS a skill (id = frontmatter `name`, else dir name) and is
+ * not descended into further; other directories are recursed up to a bounded depth.
+ * First occurrence of an id wins (call higher-priority sources first). Best-effort.
  */
-function collectSkills(root: string, out: Set<string>, depth = 0): void {
+function collectSkills(root: string, source: SkillSource, out: Map<string, DiscoveredSkill>, depth = 0): void {
   if (depth > MAX_SKILL_WALK_DEPTH) return;
   let entries: fs.Dirent[];
   try {
@@ -72,18 +89,19 @@ function collectSkills(root: string, out: Set<string>, depth = 0): void {
     return;
   }
   if (entries.some((e) => e.isFile() && e.name === "SKILL.md")) {
-    let name: string | undefined;
+    let fm: { name?: string; description?: string } = {};
     try {
-      name = parseSkillName(fs.readFileSync(path.join(root, "SKILL.md"), "utf-8"));
+      fm = parseSkillFrontmatter(fs.readFileSync(path.join(root, "SKILL.md"), "utf-8"));
     } catch {
-      // unreadable frontmatter → fall back to dir name
+      // unreadable frontmatter → fall back to dir name, no description
     }
-    out.add(name ?? path.basename(root));
+    const id = fm.name ?? path.basename(root);
+    if (!out.has(id)) out.set(id, { id, description: fm.description, source });
     return; // a skill is a leaf — don't treat its internals as nested skills
   }
   for (const e of entries) {
     if (e.isDirectory() && !e.name.startsWith(".") && !IGNORED_WALK_DIRS.has(e.name)) {
-      collectSkills(path.join(root, e.name), out, depth + 1);
+      collectSkills(path.join(root, e.name), source, out, depth + 1);
     }
   }
 }
@@ -125,20 +143,48 @@ function computeOpenClawRoot(): string | null {
   return null;
 }
 
-/** Bundled skill dirs inside the openclaw install (core + per-extension). */
-function bundledSkillDirs(): string[] {
+/**
+ * The set of bundled extensions enabled for this install — `plugins.allow` plus any
+ * `plugins.entries[name].enabled === true`. ControlUI only surfaces skills from
+ * enabled extensions, so we gate on the same set (extension dir name == plugin id).
+ */
+export function enabledExtensionNames(cfg: unknown): Set<string> {
+  const plugins = (cfg as Record<string, unknown> | undefined)?.plugins as Record<string, unknown> | undefined;
+  const names = new Set<string>();
+  const allow = plugins?.allow;
+  if (Array.isArray(allow)) for (const n of allow) if (typeof n === "string") names.add(n);
+  const entries = plugins?.entries as Record<string, unknown> | undefined;
+  if (entries && typeof entries === "object") {
+    for (const [name, val] of Object.entries(entries)) {
+      if (val && typeof val === "object" && (val as Record<string, unknown>).enabled === true) names.add(name);
+    }
+  }
+  return names;
+}
+
+/**
+ * Bundled skill source dirs inside the openclaw install, tagged like ControlUI:
+ * core `<openclaw>/skills` → "built-in"; per-extension `dist/extensions/<ext>/skills`
+ * → "extra" (core tags these `source: "extension"`). Extension skills are included
+ * only when the extension is enabled, matching ControlUI's EXTRA bucket.
+ */
+function bundledSkillSources(enabledExtensions: Set<string>): Array<{ dir: string; source: SkillSource }> {
   const root = resolveOpenClawRoot();
   if (!root) return [];
-  const dirs = [path.join(root, "skills")];
+  const out: Array<{ dir: string; source: SkillSource }> = [
+    { dir: path.join(root, "skills"), source: "built-in" },
+  ];
   try {
     const extRoot = path.join(root, "dist", "extensions");
     for (const ext of fs.readdirSync(extRoot, { withFileTypes: true })) {
-      if (ext.isDirectory()) dirs.push(path.join(extRoot, ext.name, "skills"));
+      if (ext.isDirectory() && enabledExtensions.has(ext.name)) {
+        out.push({ dir: path.join(extRoot, ext.name, "skills"), source: "extra" });
+      }
     }
   } catch {
     // no extensions dir on this build
   }
-  return dirs;
+  return out;
 }
 
 function resolveDefaultAgentId(cfg: Record<string, unknown> | undefined): string {
@@ -153,14 +199,15 @@ function resolveDefaultAgentId(cfg: Record<string, unknown> | undefined): string
 }
 
 /**
- * Full set of skill ids `agentId` can load, sorted. Aggregates the agent's
- * workspace, the shared root workspace, the managed dir, config extra dirs, and
- * bundled core/extension skills. Every source is optional and failure-tolerant.
+ * Full set of skills `agentId` can load, sorted by id, each tagged with its source
+ * category. Aggregates the agent's workspace, the shared root workspace, the managed
+ * dir, config extra dirs, and bundled core/extension skills. Every source is optional
+ * and failure-tolerant.
  */
-export function discoverAvailableSkills(cfg: unknown, agentId: string): string[] {
+export function discoverAvailableSkills(cfg: unknown, agentId: string): DiscoveredSkill[] {
   const c = cfg as Record<string, unknown> | undefined;
   const resolveWs = getFridayAgentForwardRuntime()?.resolveAgentWorkspaceDir;
-  const dirs: string[] = [];
+  const sources: Array<{ dir: string; source: SkillSource }> = [];
 
   if (resolveWs) {
     const defaultId = resolveDefaultAgentId(c);
@@ -170,7 +217,7 @@ export function discoverAvailableSkills(cfg: unknown, agentId: string): string[]
       try {
         const ws = resolveWs(cfg, id);
         if (ws) {
-          dirs.push(path.join(ws, "skills"));
+          sources.push({ dir: path.join(ws, "skills"), source: "workspace" });
           if (id === defaultId) defaultWs = ws;
         }
       } catch {
@@ -178,21 +225,21 @@ export function discoverAvailableSkills(cfg: unknown, agentId: string): string[]
       }
     }
     // Managed skills dir: `<configDir>/skills`, the workspace's parent sibling.
-    if (defaultWs) dirs.push(path.join(path.dirname(defaultWs), "skills"));
+    if (defaultWs) sources.push({ dir: path.join(path.dirname(defaultWs), "skills"), source: "installed" });
   }
 
   const extraDirs = ((c?.skills as Record<string, unknown> | undefined)?.load as
     | Record<string, unknown>
     | undefined)?.extraDirs;
   if (Array.isArray(extraDirs)) {
-    for (const d of extraDirs) if (typeof d === "string" && d.trim()) dirs.push(d.trim());
+    for (const d of extraDirs) if (typeof d === "string" && d.trim()) sources.push({ dir: d.trim(), source: "extra" });
   }
 
-  dirs.push(...bundledSkillDirs());
+  sources.push(...bundledSkillSources(enabledExtensionNames(c)));
 
-  const seen = new Set<string>();
-  for (const dir of dirs) collectSkills(dir, seen);
-  return [...seen].sort();
+  const out = new Map<string, DiscoveredSkill>();
+  for (const { dir, source } of sources) collectSkills(dir, source, out, 0);
+  return [...out.values()].sort((a, b) => a.id.localeCompare(b.id));
 }
 
 /** Test-only: reset the cached openclaw root. */
