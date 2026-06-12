@@ -102,6 +102,36 @@ data: {"runId":"...","seq":1,"ts":...,"stream":"lifecycle","data":{"phase":"star
 
 `GET /friday-next/status`：在英文版基础上增加 `activeRuns`、`activeRunCount`（由 lifecycle 跟踪）。
 
+## Agent 管理
+
+像 OpenClaw ControlUI 一样读取/编辑单个 agent 的配置，但全部经插件自己的配置通道（`api.runtime.config.mutateConfigFile`）落地——**不改 OpenClaw 核心**。配置类改动写入宿主配置文件的 `agents.list[]`；核心 `.md` 文件直接写入 agent 的 workspace 目录。`{id}` 按 OpenClaw 会话键 agent id 规范化（去空白/小写/slug，空 → `main`）。
+
+### GET /friday-next/agents/{id}/config
+
+返回可编辑字段：`exists`（是否存在 `agents.list[]` 条目，`main` 等隐式 agent 可能尚无）、`model`（字符串或 `{primary,fallbacks}`；`undefined`=继承 `agents.defaults`）、`thinkingDefault`、`tools`、`skills`（`undefined`=继承、`[]`=全禁）、`availableSkills`（agent 可加载技能的完整目录，供技能选择器用：聚合 agent workspace、共享默认 agent workspace、managed 目录、`skills.load.extraDirs` 与 bundled 核心/扩展技能；id 取 `SKILL.md` frontmatter 的 `name`，递归发现；不含 ClawHub 远端独有技能与可用性标记）。
+
+### PUT /friday-next/agents/{id}/config
+
+局部 patch——只改 body 中出现的键。显式 `null` 表示**清除**该字段（删除以回退 `agents.defaults`）；省略则不动。
+
+```json
+{ "model": "openai/gpt-5", "thinkingDefault": "medium", "tools": { "deny": ["bash"] }, "skills": [] }
+```
+
+- `model`：字符串、`{primary,fallbacks}`，或 `null`（清除）。
+- `skills`：技能 id 数组、`[]`（全禁）、`null`（清除→继承）；非数组且非 null 返回 `400`。
+- agent 无 `agents.list[]` 条目时自动创建一条 `{ id }`（绝不标记 `default`）。
+
+返回 `200` 及刷新后的配置视图。写入使用 `afterWrite: { mode: "auto" }`，由网关决定热重载或重启。
+
+### 核心文件
+
+白名单：`AGENTS.md`、`IDENTITY.md`、`SOUL.md`、`TOOLS.md`、`MEMORY.md`、`USER.md`、`HEARTBEAT.md`、`BOOTSTRAP.md`。直接写入 workspace——不重启，agent 下次运行时重读。
+
+- `GET /friday-next/agents/{id}/files` — 列出每个白名单文件的存在状态与字节数。
+- `GET /friday-next/agents/{id}/files/{name}` — 返回单文件内容（不存在则 `exists:false`、`content` 为空）。
+- `PUT /friday-next/agents/{id}/files/{name}` — body `{ "content": "..." }`。非白名单或路径穿越名 → `400`；超 256 KiB → `413`。
+
 ## 已删除接口
 
 - `GET` / `DELETE /friday-next/history` — 已删除，客户端应用 SSE 自行重建上下文。

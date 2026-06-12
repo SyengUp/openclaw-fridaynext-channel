@@ -369,6 +369,62 @@ Returns `200` and calls OpenClaw’s agent harness abort when available. There i
 
 `activeRuns` is derived from `agent` lifecycle `start` / `end` / `error` tracking inside the plugin.
 
+## Agent management
+
+Read and edit a single agent's configuration the same way OpenClaw's ControlUI does, but written through the plugin's own config channel (`api.runtime.config.mutateConfigFile`) — **no OpenClaw core changes**. Config edits land in `agents.list[]` of the host config file; core `.md` files are written directly into the agent's workspace dir. `{id}` is normalized like OpenClaw's session-key agent id (trim/lowercase/slug; empty → `main`).
+
+### GET /friday-next/agents/{id}/config
+
+```json
+{
+  "ok": true,
+  "id": "main",
+  "exists": true,
+  "model": "openai/gpt-5",
+  "thinkingDefault": "high",
+  "tools": { "profile": "default", "allow": ["read"], "alsoAllow": [], "deny": ["bash"] },
+  "skills": ["deep-research"],
+  "availableSkills": ["deep-research", "verify"]
+}
+```
+
+- `exists` — whether a matching `agents.list[]` entry exists (an implicit agent like `main` may have none yet).
+- `model` — verbatim config value: a string or `{ "primary", "fallbacks" }`. `undefined` ⇒ inherits `agents.defaults`.
+- `skills` — configured allow-list. `undefined` ⇒ inherit defaults; `[]` ⇒ all skills disabled.
+- `availableSkills` — full catalog of skill ids the agent can load (for a skills picker). Aggregates the agent's workspace `skills/`, the shared default-agent workspace, the managed dir, `skills.load.extraDirs`, and bundled core/extension skills; each id is the `SKILL.md` frontmatter `name` (recursively discovered). Excludes ClawHub-remote-only skills and eligibility flags.
+
+### PUT /friday-next/agents/{id}/config
+
+Partial patch — only the keys present in the body change. An explicit `null` **clears** the field (deletes it so the config merge falls back to `agents.defaults`); omitting a key leaves it untouched.
+
+```json
+{
+  "model": "openai/gpt-5",
+  "thinkingDefault": "medium",
+  "tools": { "profile": "default", "deny": ["bash"] },
+  "skills": []
+}
+```
+
+- `model` — string, `{ "primary", "fallbacks" }`, or `null` (clear).
+- `skills` — array of skill ids, `[]` (disable all), or `null` (clear → inherit). A non-array, non-null value is `400`.
+- If the agent has no `agents.list[]` entry, a bare `{ id }` entry is created (never marked `default`).
+
+Responds `200` with the refreshed config view. The write uses `afterWrite: { mode: "auto" }`, letting the gateway pick hot-reload vs restart.
+
+### Core files
+
+Whitelist: `AGENTS.md`, `IDENTITY.md`, `SOUL.md`, `TOOLS.md`, `MEMORY.md`, `USER.md`, `HEARTBEAT.md`, `BOOTSTRAP.md`. Written directly into the workspace — no restart; the agent re-reads them on its next run.
+
+- `GET /friday-next/agents/{id}/files` — status of every whitelist file:
+
+  ```json
+  { "ok": true, "id": "main", "files": [{ "name": "IDENTITY.md", "exists": true, "bytes": 512 }] }
+  ```
+
+- `GET /friday-next/agents/{id}/files/{name}` — `{ "ok": true, "name": "IDENTITY.md", "exists": true, "content": "..." }` (missing file ⇒ `exists:false`, empty `content`).
+- `PUT /friday-next/agents/{id}/files/{name}` — body `{ "content": "..." }`. Non-whitelist or traversal names ⇒ `400`; content over 256 KiB ⇒ `413`.
+
 ## Removed endpoints
 
 - `GET` / `DELETE /friday-next/history` — **removed.** Build conversation state from the SSE stream on the client.

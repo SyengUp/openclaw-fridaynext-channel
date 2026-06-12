@@ -16,6 +16,8 @@ import { handleNodesApprove } from "./handlers/nodes-approve.js";
 import { handleSessionsSettings } from "./handlers/sessions-settings.js";
 import { handleModelsList } from "./handlers/models-list.js";
 import { handleAgentsList } from "./handlers/agents-list.js";
+import { handleAgentConfig } from "./handlers/agent-config.js";
+import { handleAgentFiles } from "./handlers/agent-files.js";
 import { handleHistorySessions } from "./handlers/history-sessions.js";
 import { handleHistoryMessages } from "./handlers/history-messages.js";
 import { handleHistorySetTitle } from "./handlers/history-set-title.js";
@@ -86,6 +88,24 @@ async function handleFridayNextRoute(
 
   if (req.method === "GET" && pathname === "/friday-next/agents") {
     return await handleAgentsList(req, res);
+  }
+
+  // Routes: GET/PUT /friday-next/agents/{id}/config
+  //         GET     /friday-next/agents/{id}/files
+  //         GET/PUT /friday-next/agents/{id}/files/{name}
+  if (pathname.startsWith("/friday-next/agents/")) {
+    const segs = pathname
+      .slice("/friday-next/agents/".length)
+      .split("/")
+      .filter(Boolean)
+      .map((s) => decodeURIComponent(s));
+    const [id, sub, name] = segs;
+    if (id && sub === "config" && segs.length === 2) {
+      return await handleAgentConfig(req, res, id);
+    }
+    if (id && sub === "files" && (segs.length === 2 || segs.length === 3)) {
+      return await handleAgentFiles(req, res, id, name);
+    }
   }
 
   if (req.method === "GET" && pathname === "/friday-next/status") {
