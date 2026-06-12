@@ -412,6 +412,29 @@ Partial patch — only the keys present in the body change. An explicit `null` *
 
 Responds `200` with the refreshed config view. The write uses `afterWrite: { mode: "auto" }`, letting the gateway pick hot-reload vs restart.
 
+### GET /friday-next/agents/{id}/tools/catalog
+
+The agent's full tool catalog for a toolbox editor (core + plugin tools, mirroring ControlUI). Built from core's `buildToolsCatalogResult` (resilient deep-import, graceful 503 if unavailable). Edits are saved via `PUT …/config` (`tools`).
+
+```json
+{
+  "ok": true,
+  "id": "main",
+  "profile": "full",
+  "profiles": [{ "id": "minimal", "label": "Minimal" }, { "id": "coding", "label": "Coding" }, { "id": "messaging", "label": "Messaging" }, { "id": "full", "label": "Full" }],
+  "groups": [
+    {
+      "id": "fs", "label": "Files", "source": "core",
+      "tools": [{ "id": "read", "label": "read", "description": "Read file contents", "source": "core", "enabled": true, "inProfile": true }]
+    }
+  ]
+}
+```
+
+- `profile` — the agent's configured profile (null when unset). `profiles` — the selectable presets.
+- `enabled` — the tool's effective state under the current `tools` config. `inProfile` — whether the active profile grants it (drives the allow/deny delta when the app toggles a tool).
+- `groups[].source` is `"core" | "plugin"` (`pluginId` set for plugin groups). Plugin tools are included only for enabled plugins.
+
 ### Core files
 
 Whitelist: `AGENTS.md`, `IDENTITY.md`, `SOUL.md`, `TOOLS.md`, `MEMORY.md`, `USER.md`, `HEARTBEAT.md`, `BOOTSTRAP.md`. Written directly into the workspace — no restart; the agent re-reads them on its next run.

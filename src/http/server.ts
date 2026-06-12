@@ -18,6 +18,7 @@ import { handleModelsList } from "./handlers/models-list.js";
 import { handleAgentsList } from "./handlers/agents-list.js";
 import { handleAgentConfig } from "./handlers/agent-config.js";
 import { handleAgentFiles } from "./handlers/agent-files.js";
+import { handleAgentToolsCatalog } from "./handlers/agent-tools-catalog.js";
 import { handleHistorySessions } from "./handlers/history-sessions.js";
 import { handleHistoryMessages } from "./handlers/history-messages.js";
 import { handleHistorySetTitle } from "./handlers/history-set-title.js";
@@ -105,6 +106,9 @@ async function handleFridayNextRoute(
     }
     if (id && sub === "files" && (segs.length === 2 || segs.length === 3)) {
       return await handleAgentFiles(req, res, id, name);
+    }
+    if (id && sub === "tools" && name === "catalog" && segs.length === 3) {
+      return await handleAgentToolsCatalog(req, res, id);
     }
   }
 

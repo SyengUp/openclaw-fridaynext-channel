@@ -124,6 +124,16 @@ data: {"runId":"...","seq":1,"ts":...,"stream":"lifecycle","data":{"phase":"star
 
 返回 `200` 及刷新后的配置视图。写入使用 `afterWrite: { mode: "auto" }`，由网关决定热重载或重启。
 
+### GET /friday-next/agents/{id}/tools/catalog
+
+agent 的完整工具目录(核心 + 插件工具，对齐 ControlUI)，供工具箱编辑器用。由核心 `buildToolsCatalogResult` 构建(弹性深导入，不可用时优雅返回 503)。编辑经 `PUT …/config` 的 `tools` 字段保存。
+
+返回 `{ ok, id, profile, profiles[{id,label}], groups[{id,label,source,pluginId?,tools[{id,label,description,source,enabled,inProfile}]}] }`：
+
+- `profile`=agent 配置的档位(未设为 null)；`profiles`=可选预设(Minimal/Coding/Messaging/Full)。
+- `enabled`=该工具在当前 `tools` 配置下的生效态；`inProfile`=当前档位是否默认含它(app 拨动工具时据此算 allow/deny 增量)。
+- `groups[].source` 为 `core|plugin`(插件组带 `pluginId`)；插件工具仅纳入已启用插件。
+
 ### 核心文件
 
 白名单：`AGENTS.md`、`IDENTITY.md`、`SOUL.md`、`TOOLS.md`、`MEMORY.md`、`USER.md`、`HEARTBEAT.md`、`BOOTSTRAP.md`。直接写入 workspace——不重启，agent 下次运行时重读。

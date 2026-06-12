@@ -108,8 +108,8 @@ function collectSkills(root: string, source: SkillSource, out: Map<string, Disco
 
 let cachedOpenClawRoot: string | null | undefined;
 
-/** Locate the installed `openclaw` package root, where bundled skills live. Cached. */
-function resolveOpenClawRoot(): string | null {
+/** Locate the installed `openclaw` package root (cached). Shared with tool-catalog discovery. */
+export function resolveOpenClawRoot(): string | null {
   if (cachedOpenClawRoot !== undefined) return cachedOpenClawRoot;
   cachedOpenClawRoot = computeOpenClawRoot();
   return cachedOpenClawRoot;
