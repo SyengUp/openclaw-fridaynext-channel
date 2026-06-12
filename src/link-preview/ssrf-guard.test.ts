@@ -66,7 +66,7 @@ describe("assertPublicHttpUrl", () => {
     expect(() => assertPublicHttpUrl(new URL("http://127.0.0.1/"))).toThrow(BlockedUrlError);
     expect(() => assertPublicHttpUrl(new URL("http://10.0.0.5/"))).toThrow(BlockedUrlError);
     expect(() => assertPublicHttpUrl(new URL("http://[::1]/"))).toThrow(BlockedUrlError);
-    expect(() => assertPublicHttpUrl(new URL("http://[fc00::1]/"))).toThrow(BlockedUrlError);
+    expect(() => assertPublicHttpUrl(new URL("http://[fd00::1]/"))).toThrow(BlockedUrlError);
   });
 
   it("allows public IP literals", () => {
@@ -106,9 +106,14 @@ describe("isPrivateAddress", () => {
   });
 
   it("flags private/reserved IPv6 and mapped IPv4", () => {
-    for (const ip of ["::1", "::", "fc00::1", "fd12:3456::1", "fe80::1", "::ffff:10.0.0.1", "::ffff:127.0.0.1"]) {
+    for (const ip of ["::1", "::", "fd00::1", "fd12:3456::1", "fe80::1", "::ffff:10.0.0.1", "::ffff:127.0.0.1"]) {
       expect(isPrivateAddress(ip), ip).toBe(true);
     }
+  });
+
+  it("passes fc00::/8 (fake-IP DNS v6 range used by clash/mihomo tun mode)", () => {
+    expect(isPrivateAddress("fc00::1e7")).toBe(false);
+    expect(isPrivateAddress("fc00::ffff:ffff")).toBe(false);
   });
 
   it("passes public IPv6 and mapped public IPv4", () => {

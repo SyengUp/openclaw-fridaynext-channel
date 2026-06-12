@@ -90,7 +90,11 @@ function isPrivateIPv6(ip: string): boolean {
   if (mapped) return isPrivateIPv4(mapped[1]);
   if (lower === "::" || lower === "::1") return true; // unspecified / loopback
   const head = lower.split(":")[0];
-  if (head.startsWith("fc") || head.startsWith("fd")) return true; // fc00::/7 ULA
+  // fc00::/8 (the reserved, never-assigned half of ULA fc00::/7) intentionally NOT blocked:
+  // RFC 4193 requires locally-assigned ULA to set the L bit, so real LAN services live in
+  // fd00::/8, while fake-IP DNS setups (mihomo/clash tun mode with IPv6, common on gateway
+  // hosts) resolve EVERY domain into fc00::/18. Same rationale as 198.18/15 on the IPv4 side.
+  if (head.startsWith("fd")) return true; // fd00::/8 locally-assigned ULA
   if (/^fe[89ab]/.test(head)) return true; // fe80::/10 link-local
   return false;
 }
