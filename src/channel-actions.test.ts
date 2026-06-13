@@ -163,6 +163,53 @@ describe("channel-actions handleSend sessionKey routing", () => {
     expect(media?.data.sessionKey).toBe(appSession);
   });
 
+  it("send with a multi-file mediaUrls[] emits one op:media per file (same runId)", async () => {
+    // The agent's `message` tool call with a structured `attachments[]` array is flattened by the
+    // OpenClaw core into `params.mediaUrls` (with `media` set to the first entry for back-compat).
+    // handleSend must emit one outbound op:media per file, not just the first.
+    const deviceId = "DEV-ACT-MULTI";
+    const runId = "run-act-multi";
+    const appSession = "agent:operator:friday:direct:dev-act-multi:1780561609";
+    registerRunRoute({ runId, deviceId, sessionKey: appSession });
+    sseEmitter.trackDeviceForRun(deviceId, runId);
+    const res = connect(deviceId);
+
+    const files = ["A.swift", "B.swift", "C.swift"].map((name) => {
+      const p = path.join(historyDir, name);
+      fs.writeFileSync(p, `// ${name}`);
+      return p;
+    });
+
+    const result = await handleMessageAction({
+      action: "send",
+      params: {
+        to: deviceId,
+        message: "三个文件发给你",
+        media: files[0], // core sets `media` to the first entry
+        mediaUrls: files, // ...and the full list here
+      },
+      sessionKey: "agent:operator:main",
+    });
+
+    expect((result as { ok?: boolean }).ok).toBe(true);
+    const mediaFrames = parseOutboundFrames(res).filter(
+      (f) => f.type === "outbound" && f.data.op === "media",
+    );
+    expect(mediaFrames).toHaveLength(3);
+    // All media events share the send's runId so the app groups them into one assistant message.
+    const runIds = new Set(mediaFrames.map((f) => f.data.runId));
+    expect(runIds.size).toBe(1);
+    // Original filenames preserved (one per file, no duplicates, no drops).
+    const names = mediaFrames
+      .map((f) => (f.data.ctx as { originalMediaUrl?: string })?.originalMediaUrl)
+      .map((p) => (p ? path.basename(p) : ""));
+    expect(new Set(names)).toEqual(new Set(["A.swift", "B.swift", "C.swift"]));
+    for (const f of mediaFrames) {
+      expect(String(f.data.mediaUrl)).toMatch(/^\/friday-next\/files\//);
+      expect(f.data.sessionKey).toBe(appSession);
+    }
+  });
+
   it("falls back to ctx.sessionKey when the device has no active run-route", async () => {
     const deviceId = "DEV-ACT-2";
     const res = connect(deviceId);

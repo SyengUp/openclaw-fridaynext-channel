@@ -36,6 +36,21 @@ function pickString(params: Record<string, unknown>, keys: string[]): string {
   return "";
 }
 
+function pickStringArray(params: Record<string, unknown>, key: string): string[] {
+  const v = params[key];
+  if (!Array.isArray(v)) return [];
+  const out: string[] = [];
+  const seen = new Set<string>();
+  for (const entry of v) {
+    if (typeof entry !== "string") continue;
+    const trimmed = entry.trim();
+    if (!trimmed || seen.has(trimmed)) continue;
+    seen.add(trimmed);
+    out.push(trimmed);
+  }
+  return out;
+}
+
 async function readMediaFile(
   mediaPath: string,
   ctx: MessageActionCtx,
@@ -101,26 +116,35 @@ async function handleSend(ctx: MessageActionCtx): Promise<unknown> {
     );
   }
 
-  // Resolve media from an inline base64 buffer or a path/url reference. (`attachments[]` arrays are
-  // normalized by the OpenClaw core and arrive via outbound.sendMedia, so they're not handled here.)
-  let media: { buffer: Buffer; mimeType: string } | null = null;
-  let originalMediaUrl = "";
-  if (inlineBase64) {
-    media = decodeBase64Media(
+  // Resolve the media to send. A `message` tool call with a structured `attachments[]` array is
+  // flattened by the OpenClaw core into `params.mediaUrls` (with `media` set to the first entry for
+  // back-compat), so prefer the full list; fall back to a single inline base64 buffer or a
+  // path/url reference for the single-attachment / direct-link / buffer cases.
+  const mediaSources: { buffer: Buffer; mimeType: string; originalMediaUrl: string }[] = [];
+  const mediaUrls = pickStringArray(ctx.params, "mediaUrls");
+  if (mediaUrls.length > 0) {
+    for (const ref of mediaUrls) {
+      const loaded = await readMediaFile(ref, ctx);
+      if (loaded) mediaSources.push({ ...loaded, originalMediaUrl: ref });
+    }
+  } else if (inlineBase64) {
+    const loaded = decodeBase64Media(
       inlineBase64,
       mediaMimeHint || (filename ? guessMimeType(filename) : ""),
     );
-    originalMediaUrl = filename || "inline-buffer";
+    if (loaded) mediaSources.push({ ...loaded, originalMediaUrl: filename || "inline-buffer" });
   } else if (mediaPath) {
-    media = await readMediaFile(mediaPath, ctx);
-    originalMediaUrl = mediaPath;
+    const loaded = await readMediaFile(mediaPath, ctx);
+    if (loaded) mediaSources.push({ ...loaded, originalMediaUrl: mediaPath });
   }
 
-  // Send media via SSE outbound
-  if (media) {
+  // Send each media via its own SSE outbound event. They all share this send's `runId` so the app
+  // groups them into a single assistant message (first → attachment, rest → extra attachments).
+  if (mediaSources.length > 0) {
     const { saveMediaBuffer } = await import("openclaw/plugin-sdk/media-store");
-    const saved = await saveMediaBuffer(media.buffer, media.mimeType, "inbound");
-    if (saved.id) {
+    for (const source of mediaSources) {
+      const saved = await saveMediaBuffer(source.buffer, source.mimeType, "inbound");
+      if (!saved.id) continue;
       const publicUrl = `/friday-next/files/${encodeURIComponent(saved.id)}`;
       sseEmitter.broadcast(
         {
@@ -134,7 +158,7 @@ async function handleSend(ctx: MessageActionCtx): Promise<unknown> {
             audioAsVoice: false,
             caption: caption || text,
             mediaUrl: publicUrl,
-            ctx: { to, text: caption || text, originalMediaUrl },
+            ctx: { to, text: caption || text, originalMediaUrl: source.originalMediaUrl },
           },
         },
         to,
