@@ -72,6 +72,70 @@ function resolveStoredFile(key: string): StoredFile | undefined {
   return fileIndex.get(key) ?? fileTokenIndex.get(key);
 }
 
+/** Clear the in-memory file index. Test-only: simulates a gateway restart. */
+export function clearFileIndexForTest(): void {
+  fileIndex.clear();
+  fileTokenIndex.clear();
+  externalFileSourceIndex.clear();
+}
+
+/**
+ * The on-disk basename is a `<uuid>.<ext>` token, and the original filename lives only in
+ * the process-local `fileIndex`. To keep the real name after a gateway restart (when the
+ * index is empty) we persist it in a sidecar JSON file next to each stored attachment.
+ */
+interface AttachmentMetaSidecar {
+  filename: string;
+  mimeType: string;
+}
+
+const META_SIDECAR_SUFFIX = ".fnmeta";
+
+function metaSidecarPath(urlToken: string): string {
+  return path.join(getAttachmentsDir(), `${urlToken}${META_SIDECAR_SUFFIX}`);
+}
+
+function writeAttachmentMetaSidecar(urlToken: string, filename: string, mimeType: string): void {
+  try {
+    fs.writeFileSync(metaSidecarPath(urlToken), JSON.stringify({ filename, mimeType }));
+  } catch (err) {
+    logger.warn(`writeAttachmentMetaSidecar failed for "${urlToken}": ${String(err)}`);
+  }
+}
+
+/**
+ * Remember the original upload filename for an inbound media file.
+ *
+ * When a user sends an attachment, core's media-store copies it to
+ * `~/.openclaw/media/inbound/<uuid>` — a bare uuid with no extension and no original
+ * name — and the transcript records THAT path. So on history rebuild the original name
+ * is unrecoverable. We stash it here (keyed by the inbound basename, reusing the sidecar
+ * scheme but inside our own attachments dir) at send time, while we still know it.
+ */
+export function rememberInboundMediaName(inboundPath: string, filename: string, mimeType: string): void {
+  const key = path.basename(inboundPath);
+  const name = filename.trim();
+  if (!key || !name) return;
+  writeAttachmentMetaSidecar(key, name, mimeType);
+}
+
+function readAttachmentMetaSidecar(urlToken: string): AttachmentMetaSidecar | null {
+  try {
+    const raw = fs.readFileSync(metaSidecarPath(urlToken), "utf8");
+    const parsed = JSON.parse(raw) as Partial<AttachmentMetaSidecar>;
+    if (parsed && typeof parsed.filename === "string" && parsed.filename) {
+      return {
+        filename: parsed.filename,
+        mimeType: typeof parsed.mimeType === "string" ? parsed.mimeType : "",
+      };
+    }
+  } catch {
+    // Missing or malformed sidecar (e.g. attachment stored before this fix) — caller
+    // falls back to the on-disk basename.
+  }
+  return null;
+}
+
 /**
  * Read a file from `attachments/` by URL path token (disk basename).
  * Used when the in-memory index was cleared after a gateway restart.
@@ -79,16 +143,26 @@ function resolveStoredFile(key: string): StoredFile | undefined {
 export function readAttachmentFileFromDisk(fileToken: string): {
   buffer: Buffer;
   mimeType: string;
+  /** Original display/download filename (from sidecar; falls back to the on-disk basename). */
   filename: string;
+  /** On-disk basename / urlToken — use this to build `/friday-next/files/{token}` URLs. */
+  diskName: string;
 } | null {
   const safe = path.basename(fileToken);
   if (!safe || safe === "." || safe === "..") return null;
+  if (safe.endsWith(META_SIDECAR_SUFFIX)) return null;
   const dir = getAttachmentsDir();
   const full = path.join(dir, safe);
   if (!fs.existsSync(full) || !fs.statSync(full).isFile()) return null;
   try {
     const buffer = fs.readFileSync(full);
-    return { buffer, mimeType: guessMimeType(safe), filename: safe };
+    const meta = readAttachmentMetaSidecar(safe);
+    return {
+      buffer,
+      mimeType: meta?.mimeType || guessMimeType(safe),
+      filename: meta?.filename || safe,
+      diskName: safe,
+    };
   } catch {
     return null;
   }
@@ -117,14 +191,17 @@ export function normalizeAgentMediaPath(raw: string): string {
   return s;
 }
 
-function copyLocalFileToAttachments(sourcePath: string): StoredFile | null {
+function copyLocalFileToAttachments(sourcePath: string, originalFilename?: string): StoredFile | null {
   const resolvedPath = normalizeAgentMediaPath(sourcePath);
-  const filename = path.basename(resolvedPath);
+  const diskBasename = path.basename(resolvedPath);
+  // Prefer the caller-supplied original name (recovered from an inbound sidecar); fall
+  // back to the on-disk basename (which for core inbound media is a bare uuid).
+  const filename = originalFilename?.trim() || diskBasename;
   if (!filename) return null;
   try {
     if (!fs.existsSync(resolvedPath) || !fs.statSync(resolvedPath).isFile()) return null;
     const id = crypto.randomUUID();
-    const ext = path.extname(filename);
+    const ext = path.extname(filename) || path.extname(diskBasename);
     const urlToken = ext ? `${id}${ext}` : id;
     const storedPath = path.join(getAttachmentsDir(), urlToken);
     try {
@@ -148,6 +225,7 @@ function copyLocalFileToAttachments(sourcePath: string): StoredFile | null {
       createdAt: Date.now(),
     };
     registerStoredFile(file);
+    writeAttachmentMetaSidecar(urlToken, filename, mimeType);
     return file;
   } catch (err) {
     logger.error(`copyLocalFileToAttachments failed for "${resolvedPath}": ${String(err)}`);
@@ -182,6 +260,7 @@ export function storeFile(buffer: Buffer, filename: string, mimeType: string): S
   };
 
   registerStoredFile(file);
+  writeAttachmentMetaSidecar(urlToken, safeFilename, mimeType);
   return file;
 }
 
@@ -218,7 +297,7 @@ export function fridayFilesPublicUrl(ref: string): string {
 
   const disk = readAttachmentFileFromDisk(lookupKey);
   if (disk) {
-    return `/friday-next/files/${encodeURIComponent(disk.filename)}`;
+    return `/friday-next/files/${encodeURIComponent(disk.diskName)}`;
   }
 
   const trimmed = ref.trim();
@@ -235,13 +314,13 @@ export function getExternalFileSourceByUrlToken(token: string): string | undefin
 /**
  * Read a file as a Buffer with its MIME type (by id or urlToken).
  */
-export function readFile(id: string): { buffer: Buffer | null; mimeType: string } {
+export function readFile(id: string): { buffer: Buffer | null; mimeType: string; filename?: string } {
   const file = resolveStoredFile(id);
   if (!file) return { buffer: null, mimeType: "application/octet-stream" };
   try {
-    return { buffer: fs.readFileSync(file.path), mimeType: file.mimeType };
+    return { buffer: fs.readFileSync(file.path), mimeType: file.mimeType, filename: file.filename };
   } catch {
-    return { buffer: null, mimeType: file.mimeType };
+    return { buffer: null, mimeType: file.mimeType, filename: file.filename };
   }
 }
 
@@ -294,19 +373,24 @@ export function resolveMediaAttachment(localPath: string): ResolvedAttachment | 
     return { fileName: fallback, url: localPath };
   }
 
-  const filename = path.basename(localPath);
-  if (!filename) return null;
+  const basename = path.basename(localPath);
+  if (!basename) return null;
 
-  const stored = copyLocalFileToAttachments(localPath);
+  // Core inbound media is stored as a bare uuid (no name/extension). Recover the original
+  // upload name we stashed at send time, keyed by that uuid basename.
+  const remembered = readAttachmentMetaSidecar(basename)?.filename;
+  const originalName = remembered || basename;
+
+  const stored = copyLocalFileToAttachments(localPath, originalName);
   if (!stored) {
     // Best-effort fallback: still return a Friday URL so app can receive attachment event.
     // Download handler will try reading external source path lazily by token.
     const id = crypto.randomUUID();
-    const ext = path.extname(filename);
+    const ext = path.extname(originalName);
     const token = ext ? `${id}${ext}` : id;
     externalFileSourceIndex.set(token, normalizeAgentMediaPath(localPath));
     return {
-      fileName: filename,
+      fileName: originalName,
       url: `/friday-next/files/${encodeURIComponent(token)}`,
     };
   }

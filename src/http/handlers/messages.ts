@@ -43,6 +43,7 @@ import {
   fridayAttachmentLookupKey,
   fridayFilesPublicUrl,
   readFile,
+  rememberInboundMediaName,
   resolveMediaAttachment,
   resolveMediaUrl,
 } from "./files.js";
@@ -377,11 +378,15 @@ async function buildBodyForAgentWithAttachments(text: string, attachmentIds: str
 
   const mediaRefs: string[] = [];
   for (const id of attachmentIds) {
-    const { buffer, mimeType } = readFile(fridayAttachmentLookupKey(id));
+    const { buffer, mimeType, filename } = readFile(fridayAttachmentLookupKey(id));
     if (!buffer) continue;
 
     const saved = await saveInboundMediaBuffer(buffer, mimeType);
     if (saved.id && saved.path) {
+      // Core's media-store renames inbound files to a bare uuid (no name/extension) and
+      // the transcript records that path — stash the original name now so history rebuild
+      // can restore it instead of surfacing the uuid.
+      if (filename) rememberInboundMediaName(saved.path, filename, mimeType);
       mediaRefs.push(`[media attached: file://${saved.path}]`);
     }
   }
