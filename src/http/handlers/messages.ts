@@ -381,7 +381,7 @@ async function buildBodyForAgentWithAttachments(text: string, attachmentIds: str
     const { buffer, mimeType, filename } = readFile(fridayAttachmentLookupKey(id));
     if (!buffer) continue;
 
-    const saved = await saveInboundMediaBuffer(buffer, mimeType);
+    const saved = await saveInboundMediaBuffer(buffer, mimeType, filename);
     if (saved.id && saved.path) {
       // Core's media-store renames inbound files to a bare uuid (no name/extension) and
       // the transcript records that path — stash the original name now so history rebuild
