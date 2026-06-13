@@ -43,6 +43,13 @@ declare module "openclaw/plugin-sdk/media-store" {
   export const saveMediaBuffer: (...args: any[]) => any;
 }
 
+declare module "openclaw/plugin-sdk/channel-lifecycle" {
+  export const waitUntilAbort: (
+    signal?: AbortSignal,
+    onAbort?: () => void | Promise<void>,
+  ) => Promise<void>;
+}
+
 declare module "openclaw/plugin-sdk/media-runtime" {
   export type MediaKind = "image" | "audio" | "video" | "document";
   export const mediaKindFromMime: (mime?: string | null) => MediaKind | undefined;

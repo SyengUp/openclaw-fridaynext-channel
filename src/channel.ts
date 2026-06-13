@@ -9,6 +9,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { createChatChannelPlugin } from "openclaw/plugin-sdk/core";
+import { waitUntilAbort } from "openclaw/plugin-sdk/channel-lifecycle";
 import { createFridayNextLogger } from "./logging.js";
 import type { ChannelAccountSnapshot } from "openclaw/plugin-sdk/status-helpers";
 import { saveMediaBuffer } from "openclaw/plugin-sdk/media-store";
@@ -101,6 +102,22 @@ const fridayLifecycle = {
   },
 };
 
+/**
+ * friday-next is a passive HTTP+SSE channel: its routes live on the shared gateway server and
+ * SSE clients connect on demand, so there is no per-account socket or polling loop to maintain.
+ * But the core health-monitor reads the account's lifecycle `running` flag — which the framework
+ * flips to `false` the moment `startAccount` resolves/rejects. Without a long-lived startAccount
+ * the account is permanently seen as "stopped" and restarted every health poll (~5 min). A stopped
+ * account drops out of the deliverable-channel registry, so an agent `message` send landing in that
+ * window fails with `Unknown channel: friday-next`. Hold the account lifecycle open until abort
+ * (reload/shutdown) so the channel stays `running:true` and continuously deliverable.
+ */
+const fridayGateway = {
+  startAccount: async (ctx: { abortSignal: AbortSignal }): Promise<void> => {
+    await waitUntilAbort(ctx.abortSignal);
+  },
+};
+
 const fridayStatus = {
   buildAccountSnapshot: async (params: {
     account: { accountId?: string; name?: string; enabled?: boolean };
@@ -140,6 +157,7 @@ export const fridayNextChannelPlugin = createChatChannelPlugin({
     },
     config: fridayConfigAdapter,
     lifecycle: fridayLifecycle,
+    gateway: fridayGateway,
     status: fridayStatus,
     bindings: {
       compileConfiguredBinding: () => null,
