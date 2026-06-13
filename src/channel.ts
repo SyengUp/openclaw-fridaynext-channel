@@ -16,6 +16,7 @@ import { sseEmitter } from "./sse/emitter.js";
 import { describeMessageActions, handleMessageAction } from "./channel-actions.js";
 import { guessMimeType, resolveMediaAttachment } from "./http/handlers/files.js";
 import { downloadRemoteMedia, isHttpUrl } from "./media-fetch.js";
+import { resolveMediaMaxBytes } from "./agent/media-bridge.js";
 import {
   resolveFridayDeviceIdForOutbound,
   resolveHistorySessionKeyForFridayDevice,
@@ -275,7 +276,10 @@ export const fridayNextChannelPlugin = createChatChannelPlugin({
 
         if (buffer) {
           const mimeType = downloadedMimeType ?? guessMimeType(mediaUrl);
-          const saved = await saveMediaBuffer(buffer, mimeType, "inbound");
+          // Match what openclaw itself supports for this media kind rather than
+          // saveMediaBuffer's 5MB default.
+          const maxBytes = await resolveMediaMaxBytes(mimeType);
+          const saved = await saveMediaBuffer(buffer, mimeType, "inbound", maxBytes);
           if (saved.id) {
             const fileUrl = `/friday-next/files/${encodeURIComponent(saved.id)}`;
             const resolved = resolveMediaAttachment(fileUrl);

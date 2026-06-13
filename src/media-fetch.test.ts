@@ -59,7 +59,7 @@ describe("downloadRemoteMedia", () => {
         async () =>
           new Response(new Uint8Array([1, 2, 3]), {
             status: 200,
-            headers: { "content-type": "image/png", "content-length": String(64 * 1024 * 1024) },
+            headers: { "content-type": "image/png", "content-length": String(128 * 1024 * 1024) },
           }),
       ),
     );

@@ -10,7 +10,10 @@ import { guessMimeType } from "./http/handlers/files.js";
  * download story uniform (always talks to the trusted gateway host with a bearer token).
  */
 
-const MAX_REMOTE_MEDIA_BYTES = 25 * 1024 * 1024; // 25MB
+// Aligns with openclaw's own remote-media ceiling (DEFAULT_FETCH_MEDIA_MAX_BYTES =
+// MAX_DOCUMENT_BYTES = 100MB). The real per-kind limit is enforced downstream by
+// saveMediaBuffer (via resolveMediaMaxBytes); this is just the download ceiling.
+const MAX_REMOTE_MEDIA_BYTES = 100 * 1024 * 1024; // 100MB
 const REMOTE_MEDIA_TIMEOUT_MS = 20_000;
 
 export function isHttpUrl(value: string): boolean {

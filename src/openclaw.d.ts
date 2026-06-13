@@ -43,6 +43,12 @@ declare module "openclaw/plugin-sdk/media-store" {
   export const saveMediaBuffer: (...args: any[]) => any;
 }
 
+declare module "openclaw/plugin-sdk/media-runtime" {
+  export type MediaKind = "image" | "audio" | "video" | "document";
+  export const mediaKindFromMime: (mime?: string | null) => MediaKind | undefined;
+  export const maxBytesForKind: (kind: MediaKind) => number;
+}
+
 declare module "openclaw/plugin-sdk/plugin-entry" {
   export type OpenClawPluginApi = any;
 }
