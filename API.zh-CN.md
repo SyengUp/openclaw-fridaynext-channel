@@ -96,7 +96,7 @@ data: {"runId":"...","seq":1,"ts":...,"stream":"lifecycle","data":{"phase":"star
 
 ## 取消
 
-`POST /friday-next/cancel`，body：`{ "runId" }`。返回 `200`；在可用时调用 OpenClaw harness 中止；**不再**由插件单独发 `run-error`。
+`POST /friday-next/cancel`，body：`{ "sessionKey", "runId"? }`。`sessionKey` 为主标识（一会话同时至多一个 run）：插件据此解析出 run 内部 `sessionId` 并调用 OpenClaw harness 的 **abort-and-drain**（等待 run 真正结束）。`runId` 为向后兼容回退：缺 `sessionKey` 时经 run route 反解出 sessionKey，并用于 untrack SSE 转发。两者至少给其一（否则 `400`）。返回 `200`，含 `{ ok, sessionKey, runId, aborted, drained }`；**不再**由插件单独发 `run-error`。
 
 ## 状态
 

@@ -1,5 +1,16 @@
 declare module "openclaw/plugin-sdk/agent-harness" {
-  export const abortAgentHarnessRun: (runId: string) => void;
+  /** Abort the active embedded run keyed by its internal `sessionId` (NOT the channel runId). */
+  export const abortAgentHarnessRun: (sessionId: string) => boolean;
+  /** Abort the active embedded run and wait for it to actually settle. */
+  export const abortAndDrainAgentHarnessRun: (params: {
+    sessionId: string;
+    sessionKey?: string;
+    settleMs?: number;
+    forceClear?: boolean;
+    reason?: string;
+  }) => Promise<{ aborted: boolean; drained: boolean; forceCleared: boolean }>;
+  /** Map a channel sessionKey → the active embedded run's internal sessionId. */
+  export const resolveActiveEmbeddedRunSessionId: (sessionKey: string) => string | undefined;
   export const runAgentHarness: (...args: any[]) => any;
 }
 

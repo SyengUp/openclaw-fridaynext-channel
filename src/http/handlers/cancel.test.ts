@@ -47,7 +47,7 @@ describe("handleCancel", () => {
     expect((res as unknown as MockRes).statusCode).toBe(401);
   });
 
-  it("returns 400 for missing runId", async () => {
+  it("returns 400 when neither sessionKey nor runId is provided", async () => {
     const req = mockReq("POST", { authorization: "Bearer test-token" });
     const res = new MockRes() as unknown as ServerResponse;
     const p = handleCancel(req as unknown as IncomingMessage, res);
@@ -56,7 +56,17 @@ describe("handleCancel", () => {
     expect((res as unknown as MockRes).statusCode).toBe(400);
   });
 
-  it("untracks run under Vitest (abort skipped)", async () => {
+  it("accepts sessionKey and returns 200 (abort skipped under Vitest)", async () => {
+    const req = mockReq("POST", { authorization: "Bearer test-token" });
+    const res = new MockRes() as unknown as ServerResponse;
+    const p = handleCancel(req as unknown as IncomingMessage, res);
+    req.end(JSON.stringify({ sessionKey: "sk-1" }));
+    await p;
+    expect((res as unknown as MockRes).statusCode).toBe(200);
+    expect(JSON.parse((res as unknown as MockRes).body)).toMatchObject({ ok: true, sessionKey: "sk-1" });
+  });
+
+  it("untracks run by runId fallback under Vitest (abort skipped)", async () => {
     const req = mockReq("POST", { authorization: "Bearer test-token" });
     const res = new MockRes() as unknown as ServerResponse;
     const spyUntrack = vi.spyOn(sseEmitter, "untrackRun").mockImplementation(() => {});

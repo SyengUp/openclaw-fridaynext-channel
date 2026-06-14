@@ -1,5 +1,6 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
-import { abortRun } from "../../agent/abort-run.js";
+import { abortRunForSessionKey } from "../../agent/abort-run.js";
+import { getRunRoute } from "../../run-metadata.js";
 import { sseEmitter } from "../../sse/emitter.js";
 import { readJsonBody } from "../middleware/body.js";
 import { extractBearerToken } from "../middleware/auth.js";
@@ -20,16 +21,21 @@ export async function handleCancel(req: IncomingMessage, res: ServerResponse): P
   }
   const body = await readJsonBody(req);
   const runId = typeof body?.runId === "string" ? body.runId.trim() : "";
-  if (!runId) {
+  // sessionKey is the primary identifier (one active run per session); runId is a
+  // back-compat fallback for older apps — resolve it to a sessionKey via the run route.
+  const sessionKey =
+    (typeof body?.sessionKey === "string" ? body.sessionKey.trim() : "") ||
+    (runId ? getRunRoute(runId)?.sessionKey?.trim() ?? "" : "");
+  if (!sessionKey && !runId) {
     res.statusCode = 400;
     res.setHeader("Content-Type", "application/json");
-    res.end(JSON.stringify({ error: "Missing runId" }));
+    res.end(JSON.stringify({ error: "Missing sessionKey or runId" }));
     return true;
   }
-  await abortRun(runId);
-  sseEmitter.untrackRun(runId);
+  const result = sessionKey ? await abortRunForSessionKey(sessionKey) : { aborted: false, drained: false };
+  if (runId) sseEmitter.untrackRun(runId);
   res.statusCode = 200;
   res.setHeader("Content-Type", "application/json");
-  res.end(JSON.stringify({ ok: true, runId, cancelled: true }));
+  res.end(JSON.stringify({ ok: true, sessionKey, runId, cancelled: true, ...result }));
   return true;
 }

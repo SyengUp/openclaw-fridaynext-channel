@@ -347,10 +347,16 @@ Slash commands (`/…`) use native command source when applicable. `/new` and `/
 `POST /friday-next/cancel`
 
 ```json
-{ "runId": "..." }
+{ "sessionKey": "...", "runId": "..." }
 ```
 
-Returns `200` and calls OpenClaw’s agent harness abort when available. There is **no** plugin-emitted `run-error` for cancel; observe `agent` / `lifecycle` on the client.
+`sessionKey` is the primary identifier — a session has at most one active run, so the
+plugin resolves it to the run's internal `sessionId` and calls OpenClaw's agent harness
+**abort-and-drain** (waits for the run to settle). `runId` is an optional back-compat
+fallback: when `sessionKey` is omitted it is resolved to a sessionKey via the run route,
+and it is also used to untrack SSE forwarding. At least one of the two is required (else
+`400`). Returns `200` with `{ ok, sessionKey, runId, aborted, drained }`. There is **no**
+plugin-emitted `run-error` for cancel; observe `agent` / `lifecycle` on the client.
 
 ## Status
 
