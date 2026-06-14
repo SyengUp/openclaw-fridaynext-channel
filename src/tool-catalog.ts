@@ -48,6 +48,65 @@ async function loadBuildFn(): Promise<BuildFn | null> {
   return cachedBuildFn;
 }
 
+/**
+ * Core's catalog builder enumerates plugin tools via an internal
+ * `ensureStandaloneRuntimePluginRegistryLoaded({ surface: "channel" })`, which
+ * `pinActivePluginChannelRegistry()`s a tool-scoped registry that does NOT carry the
+ * friday-next channel registration. Because friday-next is an external channel (not in
+ * core's static CHANNEL_IDS), that re-pin drops it from the deliverable-channel set for
+ * the WHOLE gateway until the next full reload/restart — so every agent `message` send
+ * then fails with `Unknown channel: friday-next`. We snapshot the channel registry before
+ * the build and pin it back after, neutralizing the side effect. Resilient-import the
+ * runtime chunk like the catalog builder (gateway singleton; state lives on globalThis).
+ */
+interface ChannelRegistryFns {
+  get: () => unknown;
+  pin: (registry: unknown) => void;
+}
+let cachedChannelRegistryFns: ChannelRegistryFns | null | undefined;
+
+async function loadChannelRegistryFns(): Promise<ChannelRegistryFns | null> {
+  if (cachedChannelRegistryFns !== undefined) return cachedChannelRegistryFns;
+  cachedChannelRegistryFns = await locateChannelRegistryFns();
+  return cachedChannelRegistryFns;
+}
+
+async function locateChannelRegistryFns(): Promise<ChannelRegistryFns | null> {
+  const root = resolveOpenClawRoot();
+  if (!root) return null;
+  const distDir = path.join(root, "dist");
+  let files: string[];
+  try {
+    files = fs.readdirSync(distDir).filter((f) => f.endsWith(".js"));
+  } catch {
+    return null;
+  }
+  for (const file of files) {
+    let content: string;
+    try {
+      content = fs.readFileSync(path.join(distDir, file), "utf8");
+    } catch {
+      continue;
+    }
+    // Only the chunk that re-exports both helpers by their real names is usable.
+    if (!content.includes("pinActivePluginChannelRegistry")) continue;
+    try {
+      const mod = (await import(path.join(distDir, file))) as Record<string, unknown>;
+      const pin = mod.pinActivePluginChannelRegistry;
+      const get = mod.getActivePluginChannelRegistry;
+      if (typeof pin === "function" && typeof get === "function") {
+        return {
+          get: get as () => unknown,
+          pin: pin as (registry: unknown) => void,
+        };
+      }
+    } catch {
+      // unreadable/non-importable candidate → keep scanning
+    }
+  }
+  return null;
+}
+
 async function locateBuildFn(): Promise<BuildFn | null> {
   const root = resolveOpenClawRoot();
   if (!root) return null;
@@ -127,11 +186,31 @@ function findAgentTools(cfg: unknown, agentId: string): AgentToolsConfigShape | 
 export async function buildAgentToolsCatalog(cfg: unknown, agentId: string): Promise<AgentToolsCatalog | null> {
   const build = await loadBuildFn();
   if (!build) return null;
+  // Snapshot the channel registry so we can undo the build's `surface:"channel"` re-pin
+  // (which would otherwise drop friday-next from the gateway's deliverable channels).
+  const channelFns = await loadChannelRegistryFns();
+  const channelRegistryBefore = (() => {
+    try {
+      return channelFns?.get() ?? null;
+    } catch {
+      return null;
+    }
+  })();
   let core: CoreCatalogResult;
   try {
     core = build({ cfg, agentId, includePlugins: true });
   } catch {
     return null;
+  } finally {
+    // Pin the original channel registry back. Idempotent when the build didn't clobber it
+    // (core returns early when the surface already points at this registry).
+    if (channelFns && channelRegistryBefore) {
+      try {
+        channelFns.pin(channelRegistryBefore);
+      } catch {
+        // best effort — never fail the catalog request over the restore
+      }
+    }
   }
 
   const tools = findAgentTools(cfg, agentId);
