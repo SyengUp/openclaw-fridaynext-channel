@@ -14,6 +14,10 @@ pnpm test:e2e        # Vitest e2e (vitest.e2e.config.ts)
 pnpm test            # unit then e2e
 pnpm test:smoke      # Live gateway smoke (optional, needs running gateway)
 pnpm test:msg-live   # Live message roundtrip (needs running gateway)
+pnpm lint            # ESLint (type-aware); baseline is 0 errors / ~241 warnings
+pnpm lint:fix        # ESLint with --fix
+pnpm format          # Prettier write all files
+pnpm format:check    # Prettier check only (CI-friendly)
 
 # Run a single test file
 pnpm vitest run src/http/handlers/messages.test.ts
@@ -164,3 +168,4 @@ OpenClaw filters `nodes` by **profile** and **owner**. To verify or fix visibili
 - **Session key normalization** (`toSessionStoreKey`): `"main"` maps to `"agent:main:main"`. Other bare keys get `"agent:main:<key>"` prefix. Already-qualified `agent:<id>:<rest>` keys pass through unchanged.
 - **Attachments** are persisted under the plugin root `attachments/` directory (`.gitignore`'d) and served at `/friday-next/files/{token}`. The `files.ts` handler maintains an in-memory index that is repopulated from disk on gateway restart via `readAttachmentFileFromDisk`.
 - **`openclaw.d.ts`** provides ambient type declarations for all `openclaw/plugin-sdk/*` imports. Tests and build both rely on these rather than installing the full `openclaw` package.
+- **Lint policy** (`eslint.config.js`): keep `pnpm lint` at **0 errors**. The ~241 `no-unsafe-*` / `no-explicit-any` **warnings** are structural noise from the untyped OpenClaw host SDK (`openclaw.d.ts` is a hand-written `any` shim) — expected, not debt. `require-await` is off (HTTP handlers / SDK callbacks present async signatures by contract). `_`-prefixed names are intentionally-unused.
