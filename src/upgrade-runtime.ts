@@ -28,7 +28,7 @@ export type UpgradeRuntime = {
   /** Mutate the config file; `afterWrite: { mode: "restart" }` triggers a safe gateway restart. */
   mutateConfigFile: (params: {
     afterWrite: ConfigAfterWrite;
-    mutate: (draft: unknown) => unknown | void;
+    mutate: (draft: unknown) => unknown;
   }) => Promise<unknown>;
   /**
    * Filesystem path of THIS loaded plugin (`api.source`). Used to infer the install

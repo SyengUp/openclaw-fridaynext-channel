@@ -14,15 +14,6 @@ interface PairedNodeEntry {
   caps?: string[];
   commands?: string[];
 }
-interface NodePairingList {
-  pending: PendingNodeEntry[];
-  paired: PairedNodeEntry[];
-}
-type ApproveNodePairingResult =
-  | { requestId: string; node: PairedNodeEntry }
-  | { status: "forbidden"; missingScope: string }
-  | null;
-
 export async function handleNodesApprove(
   req: IncomingMessage,
   res: ServerResponse,
@@ -122,7 +113,7 @@ let listData, listNodePairing, approveNodePairing;
     if ("status" in approved && approved.status === "forbidden") {
       res.statusCode = 403;
       res.setHeader("Content-Type", "application/json");
-      res.end(JSON.stringify({ error: `Node approval forbidden: ${(approved as any).missingScope ?? "unknown"}` }));
+      res.end(JSON.stringify({ error: `Node approval forbidden: ${(approved).missingScope ?? "unknown"}` }));
       return true;
     }
 
@@ -131,8 +122,8 @@ let listData, listNodePairing, approveNodePairing;
     res.end(JSON.stringify({
       ok: true,
       nodeId: normalizedNodeId,
-      requestId: (approved as any).requestId,
-      approvedAtMs: (approved as any).node?.approvedAtMs,
+      requestId: (approved).requestId,
+      approvedAtMs: (approved).node?.approvedAtMs,
     }));
     return true;
   }

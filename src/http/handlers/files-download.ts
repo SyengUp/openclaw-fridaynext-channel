@@ -110,7 +110,7 @@ function sendBuffer(
   let end = total - 1;
 
   if (m[1] === "" && m[2] !== "") {
-    const suffixLen = parseInt(m[2]!, 10);
+    const suffixLen = parseInt(m[2], 10);
     if (!Number.isFinite(suffixLen) || suffixLen <= 0) {
       res.statusCode = 200;
       res.setHeader("Content-Length", String(total));
@@ -120,11 +120,11 @@ function sendBuffer(
     start = Math.max(0, total - suffixLen);
     end = total - 1;
   } else if (m[1] !== "" && m[2] === "") {
-    start = parseInt(m[1]!, 10);
+    start = parseInt(m[1], 10);
     end = total - 1;
   } else if (m[1] !== "" && m[2] !== "") {
-    start = parseInt(m[1]!, 10);
-    end = parseInt(m[2]!, 10);
+    start = parseInt(m[1], 10);
+    end = parseInt(m[2], 10);
   }
 
   if (!Number.isFinite(start) || !Number.isFinite(end) || start > end || start >= total) {

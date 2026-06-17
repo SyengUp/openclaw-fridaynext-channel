@@ -1,4 +1,3 @@
-import type { ChannelPlugin } from "openclaw/plugin-sdk/core";
 import { defineChannelPluginEntry } from "openclaw/plugin-sdk/core";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import type { PluginHookBeforeToolCallEvent, PluginHookAfterToolCallEvent, PluginHookToolContext } from "openclaw/plugin-sdk/plugins/types";
@@ -83,7 +82,7 @@ export default defineChannelPluginEntry({
   id: "friday-next",
   name: "Friday Next",
   description: "Friday Next Apple 应用通道",
-  plugin: fridayNextChannelPlugin as ChannelPlugin,
+  plugin: fridayNextChannelPlugin,
   setRuntime: setFridayNextRuntime,
   registerFull: (api: OpenClawPluginApi) => {
     setFridayAgentForwardRuntime(api);

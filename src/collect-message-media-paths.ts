@@ -112,20 +112,20 @@ export function extractLocalPathsFromToolTextBlob(s: string): Set<string> {
 
   // Verbatim /Users/.../file.ext (stop before quote or backslash — avoids eating JSON commas)
   for (const m of s.matchAll(/(\/Users\/[^"\\]+\.[A-Za-z0-9]{1,24})/g)) {
-    add(m[1]!);
+    add(m[1]);
   }
   for (const m of s.matchAll(/(\/private\/var\/[^"\\]+\.[A-Za-z0-9]{1,24})/g)) {
-    add(m[1]!);
+    add(m[1]);
   }
   for (const m of s.matchAll(/(\/tmp\/[^"\\]+\.[A-Za-z0-9]{1,24})/g)) {
-    add(m[1]!);
+    add(m[1]);
   }
   for (const m of s.matchAll(/(\/home\/[^"\\]+\.[A-Za-z0-9]{1,24})/g)) {
-    add(m[1]!);
+    add(m[1]);
   }
 
   for (const m of s.matchAll(/([A-Za-z]:\\[^"\\]+\.[A-Za-z0-9]{1,24})/g)) {
-    add(m[1]!);
+    add(m[1]);
   }
 
   return out;

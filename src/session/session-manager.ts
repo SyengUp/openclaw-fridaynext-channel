@@ -243,7 +243,7 @@ export function resolveAgentDefaults(sessionKey: string): { model?: string; thin
     const targetAgentId = agentIdFromSessionKey(sessionKey);
 
     const agentEntry = (agents?.list as Array<Record<string, unknown>> | undefined)?.find(
-      (a) => agentIdFromSessionKey(`agent:${String(a?.id ?? "")}:x`) === targetAgentId,
+      (a) => agentIdFromSessionKey(`agent:${typeof a?.id === "string" ? a.id : ""}:x`) === targetAgentId,
     );
     const agentModel = agentEntry?.model;
     const perAgentModel =
@@ -253,13 +253,13 @@ export function resolveAgentDefaults(sessionKey: string): { model?: string; thin
           ? ((agentModel as Record<string, unknown>).primary as string)
           : undefined;
     const perAgentThinking =
-      typeof agentEntry?.thinkingDefault === "string" ? (agentEntry.thinkingDefault as string) : undefined;
+      typeof agentEntry?.thinkingDefault === "string" ? (agentEntry.thinkingDefault) : undefined;
 
     const agentDefaults = agents?.defaults as Record<string, unknown> | undefined;
     const model = agentDefaults?.model as Record<string, unknown> | undefined;
-    const globalModel = typeof model?.primary === "string" ? (model.primary as string) : undefined;
+    const globalModel = typeof model?.primary === "string" ? (model.primary) : undefined;
     const globalThinking =
-      typeof agentDefaults?.thinkingDefault === "string" ? (agentDefaults.thinkingDefault as string) : undefined;
+      typeof agentDefaults?.thinkingDefault === "string" ? (agentDefaults.thinkingDefault) : undefined;
 
     return { model: perAgentModel ?? globalModel, thinking: perAgentThinking ?? globalThinking };
   } catch {

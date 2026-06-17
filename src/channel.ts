@@ -207,7 +207,6 @@ export const fridayNextChannelPlugin = createChatChannelPlugin({
         const sessionKey = resolveOutboundSessionKey(deviceId, runId, rawCtx);
 
         const conn = sseEmitter.getConnection(deviceId);
-        const ts = new Date().toISOString();
         logger.info(
           `[SEND_TEXT] to=${deviceId} runId=${runId ?? "(none)"} sessionKey=${sessionKey ?? "(none)"} textLen=${text.length} online=${!!conn}`,
         );
@@ -304,7 +303,6 @@ export const fridayNextChannelPlugin = createChatChannelPlugin({
             const publicUrl = resolved ? resolved.url : fileUrl;
 
             const conn = sseEmitter.getConnection(deviceId);
-            const ts = new Date().toISOString();
             logger.info(
               `[SEND_MEDIA] to=${deviceId} runId=${runId ?? "(none)"} sessionKey=${sessionKey ?? "(none)"} audioAsVoice=${audioAsVoice} url=${publicUrl} online=${!!conn}`,
             );

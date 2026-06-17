@@ -39,10 +39,6 @@ export function registerSessionKeyForRun(sessionKey: string, runId: string): voi
   sessionKeyToRunId.set(sessionKey, runId);
 }
 
-function resolveRunIdForSessionKey(sessionKey: string): string | undefined {
-  return sessionKeyToRunId.get(sessionKey);
-}
-
 /**
  * Parse OpenClaw announce compound runId:
  *   announce:v<version>:<sessionKey>:<bareRunId>

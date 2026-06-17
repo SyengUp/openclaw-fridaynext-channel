@@ -37,7 +37,7 @@ export class SseConnection {
   send(entry: BacklogEntry | SseEvent, flushNow?: boolean): void {
     if (this.closed) return;
     const normalized =
-      "id" in entry && "event" in entry ? entry : { id: Date.now(), event: entry as SseEvent };
+      "id" in entry && "event" in entry ? entry : { id: Date.now(), event: entry };
     const payload = JSON.stringify(normalized.event.data);
     this.pending.push(
       `id: ${normalized.id}\nevent: ${normalized.event.type}\ndata: ${payload}\n\n`,

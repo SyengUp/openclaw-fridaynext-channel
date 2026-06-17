@@ -1,4 +1,5 @@
-type DispatchFn = (args: unknown) => Promise<unknown> | unknown;
+// Returns a value or a thenable; `unknown` covers both (callers `await` the result).
+type DispatchFn = (args: unknown) => unknown;
 
 let overrideDispatch: DispatchFn | null = null;
 

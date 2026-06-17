@@ -117,7 +117,7 @@ function readPatch<T>(body: Record<string, unknown>, key: string, coerce: (raw: 
   return { sent: true, clear: false, value };
 }
 
-function coerceModel(raw: unknown): unknown | undefined {
+function coerceModel(raw: unknown): unknown {
   if (typeof raw === "string") return raw.trim() || undefined;
   if (raw && typeof raw === "object") {
     const primary = readString((raw as Record<string, unknown>).primary);

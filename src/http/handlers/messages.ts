@@ -602,10 +602,11 @@ export async function handleMessages(req: IncomingMessage, res: ServerResponse):
           // OpenClaw `pi-embedded-subscribe` gates `streamReasoning` on `typeof onReasoningStream === "function"`.
           // Without this, `emitReasoningStream` never runs and Friday SSE never sees `stream: "thinking"`.
           onReasoningStream: async (pl: unknown) => {
-            const text =
+            const rawText =
               typeof pl === "object" && pl !== null && "text" in pl
-                ? String((pl as { text?: unknown }).text ?? "")
-                : "";
+                ? (pl as { text?: unknown }).text
+                : undefined;
+            const text = typeof rawText === "string" ? rawText : "";
             log("REASONING_STREAM", normalizedDeviceId, runId, `textLen=${text.length}`);
           },
           onReasoningEnd: async () => {

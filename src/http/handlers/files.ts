@@ -246,7 +246,7 @@ export function storeFile(buffer: Buffer, filename: string, mimeType: string): S
   try {
     fs.writeFileSync(storedPath, buffer);
   } catch (err) {
-    throw new Error(`Failed to store file: ${String(err)}`);
+    throw new Error(`Failed to store file: ${String(err)}`, { cause: err });
   }
 
   const file: StoredFile = {

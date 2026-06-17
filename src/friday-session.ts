@@ -368,8 +368,8 @@ export function forwardAgentEventRaw(evt: ForwardAgentEventArgs): void {
       const label =
         details.taskName ||
         intent?.label ||
-        (typeof (evt.data as Record<string, unknown>).meta === "string"
-          ? ((evt.data as Record<string, unknown>).meta as string)
+        (typeof (evt.data).meta === "string"
+          ? ((evt.data).meta)
           : undefined);
       const entry = ensureSubagentFromSpawnTool({
         childSessionKey: details.childSessionKey,
@@ -441,7 +441,15 @@ export function forwardAgentEventRaw(evt: ForwardAgentEventArgs): void {
   // Emit subagent ended SSE when a subagent run terminates
   if (isTerminalLifecycle && isSubagentOwnEvent && subagentEntry.status !== "ended") {
     const outcome = lifecyclePhase === "error" ? "error" : "ok";
-    const errorStr = lifecyclePhase === "error" ? String(evt.data.error ?? "unknown") : undefined;
+    const rawError: unknown = evt.data.error;
+    const errorStr =
+      lifecyclePhase === "error"
+        ? typeof rawError === "string"
+          ? rawError
+          : rawError == null
+            ? "unknown"
+            : JSON.stringify(rawError)
+        : undefined;
     const ended = registerSubagentEnded({ runId: evt.runId, outcome, error: errorStr });
     if (ended) {
       sseEmitter.broadcast(

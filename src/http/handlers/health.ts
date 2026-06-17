@@ -158,14 +158,14 @@ async function checkNodePairing(
     try {
       const callerScopes = ["operator.admin", "operator.pairing", "operator.read", "operator.write"];
       const approved = await approveNodePairing(pendingMatch.requestId, { callerScopes });
-      const succeeded = approved != null && !("status" in approved && (approved as any).status === "forbidden") && "requestId" in approved;
+      const succeeded = approved != null && !("status" in approved && (approved).status === "forbidden") && "requestId" in approved;
       (result.repairActions ??= []).push({
         component: "nodePairing",
         action: "approveNodePairing",
         result: succeeded ? "ok" : "failed",
         detail: succeeded
           ? `Auto-approved node ${normalizedNodeId}`
-          : `approveNodePairing returned status=${(approved as any)?.status ?? "null"}`,
+          : `approveNodePairing returned status=${(approved)?.status ?? "null"}`,
       });
       if (succeeded) {
         log.info(`Auto-approved node ${normalizedNodeId}`);
