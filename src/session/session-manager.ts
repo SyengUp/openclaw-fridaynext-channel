@@ -247,7 +247,9 @@ export function resolveAgentDefaults(sessionKey: string): { model?: string; thin
 
     const agentEntry = (agents?.list as Array<Record<string, unknown>> | undefined)?.find(
       (a) =>
-        agentIdFromSessionKey(`agent:${typeof a?.id === "string" ? a.id : ""}:x`) === targetAgentId,
+        agentIdFromSessionKey(
+          `agent:${typeof a?.id === "string" ? a.id : typeof a?.id === "number" ? String(a.id) : ""}:x`,
+        ) === targetAgentId,
     );
     const agentModel = agentEntry?.model;
     const perAgentModel =

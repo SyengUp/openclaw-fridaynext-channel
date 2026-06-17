@@ -288,6 +288,23 @@ export function resolveFridayDeviceIdForOutbound(
 }
 
 /**
+ * Stringify a subagent error payload for the wire. `evt.data.error` comes from an
+ * in-process SDK callback, so it can be a real Error, a plain object, or a value
+ * that JSON.stringify would throw on (circular/BigInt) — keep this total and
+ * never-throwing, since it runs on the error path that emits `subagent ended`.
+ */
+function stringifySubagentError(raw: unknown): string {
+  if (raw == null) return "unknown";
+  if (typeof raw === "string") return raw;
+  if (raw instanceof Error) return raw.message || raw.name || "error";
+  try {
+    return JSON.stringify(raw) ?? "unknown";
+  } catch {
+    return "unstringifiable error";
+  }
+}
+
+/**
  * Forward global OpenClaw agent events to the Friday SSE connection (transparent).
  *
  * Asynchronous follow-up runs still reach the device via `getLastRunIdForDevice` when the parent run
@@ -447,15 +464,8 @@ export function forwardAgentEventRaw(evt: ForwardAgentEventArgs): void {
   // Emit subagent ended SSE when a subagent run terminates
   if (isTerminalLifecycle && isSubagentOwnEvent && subagentEntry.status !== "ended") {
     const outcome = lifecyclePhase === "error" ? "error" : "ok";
-    const rawError: unknown = evt.data.error;
     const errorStr =
-      lifecyclePhase === "error"
-        ? typeof rawError === "string"
-          ? rawError
-          : rawError == null
-            ? "unknown"
-            : JSON.stringify(rawError)
-        : undefined;
+      lifecyclePhase === "error" ? stringifySubagentError(evt.data.error) : undefined;
     const ended = registerSubagentEnded({ runId: evt.runId, outcome, error: errorStr });
     if (ended) {
       sseEmitter.broadcast(
