@@ -33,7 +33,11 @@ let tmpDir = "";
 /** Write a non-empty transcript file and return its absolute path. */
 function transcript(name: string): string {
   const file = path.join(tmpDir, name);
-  fs.writeFileSync(file, `${JSON.stringify({ type: "message", id: "m", message: { role: "user", content: "hi" } })}\n`, "utf-8");
+  fs.writeFileSync(
+    file,
+    `${JSON.stringify({ type: "message", id: "m", message: { role: "user", content: "hi" } })}\n`,
+    "utf-8",
+  );
   return file;
 }
 
@@ -86,7 +90,11 @@ describe("handleHistorySessions", () => {
       { agents: { list: [{ id: "main" }] } },
       {
         main: {
-          "agent:main:main": { sessionId: "s-main", updatedAt: 100, sessionFile: transcript("main.jsonl") },
+          "agent:main:main": {
+            sessionId: "s-main",
+            updatedAt: 100,
+            sessionFile: transcript("main.jsonl"),
+          },
           "agent:main:friday:direct:dev:1": {
             sessionId: "s-fd",
             updatedAt: 300,
@@ -112,8 +120,16 @@ describe("handleHistorySessions", () => {
       { agents: { list: [{ id: "main" }] } },
       {
         main: {
-          "agent:main:live": { sessionId: "a", updatedAt: 1, sessionFile: transcript("live.jsonl") },
-          "agent:main:archived": { sessionId: "b", updatedAt: 2, sessionFile: path.join(tmpDir, "gone.jsonl") },
+          "agent:main:live": {
+            sessionId: "a",
+            updatedAt: 1,
+            sessionFile: transcript("live.jsonl"),
+          },
+          "agent:main:archived": {
+            sessionId: "b",
+            updatedAt: 2,
+            sessionFile: path.join(tmpDir, "gone.jsonl"),
+          },
         },
       },
     );
@@ -129,11 +145,32 @@ describe("handleHistorySessions", () => {
       {
         main: {
           "agent:main:main": { sessionId: "ok", updatedAt: 5, sessionFile: transcript("ok.jsonl") },
-          "agent:main:main:heartbeat": { sessionId: "hb", updatedAt: 4, sessionFile: transcript("hb.jsonl") },
-          "agent:main:cron:abc": { sessionId: "c", updatedAt: 3, sessionFile: transcript("c.jsonl") },
-          "agent:main:subagent:xyz": { sessionId: "sa", updatedAt: 2, sessionFile: transcript("sa.jsonl") },
-          "agent:main:dreaming-narrative-rem-1": { sessionId: "d", updatedAt: 1, sessionFile: transcript("d.jsonl") },
-          "agent:main:child": { sessionId: "ch", updatedAt: 6, spawnedBy: "agent:main:main", sessionFile: transcript("ch.jsonl") },
+          "agent:main:main:heartbeat": {
+            sessionId: "hb",
+            updatedAt: 4,
+            sessionFile: transcript("hb.jsonl"),
+          },
+          "agent:main:cron:abc": {
+            sessionId: "c",
+            updatedAt: 3,
+            sessionFile: transcript("c.jsonl"),
+          },
+          "agent:main:subagent:xyz": {
+            sessionId: "sa",
+            updatedAt: 2,
+            sessionFile: transcript("sa.jsonl"),
+          },
+          "agent:main:dreaming-narrative-rem-1": {
+            sessionId: "d",
+            updatedAt: 1,
+            sessionFile: transcript("d.jsonl"),
+          },
+          "agent:main:child": {
+            sessionId: "ch",
+            updatedAt: 6,
+            spawnedBy: "agent:main:main",
+            sessionFile: transcript("ch.jsonl"),
+          },
           global: { sessionId: "g", updatedAt: 7, sessionFile: transcript("g.jsonl") },
         },
       },

@@ -4,7 +4,10 @@ import { delimiter, dirname, join } from "node:path";
 // Results come from the untyped OpenClaw dist module, so the resolved shapes are
 // `any` at this host boundary — callers read dynamic fields (.pending, .status, …).
 type ListNodePairingFn = () => Promise<any>;
-type ApproveNodePairingFn = (requestId: string, options: { callerScopes?: unknown }) => Promise<any>;
+type ApproveNodePairingFn = (
+  requestId: string,
+  options: { callerScopes?: unknown },
+) => Promise<any>;
 type NodePairingModule = {
   listNodePairing: ListNodePairingFn;
   approveNodePairing: ApproveNodePairingFn;
@@ -81,7 +84,8 @@ export async function loadNodePairingModule(): Promise<NodePairingModule> {
   for (const value of Object.values(mod)) {
     if (typeof value === "function") {
       if (value.name === "listNodePairing") listNodePairing = value as ListNodePairingFn;
-      else if (value.name === "approveNodePairing") approveNodePairing = value as ApproveNodePairingFn;
+      else if (value.name === "approveNodePairing")
+        approveNodePairing = value as ApproveNodePairingFn;
     }
   }
   if (!listNodePairing || !approveNodePairing) {

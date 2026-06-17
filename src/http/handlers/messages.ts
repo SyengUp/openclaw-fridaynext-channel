@@ -77,7 +77,10 @@ const log = (
   logger[level](`[${action}] deviceId=${deviceId}${runPart}${detailPart}`);
 };
 
-function collectReplyPayloadMediaUrls(pl: { mediaUrls?: string[]; mediaUrl?: string | null }): string[] {
+function collectReplyPayloadMediaUrls(pl: {
+  mediaUrls?: string[];
+  mediaUrl?: string | null;
+}): string[] {
   const fromArr = Array.isArray(pl.mediaUrls)
     ? pl.mediaUrls.filter((u): u is string => typeof u === "string" && u.trim().length > 0)
     : [];
@@ -159,7 +162,12 @@ export function isCanvasSnapshotMediaPath(url: unknown): boolean {
 export function translateDeliverPayload(
   pl: FridayReplyPayload,
   kind: string,
-  meta?: { modelName?: string; totalTokens?: number; contextTokensUsed?: number; contextWindowMax?: number },
+  meta?: {
+    modelName?: string;
+    totalTokens?: number;
+    contextTokensUsed?: number;
+    contextWindowMax?: number;
+  },
 ): Record<string, unknown> {
   // Strip canvas-snapshot tool-result images before any media resolution (paths here are still the
   // original `/tmp/openclaw/openclaw-canvas-snapshot-*.jpg` temp paths, not yet copied to friday files).
@@ -210,7 +218,11 @@ export function translateDeliverPayload(
   if (typeof meta?.modelName === "string" && meta.modelName.trim()) {
     nextFridayNext.modelName = meta.modelName.trim();
   }
-  if (typeof meta?.totalTokens === "number" && Number.isFinite(meta.totalTokens) && meta.totalTokens > 0) {
+  if (
+    typeof meta?.totalTokens === "number" &&
+    Number.isFinite(meta.totalTokens) &&
+    meta.totalTokens > 0
+  ) {
     nextFridayNext.totalTokens = Math.floor(meta.totalTokens);
   }
   if (
@@ -260,8 +272,10 @@ function scheduleLateFinalMetaPatch(runId: string, attempts = 6): void {
             sessionKey: route.sessionKey,
             modelName: meta.modelName ?? null,
             totalTokens: typeof meta.totalTokens === "number" ? meta.totalTokens : null,
-            contextTokensUsed: typeof meta.contextTokensUsed === "number" ? meta.contextTokensUsed : null,
-            contextWindowMax: typeof meta.contextWindowMax === "number" ? meta.contextWindowMax : null,
+            contextTokensUsed:
+              typeof meta.contextTokensUsed === "number" ? meta.contextTokensUsed : null,
+            contextWindowMax:
+              typeof meta.contextWindowMax === "number" ? meta.contextWindowMax : null,
             ts: Date.now(),
           },
         },
@@ -298,11 +312,17 @@ function pickMetadataFromMessageLike(message: unknown): {
       ? usage.totalTokens
       : undefined) ??
     (typeof usage?.total === "number" && Number.isFinite(usage.total) ? usage.total : undefined) ??
-    (typeof usage?.total_tokens === "number" && Number.isFinite(usage.total_tokens) ? usage.total_tokens : undefined);
+    (typeof usage?.total_tokens === "number" && Number.isFinite(usage.total_tokens)
+      ? usage.total_tokens
+      : undefined);
   const totalFromMessage =
-    (typeof m.totalTokens === "number" && Number.isFinite(m.totalTokens) ? m.totalTokens : undefined) ??
-    (typeof m.total_tokens === "number" && Number.isFinite(m.total_tokens) ? m.total_tokens : undefined);
-  const totalTokens = Math.floor((totalFromUsage ?? totalFromMessage ?? 0));
+    (typeof m.totalTokens === "number" && Number.isFinite(m.totalTokens)
+      ? m.totalTokens
+      : undefined) ??
+    (typeof m.total_tokens === "number" && Number.isFinite(m.total_tokens)
+      ? m.total_tokens
+      : undefined);
+  const totalTokens = Math.floor(totalFromUsage ?? totalFromMessage ?? 0);
 
   let contextTokensUsed: number | undefined;
   if (usage) {
@@ -313,8 +333,12 @@ function pickMetadataFromMessageLike(message: unknown): {
   }
 
   const ctxMaxRaw =
-    (typeof m.contextWindow === "number" && Number.isFinite(m.contextWindow) ? m.contextWindow : undefined) ??
-    (typeof m.maxContextTokens === "number" && Number.isFinite(m.maxContextTokens) ? m.maxContextTokens : undefined);
+    (typeof m.contextWindow === "number" && Number.isFinite(m.contextWindow)
+      ? m.contextWindow
+      : undefined) ??
+    (typeof m.maxContextTokens === "number" && Number.isFinite(m.maxContextTokens)
+      ? m.maxContextTokens
+      : undefined);
   const contextWindowMax =
     typeof ctxMaxRaw === "number" && ctxMaxRaw > 0 ? Math.floor(ctxMaxRaw) : undefined;
 
@@ -336,9 +360,16 @@ async function resolveRunMetadataFromRuntimeSession(
   contextTokensUsed?: number;
   contextWindowMax?: number;
 } | null> {
-  const sessionApi = (runtime as unknown as {
-    subagent?: { getSessionMessages?: (params: { sessionKey: string; limit?: number }) => Promise<{ messages?: unknown[] }> };
-  }).subagent;
+  const sessionApi = (
+    runtime as unknown as {
+      subagent?: {
+        getSessionMessages?: (params: {
+          sessionKey: string;
+          limit?: number;
+        }) => Promise<{ messages?: unknown[] }>;
+      };
+    }
+  ).subagent;
   if (!sessionApi?.getSessionMessages) return null;
   try {
     const response = await sessionApi.getSessionMessages({ sessionKey, limit: 80 });
@@ -373,7 +404,10 @@ export function composeBodyWithMediaRefs(text: string, mediaRefs: string[]): str
   return trimmed ? `${trimmed}\n\n${mediaRefs.join("\n")}` : mediaRefs.join("\n");
 }
 
-async function buildBodyForAgentWithAttachments(text: string, attachmentIds: string[]): Promise<string> {
+async function buildBodyForAgentWithAttachments(
+  text: string,
+  attachmentIds: string[],
+): Promise<string> {
   if (attachmentIds.length === 0) return text.trim();
 
   const mediaRefs: string[] = [];
@@ -539,7 +573,10 @@ export async function handleMessages(req: IncomingMessage, res: ServerResponse):
         dispatcherOptions: {
           deliver: async (pl: any, info: any) => {
             let meta = getRunMetadata(runId);
-            if (info.kind.toLowerCase() === "final" && !(meta?.modelName || typeof meta?.totalTokens === "number")) {
+            if (
+              info.kind.toLowerCase() === "final" &&
+              !(meta?.modelName || typeof meta?.totalTokens === "number")
+            ) {
               const resolved = await resolveRunMetadataFromRuntimeSession(runtime, baseSessionKey);
               if (resolved) {
                 setRunMetadata(runId, resolved);

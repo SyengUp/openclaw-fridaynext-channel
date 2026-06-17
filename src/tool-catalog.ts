@@ -37,7 +37,11 @@ interface CoreCatalogResult {
   profiles: Array<{ id: string; label: string }>;
   groups: CoreCatalogGroup[];
 }
-type BuildFn = (params: { cfg: unknown; agentId?: string; includePlugins?: boolean }) => CoreCatalogResult;
+type BuildFn = (params: {
+  cfg: unknown;
+  agentId?: string;
+  includePlugins?: boolean;
+}) => CoreCatalogResult;
 
 let cachedBuildFn: BuildFn | null | undefined;
 
@@ -126,7 +130,8 @@ async function locateBuildFn(): Promise<BuildFn | null> {
     if (!content.includes("function buildToolsCatalogResult")) continue;
     try {
       const mod = (await import(path.join(distDir, file))) as Record<string, unknown>;
-      if (typeof mod.buildToolsCatalogResult === "function") return mod.buildToolsCatalogResult as BuildFn;
+      if (typeof mod.buildToolsCatalogResult === "function")
+        return mod.buildToolsCatalogResult as BuildFn;
     } catch {
       // unreadable/non-importable candidate → keep scanning
     }
@@ -171,8 +176,9 @@ function readStringArray(value: unknown): string[] {
 
 /** Read an agent's `tools` config block from the host config. */
 function findAgentTools(cfg: unknown, agentId: string): AgentToolsConfigShape | undefined {
-  const list = ((cfg as Record<string, unknown> | undefined)?.agents as Record<string, unknown> | undefined)
-    ?.list as Array<Record<string, unknown>> | undefined;
+  const list = (
+    (cfg as Record<string, unknown> | undefined)?.agents as Record<string, unknown> | undefined
+  )?.list as Array<Record<string, unknown>> | undefined;
   if (!Array.isArray(list)) return undefined;
   const entry = list.find((a) => a && typeof a === "object" && normalizeAgentId(a.id) === agentId);
   return entry?.tools as AgentToolsConfigShape | undefined;
@@ -182,7 +188,10 @@ function findAgentTools(cfg: unknown, agentId: string): AgentToolsConfigShape | 
  * The agent's full tool catalog with per-tool effective state, or null if the core
  * catalog builder can't be located.
  */
-export async function buildAgentToolsCatalog(cfg: unknown, agentId: string): Promise<AgentToolsCatalog | null> {
+export async function buildAgentToolsCatalog(
+  cfg: unknown,
+  agentId: string,
+): Promise<AgentToolsCatalog | null> {
   const build = await loadBuildFn();
   if (!build) return null;
   // Snapshot the channel registry so we can undo the build's `surface:"channel"` re-pin
@@ -213,7 +222,8 @@ export async function buildAgentToolsCatalog(cfg: unknown, agentId: string): Pro
   }
 
   const tools = findAgentTools(cfg, agentId);
-  const profile = (typeof tools?.profile === "string" && tools.profile.trim()) ? tools.profile.trim() : null;
+  const profile =
+    typeof tools?.profile === "string" && tools.profile.trim() ? tools.profile.trim() : null;
   const allow = new Set(readStringArray(tools?.allow));
   const alsoAllow = new Set(readStringArray(tools?.alsoAllow));
   const deny = new Set(readStringArray(tools?.deny));

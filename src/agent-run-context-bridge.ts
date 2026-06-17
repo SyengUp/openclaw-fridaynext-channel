@@ -26,7 +26,9 @@ function getAgentEventState(): AgentEventStateLike | undefined {
   return { runContextById };
 }
 
-export function getOpenClawAgentRunContext(runId: string): OpenClawAgentRunContextBridge | undefined {
+export function getOpenClawAgentRunContext(
+  runId: string,
+): OpenClawAgentRunContextBridge | undefined {
   if (!runId) return undefined;
   return getAgentEventState()?.runContextById.get(runId);
 }

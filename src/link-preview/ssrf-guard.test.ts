@@ -46,7 +46,9 @@ describe("parseHttpUrl", () => {
 describe("assertPublicHttpUrl", () => {
   it("rejects non-default ports", () => {
     expect(() => assertPublicHttpUrl(new URL("http://example.com:8080/"))).toThrow(BlockedUrlError);
-    expect(() => assertPublicHttpUrl(new URL("https://example.com:8443/"))).toThrow(BlockedUrlError);
+    expect(() => assertPublicHttpUrl(new URL("https://example.com:8443/"))).toThrow(
+      BlockedUrlError,
+    );
   });
 
   it("allows default and explicit 80/443 ports", () => {
@@ -95,7 +97,14 @@ describe("isPrivateAddress", () => {
   });
 
   it("passes public IPv4", () => {
-    for (const ip of ["8.8.8.8", "93.184.216.34", "100.63.0.1", "100.128.0.1", "172.32.0.1", "198.20.0.1"]) {
+    for (const ip of [
+      "8.8.8.8",
+      "93.184.216.34",
+      "100.63.0.1",
+      "100.128.0.1",
+      "172.32.0.1",
+      "198.20.0.1",
+    ]) {
       expect(isPrivateAddress(ip), ip).toBe(false);
     }
   });
@@ -106,7 +115,15 @@ describe("isPrivateAddress", () => {
   });
 
   it("flags private/reserved IPv6 and mapped IPv4", () => {
-    for (const ip of ["::1", "::", "fd00::1", "fd12:3456::1", "fe80::1", "::ffff:10.0.0.1", "::ffff:127.0.0.1"]) {
+    for (const ip of [
+      "::1",
+      "::",
+      "fd00::1",
+      "fd12:3456::1",
+      "fe80::1",
+      "::ffff:10.0.0.1",
+      "::ffff:127.0.0.1",
+    ]) {
       expect(isPrivateAddress(ip), ip).toBe(true);
     }
   });
@@ -140,11 +157,15 @@ describe("assertResolvesPublic", () => {
       { address: "93.184.216.34", family: 4 },
       { address: "10.0.0.5", family: 4 },
     ] as never);
-    await expect(assertResolvesPublic(new URL("https://rebind.example.com/"))).rejects.toThrow(BlockedUrlError);
+    await expect(assertResolvesPublic(new URL("https://rebind.example.com/"))).rejects.toThrow(
+      BlockedUrlError,
+    );
   });
 
   it("validates IP-literal hosts without a DNS lookup", async () => {
-    await expect(assertResolvesPublic(new URL("http://127.0.0.1/"))).rejects.toThrow(BlockedUrlError);
+    await expect(assertResolvesPublic(new URL("http://127.0.0.1/"))).rejects.toThrow(
+      BlockedUrlError,
+    );
     await expect(assertResolvesPublic(new URL("http://93.184.216.34/"))).resolves.toBeUndefined();
     expect(lookupMock).not.toHaveBeenCalled();
   });
@@ -164,7 +185,13 @@ describe("fetchPublicUrl", () => {
     mockPublicDns();
     vi.stubGlobal(
       "fetch",
-      vi.fn(async () => new Response("<html>hi</html>", { status: 200, headers: { "content-type": "text/html; charset=utf-8" } })),
+      vi.fn(
+        async () =>
+          new Response("<html>hi</html>", {
+            status: 200,
+            headers: { "content-type": "text/html; charset=utf-8" },
+          }),
+      ),
     );
     const result = await fetchPublicUrl("https://example.com/page", opts);
     expect(result?.finalUrl).toBe("https://example.com/page");
@@ -176,8 +203,15 @@ describe("fetchPublicUrl", () => {
     mockPublicDns();
     const fetchMock = vi
       .fn()
-      .mockResolvedValueOnce(new Response(null, { status: 302, headers: { location: "https://other.example.com/final" } }))
-      .mockResolvedValueOnce(new Response("ok", { status: 200, headers: { "content-type": "text/html" } }));
+      .mockResolvedValueOnce(
+        new Response(null, {
+          status: 302,
+          headers: { location: "https://other.example.com/final" },
+        }),
+      )
+      .mockResolvedValueOnce(
+        new Response("ok", { status: 200, headers: { "content-type": "text/html" } }),
+      );
     vi.stubGlobal("fetch", fetchMock);
     const result = await fetchPublicUrl("https://example.com/start", opts);
     expect(result?.finalUrl).toBe("https://other.example.com/final");
@@ -189,9 +223,14 @@ describe("fetchPublicUrl", () => {
     mockPublicDns();
     vi.stubGlobal(
       "fetch",
-      vi.fn(async () => new Response(null, { status: 302, headers: { location: "http://127.0.0.1/admin" } })),
+      vi.fn(
+        async () =>
+          new Response(null, { status: 302, headers: { location: "http://127.0.0.1/admin" } }),
+      ),
     );
-    await expect(fetchPublicUrl("https://example.com/start", opts)).rejects.toThrow(BlockedUrlError);
+    await expect(fetchPublicUrl("https://example.com/start", opts)).rejects.toThrow(
+      BlockedUrlError,
+    );
   });
 
   it("throws BlockedUrlError for a directly-blocked URL", async () => {
@@ -203,7 +242,13 @@ describe("fetchPublicUrl", () => {
     const big = "x".repeat(2048);
     vi.stubGlobal(
       "fetch",
-      vi.fn(async () => new Response(big, { status: 200, headers: { "content-type": "text/html", "content-length": "10" } })),
+      vi.fn(
+        async () =>
+          new Response(big, {
+            status: 200,
+            headers: { "content-type": "text/html", "content-length": "10" },
+          }),
+      ),
     );
     expect(await fetchPublicUrl("https://example.com/big", opts)).toBeNull();
   });
@@ -212,16 +257,25 @@ describe("fetchPublicUrl", () => {
     mockPublicDns();
     vi.stubGlobal(
       "fetch",
-      vi.fn(async () => new Response("{}", { status: 200, headers: { "content-type": "application/json" } })),
+      vi.fn(
+        async () =>
+          new Response("{}", { status: 200, headers: { "content-type": "application/json" } }),
+      ),
     );
     expect(
-      await fetchPublicUrl("https://example.com/api", { ...opts, requireContentTypePrefixes: ["text/html", "application/xhtml+xml"] }),
+      await fetchPublicUrl("https://example.com/api", {
+        ...opts,
+        requireContentTypePrefixes: ["text/html", "application/xhtml+xml"],
+      }),
     ).toBeNull();
   });
 
   it("returns null on non-2xx and on DNS failure", async () => {
     mockPublicDns();
-    vi.stubGlobal("fetch", vi.fn(async () => new Response("nope", { status: 404 })));
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response("nope", { status: 404 })),
+    );
     expect(await fetchPublicUrl("https://example.com/missing", opts)).toBeNull();
 
     lookupMock.mockRejectedValue(new Error("ENOTFOUND"));
@@ -232,7 +286,10 @@ describe("fetchPublicUrl", () => {
     mockPublicDns();
     vi.stubGlobal(
       "fetch",
-      vi.fn(async () => new Response(null, { status: 302, headers: { location: "https://example.com/loop" } })),
+      vi.fn(
+        async () =>
+          new Response(null, { status: 302, headers: { location: "https://example.com/loop" } }),
+      ),
     );
     expect(await fetchPublicUrl("https://example.com/loop", opts)).toBeNull();
   });

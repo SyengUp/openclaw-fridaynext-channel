@@ -30,8 +30,7 @@ const PORT = Number(process.env.FRIDAY_PORT || 18789);
 const HOST = process.env.FRIDAY_HOST || "127.0.0.1";
 const deviceId = process.env.FRIDAY_DEVICE || "SCRIPT-2077-TEST";
 const sessionKey = process.env.FRIDAY_SESSION || `friday-next-${deviceId}`;
-const prompt =
-  process.argv.slice(2).join(" ").trim() || "用subagent调研一下游戏2077";
+const prompt = process.argv.slice(2).join(" ").trim() || "用subagent调研一下游戏2077";
 const waitMs = Number(process.env.FRIDAY_WAIT_MS || 240000);
 
 if (!token) {

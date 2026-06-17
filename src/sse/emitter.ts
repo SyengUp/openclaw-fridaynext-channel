@@ -4,7 +4,14 @@ import { fridaySseOfflineQueue } from "./offline-queue.js";
 
 const logger = createFridayNextLogger("sse", "info");
 
-export type SseEventType = "connected" | "agent" | "deliver" | "tool-hook" | "outbound" | "ping" | "subagent";
+export type SseEventType =
+  | "connected"
+  | "agent"
+  | "deliver"
+  | "tool-hook"
+  | "outbound"
+  | "ping"
+  | "subagent";
 
 export interface SseEvent {
   type: SseEventType;
@@ -36,8 +43,7 @@ export class SseConnection {
 
   send(entry: BacklogEntry | SseEvent, flushNow?: boolean): void {
     if (this.closed) return;
-    const normalized =
-      "id" in entry && "event" in entry ? entry : { id: Date.now(), event: entry };
+    const normalized = "id" in entry && "event" in entry ? entry : { id: Date.now(), event: entry };
     const payload = JSON.stringify(normalized.event.data);
     this.pending.push(
       `id: ${normalized.id}\nevent: ${normalized.event.type}\ndata: ${payload}\n\n`,

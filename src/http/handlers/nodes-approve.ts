@@ -53,7 +53,7 @@ export async function handleNodesApprove(
 
   const normalizedNodeId = rawNodeId.trim().toUpperCase();
 
-let listData, listNodePairing, approveNodePairing;
+  let listData, listNodePairing, approveNodePairing;
   try {
     ({ listNodePairing, approveNodePairing } = await loadNodePairingModule());
   } catch (err) {
@@ -82,12 +82,7 @@ let listData, listNodePairing, approveNodePairing;
     const requestId = pendingMatch.requestId;
     log.info(`approving nodeId=${normalizedNodeId} requestId=${requestId}`);
 
-    const callerScopes = [
-      "operator.admin",
-      "operator.pairing",
-      "operator.read",
-      "operator.write",
-    ];
+    const callerScopes = ["operator.admin", "operator.pairing", "operator.read", "operator.write"];
 
     let approved;
     try {
@@ -96,10 +91,12 @@ let listData, listNodePairing, approveNodePairing;
       log.error(`approveNodePairing failed: ${err instanceof Error ? err.message : String(err)}`);
       res.statusCode = 502;
       res.setHeader("Content-Type", "application/json");
-      res.end(JSON.stringify({
-        error: "Node approval failed",
-        detail: err instanceof Error ? err.message : "Unknown error",
-      }));
+      res.end(
+        JSON.stringify({
+          error: "Node approval failed",
+          detail: err instanceof Error ? err.message : "Unknown error",
+        }),
+      );
       return true;
     }
 
@@ -113,18 +110,22 @@ let listData, listNodePairing, approveNodePairing;
     if ("status" in approved && approved.status === "forbidden") {
       res.statusCode = 403;
       res.setHeader("Content-Type", "application/json");
-      res.end(JSON.stringify({ error: `Node approval forbidden: ${(approved).missingScope ?? "unknown"}` }));
+      res.end(
+        JSON.stringify({ error: `Node approval forbidden: ${approved.missingScope ?? "unknown"}` }),
+      );
       return true;
     }
 
     res.statusCode = 200;
     res.setHeader("Content-Type", "application/json");
-    res.end(JSON.stringify({
-      ok: true,
-      nodeId: normalizedNodeId,
-      requestId: (approved).requestId,
-      approvedAtMs: (approved).node?.approvedAtMs,
-    }));
+    res.end(
+      JSON.stringify({
+        ok: true,
+        nodeId: normalizedNodeId,
+        requestId: approved.requestId,
+        approvedAtMs: approved.node?.approvedAtMs,
+      }),
+    );
     return true;
   }
 
@@ -138,26 +139,32 @@ let listData, listNodePairing, approveNodePairing;
     const caps = pairedMatch.caps ?? [];
     const commands = pairedMatch.commands ?? [];
     if (caps.length > 0 || commands.length > 0) {
-      log.info(`nodeId=${normalizedNodeId} already paired with caps=${caps.length} commands=${commands.length}`);
+      log.info(
+        `nodeId=${normalizedNodeId} already paired with caps=${caps.length} commands=${commands.length}`,
+      );
       res.statusCode = 200;
       res.setHeader("Content-Type", "application/json");
-      res.end(JSON.stringify({
-        ok: true,
-        nodeId: normalizedNodeId,
-        alreadyApproved: true,
-        approvedAtMs: pairedMatch.approvedAtMs,
-        caps,
-        commands,
-      }));
+      res.end(
+        JSON.stringify({
+          ok: true,
+          nodeId: normalizedNodeId,
+          alreadyApproved: true,
+          approvedAtMs: pairedMatch.approvedAtMs,
+          caps,
+          commands,
+        }),
+      );
       return true;
     }
   }
 
   res.statusCode = 404;
   res.setHeader("Content-Type", "application/json");
-  res.end(JSON.stringify({
-    error: "No pending node found for this nodeId",
-    nodeId: normalizedNodeId,
-  }));
+  res.end(
+    JSON.stringify({
+      error: "No pending node found for this nodeId",
+      nodeId: normalizedNodeId,
+    }),
+  );
   return true;
 }

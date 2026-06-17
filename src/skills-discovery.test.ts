@@ -53,7 +53,10 @@ describe("discoverAvailableSkills", () => {
     // Shared root pool (default agent "main" workspace)
     makeSkills(path.join(configRoot, "workspace", "skills"), ["alpha", "opencli"]);
     // operator's own workspace — includes a duplicate (opencli) to prove dedup
-    makeSkills(path.join(configRoot, "workspace", "agents", "operator", "skills"), ["beta", "opencli"]);
+    makeSkills(path.join(configRoot, "workspace", "agents", "operator", "skills"), [
+      "beta",
+      "opencli",
+    ]);
     // managed dir: <configDir>/skills (sibling of workspace)
     makeSkills(path.join(configRoot, "skills"), ["managed-one"]);
     // config extraDirs

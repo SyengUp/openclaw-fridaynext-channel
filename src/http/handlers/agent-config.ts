@@ -60,7 +60,9 @@ function readString(value: unknown): string | undefined {
 
 function readStringArray(value: unknown): string[] | undefined {
   if (!Array.isArray(value)) return undefined;
-  const out = value.filter((v): v is string => typeof v === "string" && v.trim().length > 0).map((v) => v.trim());
+  const out = value
+    .filter((v): v is string => typeof v === "string" && v.trim().length > 0)
+    .map((v) => v.trim());
   return out;
 }
 
@@ -81,7 +83,9 @@ function readToolsConfig(value: unknown): AgentToolsConfig | undefined {
 
 /** Locate the configured `agents.list[]` entry whose normalized id matches `agentId`. */
 function findAgentEntry(cfg: unknown, agentId: string): Record<string, unknown> | undefined {
-  const agents = (cfg as Record<string, unknown> | undefined)?.agents as Record<string, unknown> | undefined;
+  const agents = (cfg as Record<string, unknown> | undefined)?.agents as
+    | Record<string, unknown>
+    | undefined;
   const list = agents?.list as Array<Record<string, unknown>> | undefined;
   if (!Array.isArray(list)) return undefined;
   return list.find((a) => a && typeof a === "object" && normalizeAgentId(a.id) === agentId);
@@ -108,7 +112,11 @@ function buildConfigView(agentId: string): AgentConfigView {
 /** A field present in the body: `undefined` = not sent (keep), `null` = clear, else new value. */
 type Patch<T> = { sent: boolean; clear: boolean; value?: T };
 
-function readPatch<T>(body: Record<string, unknown>, key: string, coerce: (raw: unknown) => T | undefined): Patch<T> {
+function readPatch<T>(
+  body: Record<string, unknown>,
+  key: string,
+  coerce: (raw: unknown) => T | undefined,
+): Patch<T> {
   if (!(key in body)) return { sent: false, clear: false };
   const raw = body[key];
   if (raw === null) return { sent: true, clear: true };
@@ -134,7 +142,7 @@ function coerceTools(raw: unknown): AgentToolsConfig | undefined {
 
 /** Skills: array (incl. empty = disable all) only; non-arrays are rejected upstream. */
 function coerceSkills(raw: unknown): string[] | undefined {
-  return Array.isArray(raw) ? readStringArray(raw) ?? [] : undefined;
+  return Array.isArray(raw) ? (readStringArray(raw) ?? []) : undefined;
 }
 
 // --- handler -----------------------------------------------------------------
@@ -167,10 +175,14 @@ export async function handleAgentConfig(
   const skills = readPatch(body, "skills", coerceSkills);
 
   if ("skills" in body && body.skills !== null && !Array.isArray(body.skills)) {
-    return json(res, 400, { error: "skills must be an array of skill ids, [] to disable all, or null to inherit defaults" });
+    return json(res, 400, {
+      error: "skills must be an array of skill ids, [] to disable all, or null to inherit defaults",
+    });
   }
   if (!model.sent && !thinkingDefault.sent && !tools.sent && !skills.sent) {
-    return json(res, 400, { error: "No editable fields provided (model, thinkingDefault, tools, skills)" });
+    return json(res, 400, {
+      error: "No editable fields provided (model, thinkingDefault, tools, skills)",
+    });
   }
 
   const upgrade = getUpgradeRuntime();
@@ -184,7 +196,9 @@ export async function handleAgentConfig(
         const draft = draftRaw as Record<string, unknown>;
         const agents = (draft.agents ??= {}) as Record<string, unknown>;
         const list = (agents.list ??= []) as Array<Record<string, unknown>>;
-        let entry = list.find((a) => a && typeof a === "object" && normalizeAgentId(a.id) === agentId);
+        let entry = list.find(
+          (a) => a && typeof a === "object" && normalizeAgentId(a.id) === agentId,
+        );
         if (!entry) {
           // Implicit agent (e.g. "main") with no list entry yet — create a bare one.
           // Never set `default: true`: that would change default-agent resolution.

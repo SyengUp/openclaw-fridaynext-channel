@@ -17,7 +17,10 @@ const ERROR_STATUS: Record<LinkPreviewError, number> = {
   fetch_failed: 502,
 };
 
-export async function handleLinkPreview(req: IncomingMessage, res: ServerResponse): Promise<boolean> {
+export async function handleLinkPreview(
+  req: IncomingMessage,
+  res: ServerResponse,
+): Promise<boolean> {
   if (req.method !== "GET") {
     res.statusCode = 405;
     res.setHeader("Content-Type", "application/json");

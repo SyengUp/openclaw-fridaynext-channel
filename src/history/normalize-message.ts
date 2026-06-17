@@ -230,10 +230,7 @@ function normalizeRole(raw: unknown): FridayHistoryRole {
  * Normalize one raw transcript message. `index` is the position in the returned
  * batch, used only to synthesize a stable-ish id when upstream omits one.
  */
-export function normalizeHistoryMessage(
-  raw: unknown,
-  index: number,
-): FridayHistoryMessage | null {
+export function normalizeHistoryMessage(raw: unknown, index: number): FridayHistoryMessage | null {
   const record = asRecord(raw);
   if (!record) return null;
 

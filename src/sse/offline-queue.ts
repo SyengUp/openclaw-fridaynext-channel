@@ -21,7 +21,9 @@ export function setOfflineQueueBaseDirForTest(dir: string | null): void {
 export function resolveFridayNextEventsQueueDir(): string {
   if (testQueueBaseDir) return testQueueBaseDir;
   try {
-    const cfg = resolveFridayNextConfig(getHostOpenClawConfigSnapshot(getFridayNextRuntime().config));
+    const cfg = resolveFridayNextConfig(
+      getHostOpenClawConfigSnapshot(getFridayNextRuntime().config),
+    );
     return path.join(path.dirname(cfg.historyDir), "events-queue");
   } catch {
     return path.join(os.homedir(), ".openclaw", "friday-next", "events-queue");
@@ -71,7 +73,13 @@ export class FridaySseOfflineQueue {
     return this.scanMaxId(deviceId.trim().toUpperCase());
   }
 
-  append(deviceId: string, id: number, event: string, data: Record<string, unknown>, backlogLimit: number): void {
+  append(
+    deviceId: string,
+    id: number,
+    event: string,
+    data: Record<string, unknown>,
+    backlogLimit: number,
+  ): void {
     if (event === "connected") return;
     this.ensureDir();
     const file = this.devicePath(deviceId);
@@ -119,7 +127,12 @@ export class FridaySseOfflineQueue {
       if (!line.trim()) continue;
       try {
         const o = JSON.parse(line) as PersistedSseEntry;
-        if (typeof o.id === "number" && typeof o.event === "string" && o.data && typeof o.data === "object") {
+        if (
+          typeof o.id === "number" &&
+          typeof o.event === "string" &&
+          o.data &&
+          typeof o.data === "object"
+        ) {
           all.push(o);
         }
       } catch {
@@ -128,11 +141,7 @@ export class FridaySseOfflineQueue {
     }
     if (all.length <= keep) return;
     const slice = all.slice(-keep);
-    fs.writeFileSync(
-      file,
-      slice.map((e) => JSON.stringify(e) + "\n").join(""),
-      "utf8",
-    );
+    fs.writeFileSync(file, slice.map((e) => JSON.stringify(e) + "\n").join(""), "utf8");
   }
 }
 

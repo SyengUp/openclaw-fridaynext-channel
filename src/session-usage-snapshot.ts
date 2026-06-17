@@ -33,7 +33,9 @@ function finiteCost(n: unknown): number | undefined {
 }
 
 /** Build a compact snapshot from a loaded session store entry (unknown shape). */
-export function buildSessionUsageSnapshot(entry: Record<string, unknown>): FridaySessionUsagePayload | undefined {
+export function buildSessionUsageSnapshot(
+  entry: Record<string, unknown>,
+): FridaySessionUsagePayload | undefined {
   const payload: FridaySessionUsagePayload = {};
 
   const modelId = typeof entry.model === "string" ? entry.model.trim() : "";

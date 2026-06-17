@@ -35,7 +35,12 @@ const CFG = {
 let tmpDir = "";
 
 /** Auth config + optional subagent fallback. */
-function setRuntime(getSessionMessages?: (params: { sessionKey: string; limit?: number }) => Promise<{ messages?: unknown[] }>): void {
+function setRuntime(
+  getSessionMessages?: (params: {
+    sessionKey: string;
+    limit?: number;
+  }) => Promise<{ messages?: unknown[] }>,
+): void {
   setFridayNextRuntime({
     config: { loadConfig: () => CFG },
     logger: { info: () => {}, warn: () => {}, error: () => {}, debug: () => {} },
@@ -100,13 +105,30 @@ describe("handleHistoryMessages", () => {
   it("reads the transcript file from disk including user + assistant messages", async () => {
     const file = writeTranscript("sess.jsonl", [
       { type: "session", version: 1, sessionId: "s" },
-      { type: "message", id: "u1", timestamp: "2026-01-01T00:00:00.000Z", message: { role: "user", content: "hi there" } },
-      { type: "message", id: "a1", timestamp: "2026-01-01T00:00:01.000Z", message: { role: "assistant", content: [{ type: "text", text: "hello" }], model: "openai/gpt-4" } },
+      {
+        type: "message",
+        id: "u1",
+        timestamp: "2026-01-01T00:00:00.000Z",
+        message: { role: "user", content: "hi there" },
+      },
+      {
+        type: "message",
+        id: "a1",
+        timestamp: "2026-01-01T00:00:01.000Z",
+        message: {
+          role: "assistant",
+          content: [{ type: "text", text: "hello" }],
+          model: "openai/gpt-4",
+        },
+      },
     ]);
     setForward({ "agent:main:main": { sessionId: "s", sessionFile: file } });
 
     const res = new MockRes();
-    await handleHistoryMessages(makeReq("/friday-next/history/messages?sessionKey=agent:main:main", AUTH), res as any);
+    await handleHistoryMessages(
+      makeReq("/friday-next/history/messages?sessionKey=agent:main:main", AUTH),
+      res as any,
+    );
     expect(res.statusCode).toBe(200);
     const body = JSON.parse(res.body);
     expect(body.messages.map((m: any) => m.role)).toEqual(["user", "assistant"]);
@@ -117,7 +139,15 @@ describe("handleHistoryMessages", () => {
   it("returns the cumulative sessionUsage snapshot from the store", async () => {
     const file = writeTranscript("usage.jsonl", [
       { type: "message", id: "u1", message: { role: "user", content: "hi" } },
-      { type: "message", id: "a1", message: { role: "assistant", content: [{ type: "text", text: "yo" }], model: "openai/gpt-4" } },
+      {
+        type: "message",
+        id: "a1",
+        message: {
+          role: "assistant",
+          content: [{ type: "text", text: "yo" }],
+          model: "openai/gpt-4",
+        },
+      },
     ]);
     setForward({
       "agent:main:main": {
@@ -132,7 +162,10 @@ describe("handleHistoryMessages", () => {
     });
 
     const res = new MockRes();
-    await handleHistoryMessages(makeReq("/friday-next/history/messages?sessionKey=agent:main:main", AUTH), res as any);
+    await handleHistoryMessages(
+      makeReq("/friday-next/history/messages?sessionKey=agent:main:main", AUTH),
+      res as any,
+    );
     expect(res.statusCode).toBe(200);
     const body = JSON.parse(res.body);
     expect(body.sessionUsage).toBeDefined();
@@ -148,7 +181,10 @@ describe("handleHistoryMessages", () => {
     setForward({ "agent:main:main": { sessionId: "s", sessionFile: file } });
 
     const res = new MockRes();
-    await handleHistoryMessages(makeReq("/friday-next/history/messages?sessionKey=agent:main:main", AUTH), res as any);
+    await handleHistoryMessages(
+      makeReq("/friday-next/history/messages?sessionKey=agent:main:main", AUTH),
+      res as any,
+    );
     const body = JSON.parse(res.body);
     expect(body.sessionUsage).toBeUndefined();
   });
@@ -162,7 +198,10 @@ describe("handleHistoryMessages", () => {
 
     const res = new MockRes();
     await handleHistoryMessages(
-      makeReq("/friday-next/history/messages?sessionKey=agent:main:friday:direct:ABCD-1234:9", AUTH),
+      makeReq(
+        "/friday-next/history/messages?sessionKey=agent:main:friday:direct:ABCD-1234:9",
+        AUTH,
+      ),
       res as any,
     );
     const body = JSON.parse(res.body);
@@ -209,7 +248,10 @@ describe("handleHistoryMessages", () => {
       messages: [{ role: "assistant", content: "fallback", __openclaw: { id: "a1", seq: 1 } }],
     }));
     const res = new MockRes();
-    await handleHistoryMessages(makeReq("/friday-next/history/messages?sessionKey=agent:main:main", AUTH), res as any);
+    await handleHistoryMessages(
+      makeReq("/friday-next/history/messages?sessionKey=agent:main:main", AUTH),
+      res as any,
+    );
     const body = JSON.parse(res.body);
     expect(body.messages.map((m: any) => m.id)).toEqual(["a1"]);
   });

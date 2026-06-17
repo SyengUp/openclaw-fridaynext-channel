@@ -53,7 +53,9 @@ export function resolveModelThinking(
 }
 
 /** Resolves thinking levels for a full `provider/model` ref (or bare model id). */
-export function resolveModelThinkingForRef(modelRef: string | undefined | null): ResolvedModelThinking {
+export function resolveModelThinkingForRef(
+  modelRef: string | undefined | null,
+): ResolvedModelThinking {
   if (!modelRef) return { levels: BASE_THINKING_LEVELS };
   const split = splitModelRef(modelRef);
   return resolveModelThinking(split.provider, split.modelId);

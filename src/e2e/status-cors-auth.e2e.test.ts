@@ -1,6 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createAppSimulator } from "../test-support/app-simulator.js";
-import { createTempHistoryDir, removeTempHistoryDir, setMockRuntime } from "../test-support/mock-runtime.js";
+import {
+  createTempHistoryDir,
+  removeTempHistoryDir,
+  setMockRuntime,
+} from "../test-support/mock-runtime.js";
 import { registerFridayNextHttpRoutes } from "../http/server.js";
 
 describe("e2e status cors auth", () => {
@@ -22,7 +26,12 @@ describe("e2e status cors auth", () => {
   });
 
   it("CORS 预检", async () => {
-    setMockRuntime({ historyDir, authToken: "test-token", corsEnabled: true, allowOrigin: "https://app.example" });
+    setMockRuntime({
+      historyDir,
+      authToken: "test-token",
+      corsEnabled: true,
+      allowOrigin: "https://app.example",
+    });
     const app = createAppSimulator({ token: "test-token" });
     const res = await app.options("/friday-next/events", "https://app.example");
     expect(res.status).toBe(204);

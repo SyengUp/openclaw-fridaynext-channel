@@ -1,7 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { createAppSimulator } from "../test-support/app-simulator.js";
 import { mockDispatchScript, resetMockDispatch } from "../test-support/mock-dispatch.js";
-import { createTempHistoryDir, removeTempHistoryDir, setMockRuntime } from "../test-support/mock-runtime.js";
+import {
+  createTempHistoryDir,
+  removeTempHistoryDir,
+  setMockRuntime,
+} from "../test-support/mock-runtime.js";
 
 describe("e2e offline SSE replay", () => {
   let historyDir = "";
@@ -17,7 +21,12 @@ describe("e2e offline SSE replay", () => {
   });
 
   it("断开后产生的事件在 Last-Event-ID 重连后回放", async () => {
-    mockDispatchScript().lifecycle("start").partial("x").deliverFinal({ text: "x" }).lifecycle("end").install();
+    mockDispatchScript()
+      .lifecycle("start")
+      .partial("x")
+      .deliverFinal({ text: "x" })
+      .lifecycle("end")
+      .install();
 
     const app = createAppSimulator({ token: "test-token", deviceId: "replay-dev" });
     await app.connectSSE({ deviceId: "replay-dev" });
@@ -28,7 +37,12 @@ describe("e2e offline SSE replay", () => {
     app.disconnectSSE();
 
     resetMockDispatch();
-    mockDispatchScript().lifecycle("start").partial("y").deliverFinal({ text: "y" }).lifecycle("end").install();
+    mockDispatchScript()
+      .lifecycle("start")
+      .partial("y")
+      .deliverFinal({ text: "y" })
+      .lifecycle("end")
+      .install();
     await app.sendMessage({ text: "again", sessionKey: "r1", deviceId: "replay-dev" });
     await new Promise((r) => setTimeout(r, 80));
 

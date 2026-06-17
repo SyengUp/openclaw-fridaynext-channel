@@ -22,7 +22,11 @@ function resolvePluginVersion(): string {
       const path = fileURLToPath(new URL(rel, import.meta.url));
       const raw = readFileSync(path, "utf8");
       const pkg = JSON.parse(raw) as { name?: string; version?: string };
-      if (pkg.name === "@syengup/friday-channel-next" && typeof pkg.version === "string" && pkg.version) {
+      if (
+        pkg.name === "@syengup/friday-channel-next" &&
+        typeof pkg.version === "string" &&
+        pkg.version
+      ) {
         return pkg.version;
       }
     } catch {

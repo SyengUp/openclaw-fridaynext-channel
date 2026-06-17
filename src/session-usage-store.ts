@@ -28,7 +28,9 @@ export function readSessionUsageSnapshotFromStore(
     const cfg = access.getConfig() as { session?: { store?: string } } | null | undefined;
     const storeConfig = cfg?.session?.store;
     const canonical = toSessionStoreKey(sessionKeyForStore);
-    const storePath = access.resolveStorePath(storeConfig, { agentId: agentIdFromSessionKey(canonical) });
+    const storePath = access.resolveStorePath(storeConfig, {
+      agentId: agentIdFromSessionKey(canonical),
+    });
     const store = access.loadSessionStore(storePath, { skipCache: true }) as Record<
       string,
       Record<string, unknown>

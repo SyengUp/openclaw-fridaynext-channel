@@ -10,7 +10,10 @@ import {
   resetThinkingStreamAccumStateForTest,
 } from "./friday-session.js";
 import { resetRunMetadataForTest } from "./run-metadata.js";
-import { accumulateRunUsage, resetRunUsageAccumulatorForTest } from "./agent/run-usage-accumulator.js";
+import {
+  accumulateRunUsage,
+  resetRunUsageAccumulatorForTest,
+} from "./agent/run-usage-accumulator.js";
 import { sseEmitter } from "./sse/emitter.js";
 import { toSessionStoreKey } from "./session/session-manager.js";
 
@@ -56,8 +59,10 @@ describe("forwardAgentEventRaw (thinking delta rewrite)", () => {
     });
 
     expect(sseEmitter.broadcastToRun).toHaveBeenCalledTimes(2);
-    const first = (sseEmitter.broadcastToRun as ReturnType<typeof vi.fn>).mock.calls[0][1].data.data;
-    const second = (sseEmitter.broadcastToRun as ReturnType<typeof vi.fn>).mock.calls[1][1].data.data;
+    const first = (sseEmitter.broadcastToRun as ReturnType<typeof vi.fn>).mock.calls[0][1].data
+      .data;
+    const second = (sseEmitter.broadcastToRun as ReturnType<typeof vi.fn>).mock.calls[1][1].data
+      .data;
 
     expect(first.text).toBe(t1);
     expect(first.delta).toBe(t1);
@@ -94,7 +99,8 @@ describe("forwardAgentEventRaw (thinking delta rewrite)", () => {
     });
 
     expect(sseEmitter.broadcastToRun).toHaveBeenCalledTimes(3);
-    const third = (sseEmitter.broadcastToRun as ReturnType<typeof vi.fn>).mock.calls[2][1].data.data;
+    const third = (sseEmitter.broadcastToRun as ReturnType<typeof vi.fn>).mock.calls[2][1].data
+      .data;
     expect(third.delta).toBe(t1);
     expect(third.reasoningPrefixChars).toBe(0);
   });
@@ -123,7 +129,8 @@ describe("forwardAgentEventRaw (thinking delta rewrite)", () => {
       data: { text: t1, delta: t1 },
     });
 
-    const third = (sseEmitter.broadcastToRun as ReturnType<typeof vi.fn>).mock.calls[2][1].data.data;
+    const third = (sseEmitter.broadcastToRun as ReturnType<typeof vi.fn>).mock.calls[2][1].data
+      .data;
     expect(third.reasoningPrefixChars).toBe(0);
     expect(third.delta).toBe(t1);
   });
@@ -179,7 +186,8 @@ describe("forwardAgentEventRaw (thinking delta rewrite)", () => {
     });
 
     expect(sseEmitter.broadcastToRun).toHaveBeenCalledTimes(2);
-    const endPayload = (sseEmitter.broadcastToRun as ReturnType<typeof vi.fn>).mock.calls[1][1].data;
+    const endPayload = (sseEmitter.broadcastToRun as ReturnType<typeof vi.fn>).mock.calls[1][1]
+      .data;
     expect(endPayload.stream).toBe("lifecycle");
     expect((endPayload.data as { phase?: string }).phase).toBe("end");
     expect(endPayload.sessionKey).toBe(sessionKey);
@@ -214,8 +222,18 @@ describe("forwardAgentEventRaw (thinking delta rewrite)", () => {
       },
     } as never);
 
-    accumulateRunUsage(runId, { input: 100, output: 50, cacheRead: 10, total: 150 }, "my-model", "openai");
-    accumulateRunUsage(runId, { input: 30, output: 10, cacheRead: 0, total: 40 }, "my-model", "openai");
+    accumulateRunUsage(
+      runId,
+      { input: 100, output: 50, cacheRead: 10, total: 150 },
+      "my-model",
+      "openai",
+    );
+    accumulateRunUsage(
+      runId,
+      { input: 30, output: 10, cacheRead: 0, total: 40 },
+      "my-model",
+      "openai",
+    );
 
     forwardAgentEventRaw({
       runId,
@@ -232,7 +250,10 @@ describe("forwardAgentEventRaw (thinking delta rewrite)", () => {
     expect(sseEmitter.broadcastToRun).toHaveBeenCalledTimes(1);
     const forwarded = (sseEmitter.broadcastToRun as ReturnType<typeof vi.fn>).mock.calls[0][1].data;
     expect(forwarded.stream).toBe("lifecycle");
-    const sessionUsage = (forwarded.data as Record<string, unknown>).sessionUsage as Record<string, unknown>;
+    const sessionUsage = (forwarded.data as Record<string, unknown>).sessionUsage as Record<
+      string,
+      unknown
+    >;
     expect(sessionUsage).toBeDefined();
     // llm_output fallback — per-run totals.
     expect(sessionUsage.modelId).toBe("my-model");
@@ -272,7 +293,12 @@ describe("forwardAgentEventRaw (thinking delta rewrite)", () => {
     } as never);
 
     // llm_output has fresher model/provider but per-run (smaller) tokens.
-    accumulateRunUsage(runId, { input: 500, output: 100, cacheRead: 200, total: 800 }, "llm-model", "llm-provider");
+    accumulateRunUsage(
+      runId,
+      { input: 500, output: 100, cacheRead: 200, total: 800 },
+      "llm-model",
+      "llm-provider",
+    );
 
     forwardAgentEventRaw({
       runId,
@@ -287,7 +313,10 @@ describe("forwardAgentEventRaw (thinking delta rewrite)", () => {
 
     expect(sseEmitter.broadcastToRun).toHaveBeenCalledTimes(1);
     const forwarded = (sseEmitter.broadcastToRun as ReturnType<typeof vi.fn>).mock.calls[0][1].data;
-    const sessionUsage = (forwarded.data as Record<string, unknown>).sessionUsage as Record<string, unknown>;
+    const sessionUsage = (forwarded.data as Record<string, unknown>).sessionUsage as Record<
+      string,
+      unknown
+    >;
     expect(sessionUsage).toBeDefined();
     // Store cumulative totals win.
     expect((sessionUsage.tokens as Record<string, unknown>).input).toBe(5000);
@@ -344,7 +373,10 @@ describe("forwardAgentEventRaw (thinking delta rewrite)", () => {
     expect(sseEmitter.broadcastToRun).toHaveBeenCalledTimes(1);
     const forwarded = (sseEmitter.broadcastToRun as ReturnType<typeof vi.fn>).mock.calls[0][1].data;
     expect(forwarded.stream).toBe("lifecycle");
-    const sessionUsage = (forwarded.data as Record<string, unknown>).sessionUsage as Record<string, unknown>;
+    const sessionUsage = (forwarded.data as Record<string, unknown>).sessionUsage as Record<
+      string,
+      unknown
+    >;
     expect(sessionUsage).toBeDefined();
     expect(sessionUsage.modelId).toBe("store-model");
     expect(sessionUsage.modelProvider).toBe("store-provider");

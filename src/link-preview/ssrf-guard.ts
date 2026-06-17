@@ -66,7 +66,8 @@ export function isPrivateAddress(ip: string): boolean {
 
 function isPrivateIPv4(ip: string): boolean {
   const parts = ip.split(".").map(Number);
-  if (parts.length !== 4 || parts.some((n) => !Number.isInteger(n) || n < 0 || n > 255)) return true;
+  if (parts.length !== 4 || parts.some((n) => !Number.isInteger(n) || n < 0 || n > 255))
+    return true;
   const [a, b] = parts;
   if (a === 0) return true; // 0.0.0.0/8
   if (a === 10) return true; // 10/8

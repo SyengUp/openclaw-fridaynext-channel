@@ -22,12 +22,12 @@ function resolveOpenClawDist(): string {
   const candidates = [
     process.env.OPENCLAW_DIST,
     resolveOpenClawDistFromPath(),
-    path.join(process.env.APPDATA ?? "", "npm/node_modules/openclaw/dist"),     // Windows npm -g
+    path.join(process.env.APPDATA ?? "", "npm/node_modules/openclaw/dist"), // Windows npm -g
     path.join(process.env.LOCALAPPDATA ?? "", "npm/node_modules/openclaw/dist"), // Windows npm -g (alt)
-    "/opt/homebrew/lib/node_modules/openclaw/dist",                              // macOS Homebrew
-    "/home/linuxbrew/.linuxbrew/lib/node_modules/openclaw/dist",                 // Linux Homebrew
-    "/usr/local/lib/node_modules/openclaw/dist",                                 // Unix npm -g
-    "/usr/lib/node_modules/openclaw/dist",                                       // Linux npm -g (prefix=/usr)
+    "/opt/homebrew/lib/node_modules/openclaw/dist", // macOS Homebrew
+    "/home/linuxbrew/.linuxbrew/lib/node_modules/openclaw/dist", // Linux Homebrew
+    "/usr/local/lib/node_modules/openclaw/dist", // Unix npm -g
+    "/usr/lib/node_modules/openclaw/dist", // Linux npm -g (prefix=/usr)
   ].filter(Boolean) as string[];
   const found = candidates.find((p) => existsSync(p));
   if (found) return found;

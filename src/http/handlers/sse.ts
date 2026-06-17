@@ -67,7 +67,9 @@ export async function handleSseStream(req: IncomingMessage, res: ServerResponse)
   const lastEventId = parseLastEventId(req, url);
   if (lastEventId > 0) sseEmitter.replayBacklog(deviceId, lastEventId);
 
-  const config = resolveFridayNextConfig(getHostOpenClawConfigSnapshot(getFridayNextRuntime().config));
+  const config = resolveFridayNextConfig(
+    getHostOpenClawConfigSnapshot(getFridayNextRuntime().config),
+  );
   const keepalive = setInterval(() => {
     if (conn.isClosed) {
       clearInterval(keepalive);

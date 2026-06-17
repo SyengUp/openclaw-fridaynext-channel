@@ -28,7 +28,11 @@ afterEach(() => {
 
 describe("attachment original filename survives a gateway restart", () => {
   it("stores under a uuid token but recovers the original filename from disk", () => {
-    const stored = storeFile(Buffer.from("%PDF-1.4 fake"), "Quarterly Report.pdf", "application/pdf");
+    const stored = storeFile(
+      Buffer.from("%PDF-1.4 fake"),
+      "Quarterly Report.pdf",
+      "application/pdf",
+    );
     expect(stored.urlToken).not.toBe("Quarterly Report.pdf");
 
     const disk = readAttachmentFileFromDisk(stored.urlToken);
@@ -57,7 +61,9 @@ describe("attachment original filename survives a gateway restart", () => {
     const stored = storeFile(Buffer.from("x"), "doc.docx", "application/octet-stream");
     clearFileIndexForTest();
 
-    const publicUrl = fridayFilesPublicUrl(`/friday-next/files/${encodeURIComponent(stored.urlToken)}`);
+    const publicUrl = fridayFilesPublicUrl(
+      `/friday-next/files/${encodeURIComponent(stored.urlToken)}`,
+    );
     expect(publicUrl).toBe(`/friday-next/files/${encodeURIComponent(stored.urlToken)}`);
   });
 

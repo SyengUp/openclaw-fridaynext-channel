@@ -15,7 +15,10 @@ import { fileURLToPath } from "node:url";
 import { getFridayNextRuntime } from "../../runtime.js";
 import { extractBearerToken } from "../middleware/auth.js";
 import { normalizeHistoryMessages } from "../../history/normalize-message.js";
-import { readSessionTranscriptRawMessages, resolveSessionId } from "../../history/read-transcript.js";
+import {
+  readSessionTranscriptRawMessages,
+  resolveSessionId,
+} from "../../history/read-transcript.js";
 import { resolveMediaAttachment } from "./files.js";
 import { readSessionUsageSnapshotFromStore } from "../../session-usage-store.js";
 

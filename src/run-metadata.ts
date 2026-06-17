@@ -173,7 +173,8 @@ export function ingestAgentEventMetadata(runId: string, data: Record<string, unk
   const cacheRead = pickCacheRead(usageForTokens);
   if (typeof cacheRead === "number" && cacheRead >= 0) next.cacheReadTokens = Math.floor(cacheRead);
   const cacheWrite = pickCacheWrite(usageForTokens);
-  if (typeof cacheWrite === "number" && cacheWrite >= 0) next.cacheWriteTokens = Math.floor(cacheWrite);
+  if (typeof cacheWrite === "number" && cacheWrite >= 0)
+    next.cacheWriteTokens = Math.floor(cacheWrite);
 
   const usageForContext = usage ?? data;
   const ctxUsed = contextTokensFromUsageRecord(usageForContext);

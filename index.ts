@@ -1,6 +1,10 @@
 import { defineChannelPluginEntry } from "openclaw/plugin-sdk/core";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
-import type { PluginHookBeforeToolCallEvent, PluginHookAfterToolCallEvent, PluginHookToolContext } from "openclaw/plugin-sdk/plugins/types";
+import type {
+  PluginHookBeforeToolCallEvent,
+  PluginHookAfterToolCallEvent,
+  PluginHookToolContext,
+} from "openclaw/plugin-sdk/plugins/types";
 import { fridayNextChannelPlugin } from "./src/channel.js";
 import { setFridayNextRuntime } from "./src/runtime.js";
 import { resolveFridayNextConfig } from "./src/config.js";
@@ -43,7 +47,7 @@ function deviceIdFromToolContext(ctx: PluginHookToolContext): string | null {
   const sk =
     typeof ctx.sessionKey === "string" && ctx.sessionKey.trim()
       ? ctx.sessionKey.trim()
-      : (ctx.runId ? getOpenClawAgentRunContext(ctx.runId)?.sessionKey?.trim() : undefined) ?? "";
+      : ((ctx.runId ? getOpenClawAgentRunContext(ctx.runId)?.sessionKey?.trim() : undefined) ?? "");
   if (sk) {
     const d = resolveFridayDeviceIdForSessionKey(sk);
     if (d) return d;
@@ -92,7 +96,9 @@ export default defineChannelPluginEntry({
       lastApiRoutesRegistered = new WeakRef(api);
       registerFridayNextHttpRoutes(api);
     } else {
-      const cfg = resolveFridayNextConfig(getHostOpenClawConfigSnapshot(getFridayNextRuntime().config));
+      const cfg = resolveFridayNextConfig(
+        getHostOpenClawConfigSnapshot(getFridayNextRuntime().config),
+      );
       sseEmitter.setBacklogLimit(cfg.sseBacklogPerDevice);
     }
 
@@ -146,36 +152,39 @@ export default defineChannelPluginEntry({
       };
     });
 
-    api.on("before_tool_call", (event: PluginHookBeforeToolCallEvent, ctx: PluginHookToolContext) => {
-      if (!shouldForwardToolEventToFriday(ctx)) return;
-      const deviceId = deviceIdFromToolContext(ctx);
-      const runId = ctx.runId ?? "(unknown)";
+    api.on(
+      "before_tool_call",
+      (event: PluginHookBeforeToolCallEvent, ctx: PluginHookToolContext) => {
+        if (!shouldForwardToolEventToFriday(ctx)) return;
+        const deviceId = deviceIdFromToolContext(ctx);
+        const runId = ctx.runId ?? "(unknown)";
 
-      const logLine = (detail: string) => {
-        hookLogger.debug(
-          `[TOOL_CALL] toolName=${event.toolName} runId=${runId} deviceId=${deviceId ?? "(unknown)"} detail=${detail}`,
-        );
-      };
+        const logLine = (detail: string) => {
+          hookLogger.debug(
+            `[TOOL_CALL] toolName=${event.toolName} runId=${runId} deviceId=${deviceId ?? "(unknown)"} detail=${detail}`,
+          );
+        };
 
-      if (!deviceId) {
-        logLine("SKIP_no_deviceId");
-        return;
-      }
+        if (!deviceId) {
+          logLine("SKIP_no_deviceId");
+          return;
+        }
 
-      logLine("START");
-      sseEmitter.broadcastToolEvent(deviceId.toUpperCase(), runId, {
-        type: "tool-hook",
-        data: {
-          when: "before",
-          runId,
-          deviceId: deviceId.toUpperCase(),
-          sessionKey: ctx.sessionKey,
-          toolName: event.toolName,
-          params: event.params,
-          ts: Date.now(),
-        },
-      });
-    });
+        logLine("START");
+        sseEmitter.broadcastToolEvent(deviceId.toUpperCase(), runId, {
+          type: "tool-hook",
+          data: {
+            when: "before",
+            runId,
+            deviceId: deviceId.toUpperCase(),
+            sessionKey: ctx.sessionKey,
+            toolName: event.toolName,
+            params: event.params,
+            ts: Date.now(),
+          },
+        });
+      },
+    );
 
     api.on("after_tool_call", (event: PluginHookAfterToolCallEvent, ctx: PluginHookToolContext) => {
       if (!shouldForwardToolEventToFriday(ctx)) return;

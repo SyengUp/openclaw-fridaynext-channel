@@ -42,7 +42,9 @@ let upgradeRuntime: UpgradeRuntime | null = null;
 
 export function setUpgradeRuntime(api: OpenClawPluginApi): void {
   const runtime = api.runtime as unknown as {
-    system?: { runCommandWithTimeout?: (argv: string[], opts: unknown) => Promise<SpawnResultLike> };
+    system?: {
+      runCommandWithTimeout?: (argv: string[], opts: unknown) => Promise<SpawnResultLike>;
+    };
     config: {
       current: () => unknown;
       mutateConfigFile?: (params: unknown) => Promise<unknown>;

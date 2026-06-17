@@ -6,7 +6,11 @@ import { handleMessageAction } from "./channel-actions.js";
 import { sseEmitter } from "./sse/emitter.js";
 import { setOfflineQueueBaseDirForTest } from "./sse/offline-queue.js";
 import { registerRunRoute } from "./run-metadata.js";
-import { createTempHistoryDir, removeTempHistoryDir, setMockRuntime } from "./test-support/mock-runtime.js";
+import {
+  createTempHistoryDir,
+  removeTempHistoryDir,
+  setMockRuntime,
+} from "./test-support/mock-runtime.js";
 
 /**
  * The `message` tool's `action=send` is handled here (NOT via outbound.sendText/sendMedia).
@@ -107,8 +111,8 @@ describe("channel-actions handleSend sessionKey routing", () => {
     // 8-byte PNG magic header so saveMediaBuffer's magic-byte detection recognizes an image.
     const pngBytes = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x01]);
     const directLink = "https://picsum.photos/600/400";
-    const fetchMock = vi.fn(async () =>
-      new Response(pngBytes, { status: 200, headers: { "content-type": "image/png" } }),
+    const fetchMock = vi.fn(
+      async () => new Response(pngBytes, { status: 200, headers: { "content-type": "image/png" } }),
     );
     vi.stubGlobal("fetch", fetchMock);
 
@@ -220,7 +224,9 @@ describe("channel-actions handleSend sessionKey routing", () => {
       sessionKey: "agent:operator:friday:direct:fallback-session",
     });
 
-    const text = parseOutboundFrames(res).find((f) => f.type === "outbound" && f.data.op === "text");
+    const text = parseOutboundFrames(res).find(
+      (f) => f.type === "outbound" && f.data.op === "text",
+    );
     expect(text?.data.sessionKey).toBe("agent:operator:friday:direct:fallback-session");
   });
 });

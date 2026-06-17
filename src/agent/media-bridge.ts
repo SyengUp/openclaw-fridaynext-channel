@@ -11,7 +11,8 @@ import crypto from "node:crypto";
  */
 export async function resolveMediaMaxBytes(mimeType: string): Promise<number | undefined> {
   try {
-    const { maxBytesForKind, mediaKindFromMime } = await import("openclaw/plugin-sdk/media-runtime");
+    const { maxBytesForKind, mediaKindFromMime } =
+      await import("openclaw/plugin-sdk/media-runtime");
     return maxBytesForKind(mediaKindFromMime(mimeType) ?? "document");
   } catch {
     return undefined;
@@ -31,7 +32,13 @@ export async function saveInboundMediaBuffer(
     // Pass the original filename (5th arg) so core's media-store preserves the
     // name+extension instead of saving a bare uuid. Otherwise the agent receives
     // `[media attached: file://.../inbound/<uuid>]` with no file-format signal.
-    const saved = await sdk.saveMediaBuffer(buffer, mimeType, "inbound", maxBytes, originalFilename);
+    const saved = await sdk.saveMediaBuffer(
+      buffer,
+      mimeType,
+      "inbound",
+      maxBytes,
+      originalFilename,
+    );
     if (saved?.id && saved?.path) return { id: saved.id, path: saved.path };
   } catch {
     // fallback for tests or stripped runtime

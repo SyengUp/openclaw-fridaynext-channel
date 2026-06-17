@@ -6,7 +6,11 @@ import { fridayNextChannelPlugin } from "./channel.js";
 import { sseEmitter } from "./sse/emitter.js";
 import { setOfflineQueueBaseDirForTest } from "./sse/offline-queue.js";
 import { registerRunRoute } from "./run-metadata.js";
-import { createTempHistoryDir, removeTempHistoryDir, setMockRuntime } from "./test-support/mock-runtime.js";
+import {
+  createTempHistoryDir,
+  removeTempHistoryDir,
+  setMockRuntime,
+} from "./test-support/mock-runtime.js";
 
 /**
  * Outbound (message-tool send) must route to the session that started the run.
@@ -95,11 +99,19 @@ describe("friday-next channel outbound sessionKey routing", () => {
   it("run-route wins over ctx sessionKey (ctx carries the agent's base/main session, not the active app session)", async () => {
     const deviceId = "DEV-TEXT-2";
     const runId = "run-text-2";
-    registerRunRoute({ runId, deviceId, sessionKey: "agent:operator:friday-next:direct:route-session" });
+    registerRunRoute({
+      runId,
+      deviceId,
+      sessionKey: "agent:operator:friday-next:direct:route-session",
+    });
     sseEmitter.trackDeviceForRun(deviceId, runId);
     const res = connect(deviceId);
 
-    await outbound.sendText({ to: deviceId, text: "hi", requesterSessionKey: "agent:operator:main" });
+    await outbound.sendText({
+      to: deviceId,
+      text: "hi",
+      requesterSessionKey: "agent:operator:main",
+    });
 
     const evt = parseOutboundFrames(res).find((f) => f.type === "outbound" && f.data.op === "text");
     expect(evt?.data.sessionKey).toBe("agent:operator:friday-next:direct:route-session");
@@ -129,7 +141,9 @@ describe("friday-next channel outbound sessionKey routing", () => {
 
     await outbound.sendMedia({ to: deviceId, text: "caption", mediaUrl: mediaFile });
 
-    const evt = parseOutboundFrames(res).find((f) => f.type === "outbound" && f.data.op === "media");
+    const evt = parseOutboundFrames(res).find(
+      (f) => f.type === "outbound" && f.data.op === "media",
+    );
     expect(evt).toBeDefined();
     expect(evt?.data.sessionKey).toBe(sessionKey);
     expect(evt?.data.deviceId).toBe(deviceId);

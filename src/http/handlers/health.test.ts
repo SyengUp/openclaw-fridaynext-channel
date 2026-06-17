@@ -23,7 +23,11 @@ class MockRes extends EventEmitter {
   }
 }
 
-function mockReq(method: string, url: string, headers: Record<string, string> = {}): IncomingMessage {
+function mockReq(
+  method: string,
+  url: string,
+  headers: Record<string, string> = {},
+): IncomingMessage {
   return { method, url, headers } as IncomingMessage;
 }
 
@@ -82,7 +86,17 @@ describe("handleHealth", () => {
         {
           nodeId: NODE_ID,
           caps: ["location", "canvas"],
-          commands: ["location.get", "canvas.present", "canvas.hide", "canvas.navigate", "canvas.eval", "canvas.snapshot", "canvas.a2ui.push", "canvas.a2ui.pushJSONL", "canvas.a2ui.reset"],
+          commands: [
+            "location.get",
+            "canvas.present",
+            "canvas.hide",
+            "canvas.navigate",
+            "canvas.eval",
+            "canvas.snapshot",
+            "canvas.a2ui.push",
+            "canvas.a2ui.pushJSONL",
+            "canvas.a2ui.reset",
+          ],
         },
       ],
     });
@@ -104,9 +118,7 @@ describe("handleHealth", () => {
   it("returns degraded when node is missing required caps", async () => {
     mockListNodePairing.mockResolvedValueOnce({
       pending: [],
-      paired: [
-        { nodeId: NODE_ID, caps: ["canvas"], commands: ["canvas.present"] },
-      ],
+      paired: [{ nodeId: NODE_ID, caps: ["canvas"], commands: ["canvas.present"] }],
     });
 
     const req = mockReq("GET", `/friday-next/health?nodeDeviceId=${NODE_ID}`, {
@@ -127,7 +139,10 @@ describe("handleHealth", () => {
       pending: [{ requestId: REQUEST_ID, nodeId: NODE_ID }],
       paired: [],
     });
-    mockApproveNodePairing.mockResolvedValueOnce({ requestId: REQUEST_ID, node: { nodeId: NODE_ID } });
+    mockApproveNodePairing.mockResolvedValueOnce({
+      requestId: REQUEST_ID,
+      node: { nodeId: NODE_ID },
+    });
 
     const req = mockReq("GET", `/friday-next/health?nodeDeviceId=${NODE_ID}&selfHeal=true`, {
       authorization: "Bearer test-token",
@@ -186,7 +201,10 @@ describe("handleHealth", () => {
       pending: [{ requestId: REQUEST_ID, nodeId: NODE_ID }],
       paired: [],
     });
-    mockApproveNodePairing.mockResolvedValueOnce({ status: "forbidden", missingScope: "operator.admin" });
+    mockApproveNodePairing.mockResolvedValueOnce({
+      status: "forbidden",
+      missingScope: "operator.admin",
+    });
 
     const req = mockReq("GET", `/friday-next/health?nodeDeviceId=${NODE_ID}&selfHeal=true`, {
       authorization: "Bearer test-token",
@@ -236,14 +254,28 @@ describe("handleHealth", () => {
         {
           nodeId: NODE_ID,
           caps: ["location", "canvas"],
-          commands: ["location.get", "canvas.present", "canvas.hide", "canvas.navigate", "canvas.eval", "canvas.snapshot", "canvas.a2ui.push", "canvas.a2ui.pushJSONL", "canvas.a2ui.reset"],
+          commands: [
+            "location.get",
+            "canvas.present",
+            "canvas.hide",
+            "canvas.navigate",
+            "canvas.eval",
+            "canvas.snapshot",
+            "canvas.a2ui.push",
+            "canvas.a2ui.pushJSONL",
+            "canvas.a2ui.reset",
+          ],
         },
       ],
     });
 
-    const req = mockReq("GET", `/friday-next/health?deviceId=${DEVICE_ID}&nodeDeviceId=${NODE_ID}`, {
-      authorization: "Bearer test-token",
-    });
+    const req = mockReq(
+      "GET",
+      `/friday-next/health?deviceId=${DEVICE_ID}&nodeDeviceId=${NODE_ID}`,
+      {
+        authorization: "Bearer test-token",
+      },
+    );
     const res = new MockRes() as unknown as ServerResponse;
     await handleHealth(req, res);
     const body = JSON.parse((res as unknown as MockRes).body);

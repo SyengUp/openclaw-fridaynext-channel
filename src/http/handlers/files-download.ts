@@ -63,7 +63,10 @@ function tryDecodeURIComponent(segment: string): string | null {
  */
 function contentDispositionInline(filename: string): string {
   const base =
-    path.basename(filename).replace(/[\r\n"]/g, "_").replace(/\\/g, "_") || "file";
+    path
+      .basename(filename)
+      .replace(/[\r\n"]/g, "_")
+      .replace(/\\/g, "_") || "file";
   const ascii = /^[\x20-\x7E]*$/.test(base) ? base : "file";
   return `inline; filename="${ascii}"; filename*=UTF-8''${encodeURIComponent(base)}`;
 }
@@ -82,9 +85,7 @@ function sendBuffer(
   const disposition = contentDispositionInline(filename);
   const rangeRaw = req.headers.range;
   const range =
-    typeof rangeRaw === "string" && /^bytes=/i.test(rangeRaw.trim())
-      ? rangeRaw.trim()
-      : undefined;
+    typeof rangeRaw === "string" && /^bytes=/i.test(rangeRaw.trim()) ? rangeRaw.trim() : undefined;
 
   res.setHeader("Accept-Ranges", "bytes");
   res.setHeader("Cache-Control", "private, max-age=3600");
@@ -190,7 +191,13 @@ export async function handleFilesDownload(
     // 1.2 Plugin-root attachments/ (survives gateway restarts; basename = URL token)
     const fromAttachments = readAttachmentFileFromDisk(fileToken);
     if (fromAttachments) {
-      sendBuffer(req, res, fromAttachments.buffer, fromAttachments.mimeType, fromAttachments.filename);
+      sendBuffer(
+        req,
+        res,
+        fromAttachments.buffer,
+        fromAttachments.mimeType,
+        fromAttachments.filename,
+      );
       return true;
     }
 
@@ -211,10 +218,7 @@ export async function handleFilesDownload(
     // fileId may include an extension (e.g. "uuid.png") — strip it to get the base id
     const baseId = fileToken.replace(/\.[^.]+$/, "");
     const mediaDir = path.join(os.homedir(), ".openclaw", "media", "inbound");
-    const candidates = [
-      path.join(mediaDir, baseId),
-      path.join(mediaDir, fileToken),
-    ];
+    const candidates = [path.join(mediaDir, baseId), path.join(mediaDir, fileToken)];
 
     for (const filePath of candidates) {
       if (fs.existsSync(filePath)) {

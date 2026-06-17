@@ -34,10 +34,7 @@ import { getFridayNextRuntime } from "../runtime.js";
 import { sseEmitter } from "../sse/emitter.js";
 
 /** Route matcher - returns the matched handler or null. */
-async function handleFridayNextRoute(
-  req: IncomingMessage,
-  res: ServerResponse,
-): Promise<boolean> {
+async function handleFridayNextRoute(req: IncomingMessage, res: ServerResponse): Promise<boolean> {
   const url = new URL(req.url ?? "/", "http://localhost");
   const pathname = url.pathname;
   applyCorsHeaders(res);
@@ -79,7 +76,10 @@ async function handleFridayNextRoute(
     return await handleNodesApprove(req, res);
   }
 
-  if ((req.method === "PUT" || req.method === "GET") && pathname === "/friday-next/sessions/settings") {
+  if (
+    (req.method === "PUT" || req.method === "GET") &&
+    pathname === "/friday-next/sessions/settings"
+  ) {
     return await handleSessionsSettings(req, res);
   }
 
@@ -127,7 +127,10 @@ async function handleFridayNextRoute(
   }
 
   // Route: PUT /friday-next/sessions/title (sync app session name → server displayName)
-  if ((req.method === "PUT" || req.method === "POST") && pathname === "/friday-next/sessions/title") {
+  if (
+    (req.method === "PUT" || req.method === "POST") &&
+    pathname === "/friday-next/sessions/title"
+  ) {
     return await handleHistorySetTitle(req, res);
   }
 

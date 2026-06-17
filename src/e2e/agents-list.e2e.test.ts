@@ -1,6 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { createAppSimulator } from "../test-support/app-simulator.js";
-import { createTempHistoryDir, removeTempHistoryDir, setMockRuntime } from "../test-support/mock-runtime.js";
+import {
+  createTempHistoryDir,
+  removeTempHistoryDir,
+  setMockRuntime,
+} from "../test-support/mock-runtime.js";
 import {
   setFridayAgentForwardRuntime,
   resetFridayAgentForwardRuntimeForTest,
@@ -20,7 +24,10 @@ function setForwardConfig(config: unknown): void {
   } as never);
 }
 
-async function getAgents(app: ReturnType<typeof createAppSimulator>, headers?: Record<string, string>) {
+async function getAgents(
+  app: ReturnType<typeof createAppSimulator>,
+  headers?: Record<string, string>,
+) {
   const res = await app.rawRequest({ method: "GET", path: "/friday-next/agents", headers });
   return { status: res.status, body: res.body ? JSON.parse(res.body) : {}, headers: res.headers };
 }

@@ -25,7 +25,9 @@ export function setAttachmentsDirForTest(dir: string | null): void {
 /** Resolve `<historyDir>/../attachments`, mirroring the offline-queue layout. */
 function resolveAttachmentsDir(): string {
   try {
-    const cfg = resolveFridayNextConfig(getHostOpenClawConfigSnapshot(getFridayNextRuntime().config));
+    const cfg = resolveFridayNextConfig(
+      getHostOpenClawConfigSnapshot(getFridayNextRuntime().config),
+    );
     return path.join(path.dirname(cfg.historyDir), "attachments");
   } catch {
     return path.join(os.homedir(), ".openclaw", "friday-next", "attachments");
@@ -112,7 +114,11 @@ function writeAttachmentMetaSidecar(urlToken: string, filename: string, mimeType
  * is unrecoverable. We stash it here (keyed by the inbound basename, reusing the sidecar
  * scheme but inside our own attachments dir) at send time, while we still know it.
  */
-export function rememberInboundMediaName(inboundPath: string, filename: string, mimeType: string): void {
+export function rememberInboundMediaName(
+  inboundPath: string,
+  filename: string,
+  mimeType: string,
+): void {
   const key = path.basename(inboundPath);
   const name = filename.trim();
   if (!key || !name) return;
@@ -191,7 +197,10 @@ export function normalizeAgentMediaPath(raw: string): string {
   return s;
 }
 
-function copyLocalFileToAttachments(sourcePath: string, originalFilename?: string): StoredFile | null {
+function copyLocalFileToAttachments(
+  sourcePath: string,
+  originalFilename?: string,
+): StoredFile | null {
   const resolvedPath = normalizeAgentMediaPath(sourcePath);
   const diskBasename = path.basename(resolvedPath);
   // Prefer the caller-supplied original name (recovered from an inbound sidecar); fall
@@ -211,7 +220,9 @@ function copyLocalFileToAttachments(sourcePath: string, originalFilename?: strin
       // Fallback to read+write so attachment persistence still works.
       const raw = fs.readFileSync(resolvedPath);
       fs.writeFileSync(storedPath, raw);
-      logger.warn(`copyLocalFileToAttachments copy fallback used for "${resolvedPath}": ${String(copyErr)}`);
+      logger.warn(
+        `copyLocalFileToAttachments copy fallback used for "${resolvedPath}": ${String(copyErr)}`,
+      );
     }
     const stat = fs.statSync(storedPath);
     const mimeType = guessMimeType(filename);
@@ -314,7 +325,11 @@ export function getExternalFileSourceByUrlToken(token: string): string | undefin
 /**
  * Read a file as a Buffer with its MIME type (by id or urlToken).
  */
-export function readFile(id: string): { buffer: Buffer | null; mimeType: string; filename?: string } {
+export function readFile(id: string): {
+  buffer: Buffer | null;
+  mimeType: string;
+  filename?: string;
+} {
   const file = resolveStoredFile(id);
   if (!file) return { buffer: null, mimeType: "application/octet-stream" };
   try {
@@ -399,7 +414,6 @@ export function resolveMediaAttachment(localPath: string): ResolvedAttachment | 
     url: `/friday-next/files/${encodeURIComponent(stored.urlToken)}`,
   };
 }
-
 
 /**
  * Guess MIME type from filename extension.

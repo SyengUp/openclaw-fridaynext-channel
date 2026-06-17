@@ -91,7 +91,9 @@ export function parseOpenGraph(html: string, baseUrl: string): OpenGraphResult {
   let metaDescription: string | null = null;
   for (const match of slice.matchAll(META_TAG_RE)) {
     const tag = match[0];
-    const key = (attributeValue(tag, "property") ?? attributeValue(tag, "name"))?.trim().toLowerCase();
+    const key = (attributeValue(tag, "property") ?? attributeValue(tag, "name"))
+      ?.trim()
+      .toLowerCase();
     if (!key) continue;
     const content = attributeValue(tag, "content");
     if (content == null || !content.trim()) continue;
@@ -140,10 +142,15 @@ export function parseOpenGraph(html: string, baseUrl: string): OpenGraphResult {
   };
 }
 
-const JSON_LD_RE = /<script[^>]*type\s*=\s*["']application\/ld\+json["'][^>]*>([\s\S]*?)<\/script>/gi;
+const JSON_LD_RE =
+  /<script[^>]*type\s*=\s*["']application\/ld\+json["'][^>]*>([\s\S]*?)<\/script>/gi;
 
 /** Extract title/description/image from JSON-LD blocks (schema.org Article/NewsArticle/etc.). */
-function parseJsonLd(html: string): { title: string | null; description: string | null; image: string | null } {
+function parseJsonLd(html: string): {
+  title: string | null;
+  description: string | null;
+  image: string | null;
+} {
   for (const match of html.matchAll(JSON_LD_RE)) {
     let data: unknown;
     try {

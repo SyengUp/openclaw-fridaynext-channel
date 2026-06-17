@@ -155,7 +155,10 @@ async function buildPreview(pageUrl: string): Promise<LinkPreviewResult> {
 }
 
 /** Re-host a favicon: try the parsed `<link rel icon>`, then `<origin>/favicon.ico`. */
-async function resolveFavicon(parsedIconUrl: string | null, finalUrl: string): Promise<string | null> {
+async function resolveFavicon(
+  parsedIconUrl: string | null,
+  finalUrl: string,
+): Promise<string | null> {
   const candidates: string[] = [];
   if (parsedIconUrl) candidates.push(parsedIconUrl);
   try {

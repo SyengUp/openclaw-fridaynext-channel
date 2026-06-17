@@ -78,7 +78,7 @@ describe("sseEmitter", () => {
     const body = c.writes.join("");
     expect(body).toContain("id: 2");
     expect(body).toContain("id: 3");
-    expect(body).not.toContain("text\":\"a\"");
+    expect(body).not.toContain('text":"a"');
 
     sseEmitter.removeConnection("device-replay");
   });

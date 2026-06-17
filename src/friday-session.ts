@@ -49,7 +49,7 @@ export function deviceIdFromSessionKey(sessionKey: string): string | null {
   const m1 = sessionKey.match(/^friday-next-(.+)$/i);
   if (m1) return m1[1] ?? null;
   const m2 = sessionKey.match(/^agent:main:friday-next-(.+)$/i);
-  return m2 ? m2[1] ?? null : null;
+  return m2 ? (m2[1] ?? null) : null;
 }
 
 /**
@@ -66,7 +66,8 @@ const deviceIdToLatestHistorySessionKey = new Map<string, string>();
 let lastRegisteredFridayDeviceId: string | undefined;
 
 function normalizeFridaySessionKeyCase(sk: string): string {
-  return /^friday-next-|^agent:main:friday-next-/i.test(sk) || /^agent:main:friday-next:direct:/i.test(sk)
+  return /^friday-next-|^agent:main:friday-next-/i.test(sk) ||
+    /^agent:main:friday-next:direct:/i.test(sk)
     ? sk.toLowerCase()
     : sk;
 }
@@ -157,7 +158,11 @@ function mergeRunMetadataIntoLifecycleEnd(
   if (typeof meta.modelName === "string" && meta.modelName.trim()) {
     extra.modelName = meta.modelName.trim();
   }
-  if (typeof meta.totalTokens === "number" && Number.isFinite(meta.totalTokens) && meta.totalTokens > 0) {
+  if (
+    typeof meta.totalTokens === "number" &&
+    Number.isFinite(meta.totalTokens) &&
+    meta.totalTokens > 0
+  ) {
     extra.totalTokens = Math.floor(meta.totalTokens);
   }
   if (
@@ -260,7 +265,10 @@ function completeAgentEventForward(params: {
 /**
  * Resolve the real device UUID for Friday outbound (`sendText` / `sendMedia`).
  */
-export function resolveFridayDeviceIdForOutbound(to: string | undefined, rawCtx?: Record<string, unknown>): string {
+export function resolveFridayDeviceIdForOutbound(
+  to: string | undefined,
+  rawCtx?: Record<string, unknown>,
+): string {
   const trimmed = (to ?? "").trim();
   if (trimmed && trimmed.toLowerCase() !== "friday-next") {
     return trimmed;
@@ -308,8 +316,7 @@ export function forwardAgentEventRaw(evt: ForwardAgentEventArgs): void {
   if (!deviceIdRaw) return;
 
   if (!sk) {
-    sk =
-      latestHistorySessionKeyForDeviceId(deviceIdRaw) ?? `friday-next-${deviceIdRaw}`;
+    sk = latestHistorySessionKeyForDeviceId(deviceIdRaw) ?? `friday-next-${deviceIdRaw}`;
   }
 
   openClawRunIdToDeviceId.set(evt.runId, deviceIdRaw.toUpperCase());
@@ -325,11 +332,9 @@ export function forwardAgentEventRaw(evt: ForwardAgentEventArgs): void {
 
   // Phase 1: spawning — tool.start with taskName in args
   if (isSpawnTool && evt.data.phase === "start") {
-    const toolCallId =
-      typeof evt.data.toolCallId === "string" ? evt.data.toolCallId : "";
+    const toolCallId = typeof evt.data.toolCallId === "string" ? evt.data.toolCallId : "";
     const args = evt.data.args as Record<string, unknown> | undefined;
-    const label =
-      typeof args?.taskName === "string" ? args.taskName : undefined;
+    const label = typeof args?.taskName === "string" ? args.taskName : undefined;
     if (toolCallId) {
       const intent = registerSpawnIntent({
         toolCallId,
@@ -362,15 +367,12 @@ export function forwardAgentEventRaw(evt: ForwardAgentEventArgs): void {
       | { childSessionKey?: string; runId?: string; taskName?: string }
       | undefined;
     if (details?.childSessionKey) {
-      const toolCallId =
-        typeof evt.data.toolCallId === "string" ? evt.data.toolCallId : "";
+      const toolCallId = typeof evt.data.toolCallId === "string" ? evt.data.toolCallId : "";
       const intent = toolCallId ? consumeSpawnIntent(toolCallId) : undefined;
       const label =
         details.taskName ||
         intent?.label ||
-        (typeof (evt.data).meta === "string"
-          ? ((evt.data).meta)
-          : undefined);
+        (typeof evt.data.meta === "string" ? evt.data.meta : undefined);
       const entry = ensureSubagentFromSpawnTool({
         childSessionKey: details.childSessionKey,
         bareRunId: details.runId,
@@ -404,10 +406,13 @@ export function forwardAgentEventRaw(evt: ForwardAgentEventArgs): void {
   // Only annotate events that originate from the subagent itself
   // (sessionKey matches childSessionKey). Main-agent delivery events
   // share the announce runId but have a different sessionKey.
-  const isSubagentOwnEvent =
-    subagentEntry && sk && subagentEntry.childSessionKey === sk;
+  const isSubagentOwnEvent = subagentEntry && sk && subagentEntry.childSessionKey === sk;
   const subagentMeta = isSubagentOwnEvent
-    ? { label: subagentEntry.label, parentRunId: subagentEntry.parentRunId, depth: subagentEntry.depth }
+    ? {
+        label: subagentEntry.label,
+        parentRunId: subagentEntry.parentRunId,
+        depth: subagentEntry.depth,
+      }
     : undefined;
 
   let outgoingData: Record<string, unknown> = { ...evt.data };
@@ -436,7 +441,8 @@ export function forwardAgentEventRaw(evt: ForwardAgentEventArgs): void {
 
   const lifecyclePhase =
     evt.stream === "lifecycle" && typeof evt.data.phase === "string" ? evt.data.phase : "";
-  const isTerminalLifecycle = evt.stream === "lifecycle" && (lifecyclePhase === "end" || lifecyclePhase === "error");
+  const isTerminalLifecycle =
+    evt.stream === "lifecycle" && (lifecyclePhase === "end" || lifecyclePhase === "error");
 
   // Emit subagent ended SSE when a subagent run terminates
   if (isTerminalLifecycle && isSubagentOwnEvent && subagentEntry.status !== "ended") {

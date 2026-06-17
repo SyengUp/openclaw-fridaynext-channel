@@ -1,7 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { createAppSimulator } from "../test-support/app-simulator.js";
 import { mockDispatchScript, resetMockDispatch } from "../test-support/mock-dispatch.js";
-import { createTempHistoryDir, removeTempHistoryDir, setMockRuntime } from "../test-support/mock-runtime.js";
+import {
+  createTempHistoryDir,
+  removeTempHistoryDir,
+  setMockRuntime,
+} from "../test-support/mock-runtime.js";
 
 describe("e2e cancel reconnect errors", () => {
   let historyDir = "";
@@ -15,7 +19,12 @@ describe("e2e cancel reconnect errors", () => {
   });
 
   it("cancel 缺 runId 与 200 cancel", async () => {
-    mockDispatchScript().lifecycle("start").partial("a").deliverFinal({ text: "a" }).lifecycle("end").install();
+    mockDispatchScript()
+      .lifecycle("start")
+      .partial("a")
+      .deliverFinal({ text: "a" })
+      .lifecycle("end")
+      .install();
     const app = createAppSimulator({ token: "test-token" });
     await app.connectSSE();
     const sent = await app.sendMessage({ text: "go", sessionKey: "c1" });
@@ -35,7 +44,13 @@ describe("e2e cancel reconnect errors", () => {
   });
 
   it("Last-Event-ID replay 与多 device 隔离", async () => {
-    mockDispatchScript().lifecycle("start").partial("h").partial("hi").deliverFinal({ text: "hi" }).lifecycle("end").install();
+    mockDispatchScript()
+      .lifecycle("start")
+      .partial("h")
+      .partial("hi")
+      .deliverFinal({ text: "hi" })
+      .lifecycle("end")
+      .install();
     const appA = createAppSimulator({ token: "test-token", deviceId: "A" });
     await appA.connectSSE();
     await appA.sendMessage({ text: "one", sessionKey: "r1" });

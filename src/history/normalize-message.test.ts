@@ -1,8 +1,5 @@
 import { describe, it, expect } from "vitest";
-import {
-  normalizeHistoryMessage,
-  normalizeHistoryMessages,
-} from "./normalize-message.js";
+import { normalizeHistoryMessage, normalizeHistoryMessages } from "./normalize-message.js";
 
 function meta(id?: string, seq = 1, extra: Record<string, unknown> = {}) {
   return { __openclaw: { ...(id ? { id } : {}), seq, recordTimestampMs: 1700000000000, ...extra } };
@@ -164,7 +161,8 @@ describe("normalizeHistoryMessage", () => {
     const out = normalizeHistoryMessage(
       {
         role: "assistant",
-        content: "Here is the serene landscape 🌅\nMEDIA:/Users/me/.openclaw/media/tool-image-generation/x.png",
+        content:
+          "Here is the serene landscape 🌅\nMEDIA:/Users/me/.openclaw/media/tool-image-generation/x.png",
         ...meta("a1", 1),
       },
       0,
@@ -180,13 +178,20 @@ describe("normalizeHistoryMessage", () => {
     );
     expect(out?.text).toBe("two files");
     expect(out?.mediaPaths).toEqual(["/a/x.png", "/a/y.mp4"]);
-    const plain = normalizeHistoryMessage({ role: "user", content: "no media here", ...meta("u", 1) }, 0);
+    const plain = normalizeHistoryMessage(
+      { role: "user", content: "no media here", ...meta("u", 1) },
+      0,
+    );
     expect(plain?.mediaPaths).toBeUndefined();
   });
 
   it("flags compaction records via __openclaw.kind", () => {
     const out = normalizeHistoryMessage(
-      { role: "system", content: [{ type: "text", text: "Compaction" }], ...meta("c1", 9, { kind: "compaction" }) },
+      {
+        role: "system",
+        content: [{ type: "text", text: "Compaction" }],
+        ...meta("c1", 9, { kind: "compaction" }),
+      },
       0,
     );
     expect(out?.kind).toBe("compaction");

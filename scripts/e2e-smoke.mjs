@@ -28,7 +28,10 @@ function loadToken(cfg) {
 
 function ensurePluginEnabled() {
   try {
-    const raw = execSync("openclaw plugins list --json", { encoding: "utf-8", stdio: ["ignore", "pipe", "pipe"] });
+    const raw = execSync("openclaw plugins list --json", {
+      encoding: "utf-8",
+      stdio: ["ignore", "pipe", "pipe"],
+    });
     const start = raw.indexOf("{");
     const payload = start >= 0 ? JSON.parse(raw.slice(start)) : {};
     const plugin = (payload.plugins ?? []).find((p) => p?.id === "friday-next");
@@ -76,7 +79,9 @@ const statusRes = await req("status 200", "/friday-next/status", { headers: auth
 if (statusRes) {
   const text = await statusRes.text();
   if (text.includes("<!doctype html>")) {
-    console.warn("[warn] friday-next route not registered on active gateway; fallback to local smoke lane");
+    console.warn(
+      "[warn] friday-next route not registered on active gateway; fallback to local smoke lane",
+    );
     const fallback = spawnSync(
       "pnpm",
       [
@@ -111,8 +116,18 @@ if (statusRes) {
 }
 await req("status 401", "/friday-next/status", { headers: unauth }, 401);
 
-await req("events options", "/friday-next/events", { method: "OPTIONS", headers: { ...auth, Origin: "https://smoke.local" } }, 204);
-const ev = await req("events connect", "/friday-next/events?deviceId=SMOKE", { headers: auth }, 200);
+await req(
+  "events options",
+  "/friday-next/events",
+  { method: "OPTIONS", headers: { ...auth, Origin: "https://smoke.local" } },
+  204,
+);
+const ev = await req(
+  "events connect",
+  "/friday-next/events?deviceId=SMOKE",
+  { headers: auth },
+  200,
+);
 if (ev) {
   const reader = ev.body?.getReader();
   const first = reader ? await reader.read() : { done: true, value: new Uint8Array() };
@@ -159,7 +174,11 @@ if (fileUrl) {
 await req(
   "cancel ok",
   "/friday-next/cancel",
-  { method: "POST", headers: { ...auth, "Content-Type": "application/json" }, body: JSON.stringify({ runId: "smoke-run" }) },
+  {
+    method: "POST",
+    headers: { ...auth, "Content-Type": "application/json" },
+    body: JSON.stringify({ runId: "smoke-run" }),
+  },
   200,
 );
 

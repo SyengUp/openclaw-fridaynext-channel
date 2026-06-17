@@ -14,11 +14,7 @@ function realHome() {
     const h = execSync(`sh -c 'echo ~${sudoUser}'`, { encoding: "utf8" }).trim();
     if (h && !h.startsWith("~") && existsSync(h)) return h;
   } catch {}
-  for (const g of [
-    `/home/${sudoUser}`,
-    `/Users/${sudoUser}`,
-    `C:\\Users\\${sudoUser}`,
-  ]) {
+  for (const g of [`/home/${sudoUser}`, `/Users/${sudoUser}`, `C:\\Users\\${sudoUser}`]) {
     if (existsSync(g)) return g;
   }
   return current;
@@ -30,13 +26,23 @@ const OPENCLAW_CONFIG = join(USER_HOME, ".openclaw", "openclaw.json");
 const G = (s) => `\x1b[32m${s}\x1b[0m`;
 const Y = (s) => `\x1b[33m${s}\x1b[0m`;
 const R = (s) => `\x1b[31m${s}\x1b[0m`;
-function log(msg) { console.log(`  ${msg}`); }
-function warn(msg) { console.log(`  ${Y("!")} ${msg}`); }
-function err(msg) { console.error(`  ${R("X")} ${msg}`); }
+function log(msg) {
+  console.log(`  ${msg}`);
+}
+function warn(msg) {
+  console.log(`  ${Y("!")} ${msg}`);
+}
+function err(msg) {
+  console.error(`  ${R("X")} ${msg}`);
+}
 
 function has(cmd) {
-  try { execSync(`${cmd} --version`, { stdio: "ignore" }); return true; }
-  catch { return false; }
+  try {
+    execSync(`${cmd} --version`, { stdio: "ignore" });
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 let openclawCmd = "openclaw";
@@ -79,7 +85,10 @@ if (!hasOpenclaw()) {
       let tooOld = false;
       for (let i = 0; i < 3; i++) {
         if (cur[i] > MIN_OPENCLAW[i]) break;
-        if (cur[i] < MIN_OPENCLAW[i]) { tooOld = true; break; }
+        if (cur[i] < MIN_OPENCLAW[i]) {
+          tooOld = true;
+          break;
+        }
       }
       if (tooOld) {
         err(`OpenClaw version ${m[0]} is too old.`);
@@ -100,7 +109,7 @@ log("Installing Friday Next channel plugin...");
 try {
   const out = execSync(
     `${openclawCmd} plugins install @syengup/friday-channel-next@latest --force`,
-    { encoding: "utf8", stdio: "pipe", timeout: 120000 }
+    { encoding: "utf8", stdio: "pipe", timeout: 120000 },
   );
   if (out.trim()) console.log(out.trim());
   log("Plugin registered with install record — auto-upgrade enabled.");
@@ -108,8 +117,12 @@ try {
   // Remove old manual install to avoid "duplicate plugin id" warning.
   const legacyDir = join(USER_HOME, ".openclaw", "extensions", "friday-channel-next");
   if (existsSync(legacyDir)) {
-    try { rmSync(legacyDir, { recursive: true, force: true }); log("Removed legacy manual install."); }
-    catch { /* non-critical */ }
+    try {
+      rmSync(legacyDir, { recursive: true, force: true });
+      log("Removed legacy manual install.");
+    } catch {
+      /* non-critical */
+    }
   }
 } catch (e) {
   const msg = (e.stderr || e.stdout || e.message || "").toString();
@@ -150,7 +163,10 @@ function setConfig(path, value) {
 }
 
 function ensureArrayContains(arr, item) {
-  if (!arr.includes(item)) { arr.push(item); configChanged = true; }
+  if (!arr.includes(item)) {
+    arr.push(item);
+    configChanged = true;
+  }
 }
 
 // Plugins
@@ -161,30 +177,58 @@ ensureArrayContains(config.plugins.allow, "canvas");
 
 if (!config.plugins.entries) config.plugins.entries = {};
 for (const id of ["friday-next", "canvas"]) {
-  if (!config.plugins.entries[id]) { config.plugins.entries[id] = { enabled: true }; configChanged = true; }
-  else if (!config.plugins.entries[id].enabled) { config.plugins.entries[id].enabled = true; configChanged = true; }
+  if (!config.plugins.entries[id]) {
+    config.plugins.entries[id] = { enabled: true };
+    configChanged = true;
+  } else if (!config.plugins.entries[id].enabled) {
+    config.plugins.entries[id].enabled = true;
+    configChanged = true;
+  }
 }
 
 // llm_output hook requires allowConversationAccess for non-bundled plugins.
-if (!config.plugins.entries["friday-next"].hooks) { config.plugins.entries["friday-next"].hooks = {}; configChanged = true; }
-if (!config.plugins.entries["friday-next"].hooks.allowConversationAccess) { config.plugins.entries["friday-next"].hooks.allowConversationAccess = true; configChanged = true; }
+if (!config.plugins.entries["friday-next"].hooks) {
+  config.plugins.entries["friday-next"].hooks = {};
+  configChanged = true;
+}
+if (!config.plugins.entries["friday-next"].hooks.allowConversationAccess) {
+  config.plugins.entries["friday-next"].hooks.allowConversationAccess = true;
+  configChanged = true;
+}
 
 // Channel
 if (!config.channels) config.channels = {};
-if (!config.channels["friday-next"]) { config.channels["friday-next"] = { enabled: true, transport: "http+sse" }; configChanged = true; }
-else {
-  if (!config.channels["friday-next"].enabled) { config.channels["friday-next"].enabled = true; configChanged = true; }
-  if (!config.channels["friday-next"].transport) { config.channels["friday-next"].transport = "http+sse"; configChanged = true; }
+if (!config.channels["friday-next"]) {
+  config.channels["friday-next"] = { enabled: true, transport: "http+sse" };
+  configChanged = true;
+} else {
+  if (!config.channels["friday-next"].enabled) {
+    config.channels["friday-next"].enabled = true;
+    configChanged = true;
+  }
+  if (!config.channels["friday-next"].transport) {
+    config.channels["friday-next"].transport = "http+sse";
+    configChanged = true;
+  }
 }
 
 // Gateway bind + nodes
 if (!config.gateway) config.gateway = {};
-if (config.gateway.bind !== "lan") { config.gateway.bind = "lan"; configChanged = true; }
+if (config.gateway.bind !== "lan") {
+  config.gateway.bind = "lan";
+  configChanged = true;
+}
 if (!config.gateway.nodes) config.gateway.nodes = {};
 if (!Array.isArray(config.gateway.nodes.allowCommands)) config.gateway.nodes.allowCommands = [];
 for (const cmd of [
-  "canvas.navigate", "canvas.present", "canvas.hide", "canvas.eval",
-  "canvas.snapshot", "canvas.a2ui.push", "canvas.a2ui.reset", "canvas.a2ui.pushJSONL",
+  "canvas.navigate",
+  "canvas.present",
+  "canvas.hide",
+  "canvas.eval",
+  "canvas.snapshot",
+  "canvas.a2ui.push",
+  "canvas.a2ui.reset",
+  "canvas.a2ui.pushJSONL",
 ]) {
   ensureArrayContains(config.gateway.nodes.allowCommands, cmd);
 }
@@ -193,7 +237,11 @@ for (const cmd of [
 if (!config.agents) config.agents = {};
 if (!Array.isArray(config.agents.list)) config.agents.list = [];
 let mainAgent = config.agents.list.find((a) => a.id === "main");
-if (!mainAgent) { mainAgent = { id: "main" }; config.agents.list.push(mainAgent); configChanged = true; }
+if (!mainAgent) {
+  mainAgent = { id: "main" };
+  config.agents.list.push(mainAgent);
+  configChanged = true;
+}
 if (!mainAgent.tools) mainAgent.tools = {};
 if (!Array.isArray(mainAgent.tools.alsoAllow)) mainAgent.tools.alsoAllow = [];
 for (const tool of ["canvas", "nodes"]) {
@@ -202,7 +250,10 @@ for (const tool of ["canvas", "nodes"]) {
 if (Array.isArray(mainAgent.tools.deny)) {
   for (const tool of ["canvas", "nodes"]) {
     const idx = mainAgent.tools.deny.indexOf(tool);
-    if (idx !== -1) { mainAgent.tools.deny.splice(idx, 1); configChanged = true; }
+    if (idx !== -1) {
+      mainAgent.tools.deny.splice(idx, 1);
+      configChanged = true;
+    }
   }
 }
 
@@ -224,7 +275,11 @@ log("Restarting OpenClaw gateway... (this can take 20-30s)");
 try {
   // A full gateway restart commonly takes 20s+ on a fresh boot; give it plenty of room
   // so we don't kill it mid-restart and report a false failure.
-  const out = execSync(`${openclawCmd} gateway restart`, { encoding: "utf8", stdio: "pipe", timeout: 90000 });
+  const out = execSync(`${openclawCmd} gateway restart`, {
+    encoding: "utf8",
+    stdio: "pipe",
+    timeout: 90000,
+  });
   if (out.trim()) console.log(out.trim());
 } catch (e) {
   if (e.stdout?.trim()) console.log(e.stdout.trim());
@@ -250,15 +305,18 @@ function getLanIp() {
   return "127.0.0.1";
 }
 
-try { config = JSON.parse(readFileSync(OPENCLAW_CONFIG, "utf8")); } catch { config = {}; }
+try {
+  config = JSON.parse(readFileSync(OPENCLAW_CONFIG, "utf8"));
+} catch {
+  config = {};
+}
 
 const gatewayPort = config.gateway?.port || 18789;
 const gatewayToken = config.gateway?.auth?.token || "(not set)";
 const bindMode = config.gateway?.bind || "localhost";
 
-const gatewayUrl = bindMode === "lan"
-  ? `http://${getLanIp()}:${gatewayPort}`
-  : `http://127.0.0.1:${gatewayPort}`;
+const gatewayUrl =
+  bindMode === "lan" ? `http://${getLanIp()}:${gatewayPort}` : `http://127.0.0.1:${gatewayPort}`;
 
 // Always verify against loopback: the gateway binds 0.0.0.0 so it's reachable here,
 // and this avoids false negatives from LAN/NAT routing of the advertised IP.
@@ -272,19 +330,38 @@ async function verifyGateway(url, token, retries = 30) {
     try {
       const res = await new Promise((resolve, reject) => {
         const req = http.request(
-          { hostname, port, path: "/friday-next/status", method: "GET",
-            headers: { authorization: `Bearer ${token}` }, timeout: 5000 },
-          (res) => { let body = ""; res.on("data", (c) => body += c); res.on("end", () => resolve({ status: res.statusCode, body })); },
+          {
+            hostname,
+            port,
+            path: "/friday-next/status",
+            method: "GET",
+            headers: { authorization: `Bearer ${token}` },
+            timeout: 5000,
+          },
+          (res) => {
+            let body = "";
+            res.on("data", (c) => (body += c));
+            res.on("end", () => resolve({ status: res.statusCode, body }));
+          },
         );
         req.on("error", reject);
-        req.on("timeout", () => { req.destroy(); reject(new Error("timeout")); });
+        req.on("timeout", () => {
+          req.destroy();
+          reject(new Error("timeout"));
+        });
         req.end();
       });
       if (res.status === 200) {
         try {
           const data = JSON.parse(res.body);
           if (data.ok) {
-            log("Gateway verified OK (friday-next " + data.version + ", " + data.connections + " connections).");
+            log(
+              "Gateway verified OK (friday-next " +
+                data.version +
+                ", " +
+                data.connections +
+                " connections).",
+            );
             return true;
           }
           warn("Plugin responded but ok=false — " + JSON.stringify(data));
@@ -294,8 +371,14 @@ async function verifyGateway(url, token, retries = 30) {
           continue;
         }
       }
-      if (res.status === 401) { warn("Auth token mismatch — check gateway.auth.token."); return false; }
-      if (res.status === 404) { warn("Route not found — plugin may not be loaded."); return false; }
+      if (res.status === 401) {
+        warn("Auth token mismatch — check gateway.auth.token.");
+        return false;
+      }
+      if (res.status === 404) {
+        warn("Route not found — plugin may not be loaded.");
+        return false;
+      }
       if (i < retries) warn(`Gateway responded ${res.status}, retrying (${i}/${retries})...`);
     } catch {
       if (i < retries) warn(`Gateway not reachable, retrying (${i}/${retries})...`);
@@ -404,14 +487,19 @@ async function detectPublicIp() {
       const ipStr = await new Promise((resolve, reject) => {
         const req = http.get(url, { timeout: 3000 }, (res) => {
           let body = "";
-          res.on("data", (c) => body += c);
+          res.on("data", (c) => (body += c));
           res.on("end", () => resolve(body.trim()));
         });
         req.on("error", reject);
-        req.on("timeout", () => { req.destroy(); reject(new Error("timeout")); });
+        req.on("timeout", () => {
+          req.destroy();
+          reject(new Error("timeout"));
+        });
       });
       if (/^\d{1,3}(\.\d{1,3}){3}$/.test(ipStr)) return ipStr;
-    } catch { /* try next */ }
+    } catch {
+      /* try next */
+    }
   }
   return null;
 }

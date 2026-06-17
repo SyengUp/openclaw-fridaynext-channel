@@ -18,7 +18,10 @@ const RESTART_DELAY_MS = 500;
  * eligible — dev (load.paths / source==="path") installs return 409 to protect
  * the dev environment from duplicate npm installs.
  */
-export async function handlePluginUpgrade(req: IncomingMessage, res: ServerResponse): Promise<boolean> {
+export async function handlePluginUpgrade(
+  req: IncomingMessage,
+  res: ServerResponse,
+): Promise<boolean> {
   if (req.method !== "POST") {
     res.statusCode = 405;
     res.setHeader("Content-Type", "application/json");

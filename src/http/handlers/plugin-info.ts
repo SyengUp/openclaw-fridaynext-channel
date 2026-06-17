@@ -1,11 +1,7 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { extractBearerToken } from "../middleware/auth.js";
 import { PLUGIN_VERSION } from "../../version.js";
-import {
-  fetchLatestVersion,
-  getInstallSource,
-  semverGreater,
-} from "../../plugin-install-info.js";
+import { fetchLatestVersion, getInstallSource, semverGreater } from "../../plugin-install-info.js";
 
 export interface PluginInfoResult {
   currentVersion: string;
@@ -17,7 +13,10 @@ export interface PluginInfoResult {
   upgradable: boolean;
 }
 
-export async function handlePluginInfo(req: IncomingMessage, res: ServerResponse): Promise<boolean> {
+export async function handlePluginInfo(
+  req: IncomingMessage,
+  res: ServerResponse,
+): Promise<boolean> {
   if (req.method !== "GET") {
     res.statusCode = 405;
     res.setHeader("Content-Type", "application/json");

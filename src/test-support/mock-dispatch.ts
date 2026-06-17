@@ -1,7 +1,12 @@
-import { __setMockFridayDispatchForTests, __resetMockFridayDispatchForTests } from "../agent/dispatch-bridge.js";
+import {
+  __setMockFridayDispatchForTests,
+  __resetMockFridayDispatchForTests,
+} from "../agent/dispatch-bridge.js";
 import { forwardAgentEventRaw } from "../friday-session.js";
 
-type DispatchArg = Parameters<typeof __setMockFridayDispatchForTests>[0] extends (arg: infer A) => unknown
+type DispatchArg = Parameters<typeof __setMockFridayDispatchForTests>[0] extends (
+  arg: infer A,
+) => unknown
   ? A
   : never;
 
@@ -133,12 +138,20 @@ export class MockDispatchScript {
 
   block(text: string, mediaUrls: string[] = [], audioAsVoice = false): this {
     this.steps.push(async (_args, callbacks) => {
-      await callbacks.deliver?.({ text, mediaUrls, audioAsVoice } as never, { kind: "block" } as never);
+      await callbacks.deliver?.(
+        { text, mediaUrls, audioAsVoice } as never,
+        { kind: "block" } as never,
+      );
     });
     return this;
   }
 
-  deliverFinal(payload: { text: string; mediaUrls?: string[]; audioAsVoice?: boolean; isError?: boolean }): this {
+  deliverFinal(payload: {
+    text: string;
+    mediaUrls?: string[];
+    audioAsVoice?: boolean;
+    isError?: boolean;
+  }): this {
     this.steps.push(async (_args, callbacks) => {
       await callbacks.deliver?.(payload as never, { kind: "final" } as never);
     });

@@ -8,7 +8,11 @@
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createAppSimulator } from "../test-support/app-simulator.js";
-import { createTempHistoryDir, removeTempHistoryDir, setMockRuntime } from "../test-support/mock-runtime.js";
+import {
+  createTempHistoryDir,
+  removeTempHistoryDir,
+  setMockRuntime,
+} from "../test-support/mock-runtime.js";
 import { __setMockNodePairingForTests } from "../agent/node-pairing-bridge.js";
 
 const FAKE_DEVICE_ID = "a80b8c4b305fb02c5772c409c6dfcbacde691b61557f7779511ad1a5be8fdf06";
@@ -146,12 +150,14 @@ describe("e2e two-step auto-approval", () => {
   it("Step 2: node 已在 paired 中且有 caps 时返回 alreadyApproved", async () => {
     const mockListNodePairing = vi.fn().mockResolvedValueOnce({
       pending: [],
-      paired: [{
-        nodeId: FAKE_DEVICE_ID,
-        approvedAtMs: 1700000000000,
-        caps: ["location", "canvas"],
-        commands: ["canvas.present"],
-      }],
+      paired: [
+        {
+          nodeId: FAKE_DEVICE_ID,
+          approvedAtMs: 1700000000000,
+          caps: ["location", "canvas"],
+          commands: ["canvas.present"],
+        },
+      ],
     });
     const mockApproveNodePairing = vi.fn();
 

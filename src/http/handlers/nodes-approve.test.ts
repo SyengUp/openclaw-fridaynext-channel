@@ -24,8 +24,14 @@ class MockRes extends EventEmitter {
   }
 }
 
-function mockReq(method: string, headers: Record<string, string> = {}): PassThrough & { method: string; headers: Record<string, string> } {
-  const stream = new PassThrough() as unknown as PassThrough & { method: string; headers: Record<string, string> };
+function mockReq(
+  method: string,
+  headers: Record<string, string> = {},
+): PassThrough & { method: string; headers: Record<string, string> } {
+  const stream = new PassThrough() as unknown as PassThrough & {
+    method: string;
+    headers: Record<string, string>;
+  };
   stream.method = method;
   stream.headers = headers;
   return stream;
@@ -92,7 +98,10 @@ describe("handleNodesApprove", () => {
   });
 
   it("returns 404 when listNodePairing returns data without matching node", async () => {
-    mockList.mockResolvedValueOnce({ pending: [{ requestId: "x", nodeId: "UNMATCHED" }], paired: [] });
+    mockList.mockResolvedValueOnce({
+      pending: [{ requestId: "x", nodeId: "UNMATCHED" }],
+      paired: [],
+    });
 
     const req = mockReq("POST", { authorization: "Bearer test-token" });
     const res = new MockRes() as unknown as ServerResponse;
@@ -135,7 +144,9 @@ describe("handleNodesApprove", () => {
   it("returns 200 with alreadyApproved when node in paired with caps", async () => {
     mockList.mockResolvedValueOnce({
       pending: [],
-      paired: [{ nodeId: NODE_ID, approvedAtMs: 100, caps: ["canvas"], commands: ["canvas.present"] }],
+      paired: [
+        { nodeId: NODE_ID, approvedAtMs: 100, caps: ["canvas"], commands: ["canvas.present"] },
+      ],
     });
 
     const req = mockReq("POST", { authorization: "Bearer test-token" });

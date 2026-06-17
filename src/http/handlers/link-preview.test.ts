@@ -11,7 +11,10 @@ vi.mock("node:dns/promises", () => ({
 
 import dns from "node:dns/promises";
 import { handleLinkPreview } from "./link-preview.js";
-import { resetLinkPreviewCacheForTest, type LinkPreviewPayload } from "../../link-preview/preview-service.js";
+import {
+  resetLinkPreviewCacheForTest,
+  type LinkPreviewPayload,
+} from "../../link-preview/preview-service.js";
 import { setAttachmentsDirForTest } from "./files.js";
 import { clearFridayNextRuntime, setFridayNextRuntime } from "../../runtime.js";
 
@@ -33,7 +36,10 @@ class MockRes extends EventEmitter {
 function makeReq(query: string | null, token: string | null = "tok"): IncomingMessage {
   return {
     method: "GET",
-    url: query == null ? "/friday-next/link-preview" : `/friday-next/link-preview?url=${encodeURIComponent(query)}`,
+    url:
+      query == null
+        ? "/friday-next/link-preview"
+        : `/friday-next/link-preview?url=${encodeURIComponent(query)}`,
     headers: token ? { authorization: `Bearer ${token}` } : {},
   } as unknown as IncomingMessage;
 }
@@ -76,7 +82,10 @@ afterEach(() => {
 describe("handleLinkPreview", () => {
   it("405 on non-GET", async () => {
     const res = new MockRes();
-    await handleLinkPreview({ method: "POST", url: "/friday-next/link-preview", headers: {} } as never, res as never);
+    await handleLinkPreview(
+      { method: "POST", url: "/friday-next/link-preview", headers: {} } as never,
+      res as never,
+    );
     expect(res.statusCode).toBe(405);
   });
 
@@ -105,7 +114,10 @@ describe("handleLinkPreview", () => {
         if (url.includes("cover.png")) {
           return new Response(PNG_BYTES, { status: 200, headers: { "content-type": "image/png" } });
         }
-        return new Response(PAGE_HTML, { status: 200, headers: { "content-type": "text/html; charset=utf-8" } });
+        return new Response(PAGE_HTML, {
+          status: 200,
+          headers: { "content-type": "text/html; charset=utf-8" },
+        });
       }),
     );
     const res = await invoke(makeReq("https://example.com/article"));
@@ -142,7 +154,9 @@ describe("handleLinkPreview", () => {
     const html = `<meta property="og:title" content="T">`;
     vi.stubGlobal(
       "fetch",
-      vi.fn(async () => new Response(html, { status: 200, headers: { "content-type": "text/html" } })),
+      vi.fn(
+        async () => new Response(html, { status: 200, headers: { "content-type": "text/html" } }),
+      ),
     );
     const res = await invoke(makeReq("https://example.com/x"));
     expect(JSON.parse(res.body).preview.siteName).toBe("example.com");
@@ -152,7 +166,13 @@ describe("handleLinkPreview", () => {
     // 可达但无 OG/title → 退到 hostname 卡片(不再折叠)。
     vi.stubGlobal(
       "fetch",
-      vi.fn(async () => new Response("<html><body>plain</body></html>", { status: 200, headers: { "content-type": "text/html" } })),
+      vi.fn(
+        async () =>
+          new Response("<html><body>plain</body></html>", {
+            status: 200,
+            headers: { "content-type": "text/html" },
+          }),
+      ),
     );
     const res = await invoke(makeReq("https://example.com/bare"));
     expect(res.statusCode).toBe(200);
@@ -166,9 +186,15 @@ describe("handleLinkPreview", () => {
       vi.fn(async (input: URL | string) => {
         const url = String(input);
         if (url.includes("favicon")) {
-          return new Response(ICO_BYTES, { status: 200, headers: { "content-type": "image/x-icon" } });
+          return new Response(ICO_BYTES, {
+            status: 200,
+            headers: { "content-type": "image/x-icon" },
+          });
         }
-        return new Response(`<meta property="og:title" content="Titled">`, { status: 200, headers: { "content-type": "text/html" } });
+        return new Response(`<meta property="og:title" content="Titled">`, {
+          status: 200,
+          headers: { "content-type": "text/html" },
+        });
       }),
     );
     const res = await invoke(makeReq("https://example.com/p"));
@@ -185,7 +211,10 @@ describe("handleLinkPreview", () => {
       vi.fn(async (input: URL | string) => {
         const url = String(input);
         if (url.endsWith("/favicon.ico")) {
-          return new Response(ICO_BYTES, { status: 200, headers: { "content-type": "image/vnd.microsoft.icon" } });
+          return new Response(ICO_BYTES, {
+            status: 200,
+            headers: { "content-type": "image/vnd.microsoft.icon" },
+          });
         }
         return new Response("blocked", { status: 403, headers: { "content-type": "text/html" } }); // page blocks bots
       }),
@@ -199,29 +228,41 @@ describe("handleLinkPreview", () => {
   });
 
   it("502 fetch_failed for a dead domain (page and favicon both fail)", async () => {
-    vi.stubGlobal("fetch", vi.fn(async () => new Response("nope", { status: 404 })));
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response("nope", { status: 404 })),
+    );
     const res = await invoke(makeReq("https://dead.example.com/x"));
     expect(res.statusCode).toBe(502);
     expect(JSON.parse(res.body).error).toBe("fetch_failed");
   });
 
   it("502 fetch_failed on non-2xx and non-HTML responses", async () => {
-    vi.stubGlobal("fetch", vi.fn(async () => new Response("nope", { status: 500 })));
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response("nope", { status: 500 })),
+    );
     expect((await invoke(makeReq("https://example.com/down"))).statusCode).toBe(502);
 
     resetLinkPreviewCacheForTest();
     vi.stubGlobal(
       "fetch",
-      vi.fn(async () => new Response("{}", { status: 200, headers: { "content-type": "application/json" } })),
+      vi.fn(
+        async () =>
+          new Response("{}", { status: 200, headers: { "content-type": "application/json" } }),
+      ),
     );
     expect((await invoke(makeReq("https://example.com/api"))).statusCode).toBe(502);
   });
 
   it("serves the second request from cache without refetching", async () => {
-    const fetchMock = vi.fn(async () => new Response(`<meta property="og:title" content="Cached">`, {
-      status: 200,
-      headers: { "content-type": "text/html" },
-    }));
+    const fetchMock = vi.fn(
+      async () =>
+        new Response(`<meta property="og:title" content="Cached">`, {
+          status: 200,
+          headers: { "content-type": "text/html" },
+        }),
+    );
     vi.stubGlobal("fetch", fetchMock);
     await invoke(makeReq("https://example.com/cached"));
     const afterFirst = fetchMock.mock.calls.length;

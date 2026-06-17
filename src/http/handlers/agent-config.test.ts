@@ -123,7 +123,9 @@ describe("handleAgentConfig", () => {
   });
 
   it("PUT sets the model on an existing entry", async () => {
-    const config: Record<string, unknown> = { agents: { list: [{ id: "main", model: "old/model" }] } };
+    const config: Record<string, unknown> = {
+      agents: { list: [{ id: "main", model: "old/model" }] },
+    };
     setRuntimes(config);
     const res = new MockRes();
     await handleAgentConfig(makeReq(AUTH, "PUT", { model: "openai/gpt-5" }), res as any, "main");
@@ -133,7 +135,9 @@ describe("handleAgentConfig", () => {
   });
 
   it("PUT model:null deletes the field so it inherits defaults", async () => {
-    const config: Record<string, unknown> = { agents: { list: [{ id: "main", model: "old/model" }] } };
+    const config: Record<string, unknown> = {
+      agents: { list: [{ id: "main", model: "old/model" }] },
+    };
     setRuntimes(config);
     const res = new MockRes();
     await handleAgentConfig(makeReq(AUTH, "PUT", { model: null }), res as any, "main");
@@ -197,7 +201,10 @@ describe("handleAgentConfig", () => {
       setRuntimes({ agents: { list: [{ id: "main" }] } }, workspace);
       const res = new MockRes();
       await handleAgentConfig(makeReq(AUTH), res as any, "main");
-      expect(JSON.parse(res.body).availableSkills.map((s: { id: string }) => s.id)).toEqual(["deep-research", "verify"]);
+      expect(JSON.parse(res.body).availableSkills.map((s: { id: string }) => s.id)).toEqual([
+        "deep-research",
+        "verify",
+      ]);
     } finally {
       fs.rmSync(workspace, { recursive: true, force: true });
     }

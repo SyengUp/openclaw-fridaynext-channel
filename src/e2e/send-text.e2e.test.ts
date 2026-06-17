@@ -1,7 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { createAppSimulator } from "../test-support/app-simulator.js";
 import { mockDispatchScript, resetMockDispatch } from "../test-support/mock-dispatch.js";
-import { createTempHistoryDir, removeTempHistoryDir, setMockRuntime } from "../test-support/mock-runtime.js";
+import {
+  createTempHistoryDir,
+  removeTempHistoryDir,
+  setMockRuntime,
+} from "../test-support/mock-runtime.js";
 
 describe("e2e send text", () => {
   let historyDir = "";
@@ -41,7 +45,12 @@ describe("e2e send text", () => {
   });
 
   it("assistant 流式事件可达", async () => {
-    mockDispatchScript().lifecycle("start").partial("abXdef").deliverFinal({ text: "abXdef" }).lifecycle("end").install();
+    mockDispatchScript()
+      .lifecycle("start")
+      .partial("abXdef")
+      .deliverFinal({ text: "abXdef" })
+      .lifecycle("end")
+      .install();
     const app = createAppSimulator({ token: "test-token" });
     await app.connectSSE();
     await app.sendMessage({ text: "hi", sessionKey: "s1" });

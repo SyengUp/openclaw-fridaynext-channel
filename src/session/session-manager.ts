@@ -162,7 +162,11 @@ export function setSessionSettings(
     upsertSessionEntry(data, fileKey, sessionKey);
 
     const fieldKeys: (keyof FridaySessionSettingsUpdate)[] = [
-      "reasoningLevel", "thinkingLevel", "modelRef", "providerOverride", "modelOverride",
+      "reasoningLevel",
+      "thinkingLevel",
+      "modelRef",
+      "providerOverride",
+      "modelOverride",
     ];
     let updated = false;
     for (const key of fieldKeys) {
@@ -193,22 +197,21 @@ export function setSessionSettings(
 }
 
 function readSettingsFromEntry(entry: Record<string, unknown>): FridaySessionSettings {
-  const provider = typeof entry["providerOverride"] === "string" ? entry["providerOverride"] : undefined;
+  const provider =
+    typeof entry["providerOverride"] === "string" ? entry["providerOverride"] : undefined;
   const model = typeof entry["modelOverride"] === "string" ? entry["modelOverride"] : undefined;
   const storedModelRef = typeof entry["modelRef"] === "string" ? entry["modelRef"] : undefined;
   const modelRef = storedModelRef ?? (provider && model ? `${provider}/${model}` : undefined);
 
   return {
-    reasoningLevel: typeof entry["reasoningLevel"] === "string" ? entry["reasoningLevel"] : undefined,
+    reasoningLevel:
+      typeof entry["reasoningLevel"] === "string" ? entry["reasoningLevel"] : undefined,
     thinkingLevel: typeof entry["thinkingLevel"] === "string" ? entry["thinkingLevel"] : undefined,
     modelRef,
   };
 }
 
-export function getSessionSettings(
-  sessionKey: string,
-  historyDir?: string,
-): FridaySessionSettings {
+export function getSessionSettings(sessionKey: string, historyDir?: string): FridaySessionSettings {
   try {
     const fileKey = toSessionStoreKey(sessionKey);
     const sessionsFile = resolveSessionsFilePath(historyDir, agentIdFromSessionKey(fileKey));
@@ -243,7 +246,8 @@ export function resolveAgentDefaults(sessionKey: string): { model?: string; thin
     const targetAgentId = agentIdFromSessionKey(sessionKey);
 
     const agentEntry = (agents?.list as Array<Record<string, unknown>> | undefined)?.find(
-      (a) => agentIdFromSessionKey(`agent:${typeof a?.id === "string" ? a.id : ""}:x`) === targetAgentId,
+      (a) =>
+        agentIdFromSessionKey(`agent:${typeof a?.id === "string" ? a.id : ""}:x`) === targetAgentId,
     );
     const agentModel = agentEntry?.model;
     const perAgentModel =
@@ -253,13 +257,15 @@ export function resolveAgentDefaults(sessionKey: string): { model?: string; thin
           ? ((agentModel as Record<string, unknown>).primary as string)
           : undefined;
     const perAgentThinking =
-      typeof agentEntry?.thinkingDefault === "string" ? (agentEntry.thinkingDefault) : undefined;
+      typeof agentEntry?.thinkingDefault === "string" ? agentEntry.thinkingDefault : undefined;
 
     const agentDefaults = agents?.defaults as Record<string, unknown> | undefined;
     const model = agentDefaults?.model as Record<string, unknown> | undefined;
-    const globalModel = typeof model?.primary === "string" ? (model.primary) : undefined;
+    const globalModel = typeof model?.primary === "string" ? model.primary : undefined;
     const globalThinking =
-      typeof agentDefaults?.thinkingDefault === "string" ? (agentDefaults.thinkingDefault) : undefined;
+      typeof agentDefaults?.thinkingDefault === "string"
+        ? agentDefaults.thinkingDefault
+        : undefined;
 
     return { model: perAgentModel ?? globalModel, thinking: perAgentThinking ?? globalThinking };
   } catch {

@@ -203,15 +203,20 @@ describe("subagent via sessions_spawn tool", () => {
 
       // Main run start
       forwardAgentEventRaw({
-        runId: mainRunId, seq: 1, stream: "lifecycle",
-        sessionKey: mainSessionKey, data: { phase: "start" },
+        runId: mainRunId,
+        seq: 1,
+        stream: "lifecycle",
+        sessionKey: mainSessionKey,
+        data: { phase: "start" },
       });
 
       const broadcastCalls = captureBroadcastCalls();
 
       // Simulate sessions_spawn tool result
       forwardAgentEventRaw({
-        runId: mainRunId, seq: 2, stream: "tool",
+        runId: mainRunId,
+        seq: 2,
+        stream: "tool",
         sessionKey: mainSessionKey,
         data: {
           phase: "result",
@@ -243,17 +248,30 @@ describe("subagent via sessions_spawn tool", () => {
 
       // Main run
       forwardAgentEventRaw({
-        runId: mainRunId, seq: 1, stream: "lifecycle",
-        sessionKey: mainSessionKey, data: { phase: "start" },
+        runId: mainRunId,
+        seq: 1,
+        stream: "lifecycle",
+        sessionKey: mainSessionKey,
+        data: { phase: "start" },
       });
 
       // Spawn subagent
       forwardAgentEventRaw({
-        runId: mainRunId, seq: 2, stream: "tool",
+        runId: mainRunId,
+        seq: 2,
+        stream: "tool",
         sessionKey: mainSessionKey,
         data: {
-          phase: "result", name: "sessions_spawn", toolCallId: "c1",
-          result: { details: makeSpawnToolResult({ childSessionKey: childKey, runId: bareRunId, taskName: "cr" }) },
+          phase: "result",
+          name: "sessions_spawn",
+          toolCallId: "c1",
+          result: {
+            details: makeSpawnToolResult({
+              childSessionKey: childKey,
+              runId: bareRunId,
+              taskName: "cr",
+            }),
+          },
         },
       });
 
@@ -264,14 +282,14 @@ describe("subagent via sessions_spawn tool", () => {
 
       // Agent event for subagent (announce runId, subagent's own sessionKey)
       forwardAgentEventRaw({
-        runId: compoundRunId, seq: 1, stream: "thinking",
+        runId: compoundRunId,
+        seq: 1,
+        stream: "thinking",
         data: { text: "reviewing..." },
         sessionKey: childKey,
       });
 
-      const agentCall = calls.find(
-        ([, e]) => e.type === "agent" && e.data.stream === "thinking",
-      );
+      const agentCall = calls.find(([, e]) => e.type === "agent" && e.data.stream === "thinking");
       expect(agentCall).toBeTruthy();
       expect(agentCall![1].data.subagent).toEqual({
         label: "cr",
@@ -282,21 +300,24 @@ describe("subagent via sessions_spawn tool", () => {
 
     it("main agent events are NOT annotated", () => {
       forwardAgentEventRaw({
-        runId: mainRunId, seq: 1, stream: "lifecycle",
-        sessionKey: mainSessionKey, data: { phase: "start" },
+        runId: mainRunId,
+        seq: 1,
+        stream: "lifecycle",
+        sessionKey: mainSessionKey,
+        data: { phase: "start" },
       });
 
       const calls = captureBroadcastToRunCalls();
 
       forwardAgentEventRaw({
-        runId: mainRunId, seq: 2, stream: "assistant",
+        runId: mainRunId,
+        seq: 2,
+        stream: "assistant",
         sessionKey: mainSessionKey,
         data: { text: "main reply" },
       });
 
-      const agentCall = calls.find(
-        ([, e]) => e.type === "agent" && e.data.stream === "assistant",
-      );
+      const agentCall = calls.find(([, e]) => e.type === "agent" && e.data.stream === "assistant");
       expect(agentCall![1].data.subagent).toBeUndefined();
     });
 
@@ -305,16 +326,29 @@ describe("subagent via sessions_spawn tool", () => {
       const bareRunId = "bare-cr";
 
       forwardAgentEventRaw({
-        runId: mainRunId, seq: 1, stream: "lifecycle",
-        sessionKey: mainSessionKey, data: { phase: "start" },
+        runId: mainRunId,
+        seq: 1,
+        stream: "lifecycle",
+        sessionKey: mainSessionKey,
+        data: { phase: "start" },
       });
 
       forwardAgentEventRaw({
-        runId: mainRunId, seq: 2, stream: "tool",
+        runId: mainRunId,
+        seq: 2,
+        stream: "tool",
         sessionKey: mainSessionKey,
         data: {
-          phase: "result", name: "sessions_spawn", toolCallId: "c1",
-          result: { details: makeSpawnToolResult({ childSessionKey: childKey, runId: bareRunId, taskName: "cr" }) },
+          phase: "result",
+          name: "sessions_spawn",
+          toolCallId: "c1",
+          result: {
+            details: makeSpawnToolResult({
+              childSessionKey: childKey,
+              runId: bareRunId,
+              taskName: "cr",
+            }),
+          },
         },
       });
 
@@ -325,7 +359,9 @@ describe("subagent via sessions_spawn tool", () => {
 
       // Lifecycle end for subagent (subagent's own sessionKey)
       forwardAgentEventRaw({
-        runId: compoundRunId, seq: 5, stream: "lifecycle",
+        runId: compoundRunId,
+        seq: 5,
+        stream: "lifecycle",
         data: { phase: "end" },
         sessionKey: childKey,
       });
@@ -342,15 +378,22 @@ describe("subagent via sessions_spawn tool", () => {
       const bareRunId = "bare-cr";
 
       forwardAgentEventRaw({
-        runId: mainRunId, seq: 1, stream: "lifecycle",
-        sessionKey: mainSessionKey, data: { phase: "start" },
+        runId: mainRunId,
+        seq: 1,
+        stream: "lifecycle",
+        sessionKey: mainSessionKey,
+        data: { phase: "start" },
       });
 
       forwardAgentEventRaw({
-        runId: mainRunId, seq: 2, stream: "tool",
+        runId: mainRunId,
+        seq: 2,
+        stream: "tool",
         sessionKey: mainSessionKey,
         data: {
-          phase: "result", name: "sessions_spawn", toolCallId: "c1",
+          phase: "result",
+          name: "sessions_spawn",
+          toolCallId: "c1",
           result: { details: makeSpawnToolResult({ childSessionKey: childKey, runId: bareRunId }) },
         },
       });
@@ -361,7 +404,9 @@ describe("subagent via sessions_spawn tool", () => {
       const broadcastCalls = captureBroadcastCalls();
 
       forwardAgentEventRaw({
-        runId: compoundRunId, seq: 5, stream: "lifecycle",
+        runId: compoundRunId,
+        seq: 5,
+        stream: "lifecycle",
         data: { phase: "error", error: "timeout" },
         sessionKey: childKey,
       });
@@ -379,15 +424,22 @@ describe("subagent via sessions_spawn tool", () => {
       const bareRunId = "bare-cr";
 
       forwardAgentEventRaw({
-        runId: mainRunId, seq: 1, stream: "lifecycle",
-        sessionKey: mainSessionKey, data: { phase: "start" },
+        runId: mainRunId,
+        seq: 1,
+        stream: "lifecycle",
+        sessionKey: mainSessionKey,
+        data: { phase: "start" },
       });
 
       forwardAgentEventRaw({
-        runId: mainRunId, seq: 2, stream: "tool",
+        runId: mainRunId,
+        seq: 2,
+        stream: "tool",
         sessionKey: mainSessionKey,
         data: {
-          phase: "result", name: "sessions_spawn", toolCallId: "c1",
+          phase: "result",
+          name: "sessions_spawn",
+          toolCallId: "c1",
           result: { details: makeSpawnToolResult({ childSessionKey: childKey, runId: bareRunId }) },
         },
       });
@@ -398,12 +450,16 @@ describe("subagent via sessions_spawn tool", () => {
       const broadcastCalls = captureBroadcastCalls();
 
       forwardAgentEventRaw({
-        runId: compoundRunId, seq: 5, stream: "lifecycle",
+        runId: compoundRunId,
+        seq: 5,
+        stream: "lifecycle",
         data: { phase: "end" },
         sessionKey: childKey,
       });
       forwardAgentEventRaw({
-        runId: compoundRunId, seq: 6, stream: "lifecycle",
+        runId: compoundRunId,
+        seq: 6,
+        stream: "lifecycle",
         data: { phase: "end" },
         sessionKey: childKey,
       });
@@ -426,17 +482,30 @@ describe("subagent via sessions_spawn tool", () => {
 
       // Main run start
       forwardAgentEventRaw({
-        runId: mainRunId, seq: 1, stream: "lifecycle",
-        sessionKey: mainSessionKey, data: { phase: "start" },
+        runId: mainRunId,
+        seq: 1,
+        stream: "lifecycle",
+        sessionKey: mainSessionKey,
+        data: { phase: "start" },
       });
 
       // sessions_spawn for A
       forwardAgentEventRaw({
-        runId: mainRunId, seq: 2, stream: "tool",
+        runId: mainRunId,
+        seq: 2,
+        stream: "tool",
         sessionKey: mainSessionKey,
         data: {
-          phase: "result", name: "sessions_spawn", toolCallId: "c1",
-          result: { details: makeSpawnToolResult({ childSessionKey: childKeyA, runId: bareA, taskName: "reviewer" }) },
+          phase: "result",
+          name: "sessions_spawn",
+          toolCallId: "c1",
+          result: {
+            details: makeSpawnToolResult({
+              childSessionKey: childKeyA,
+              runId: bareA,
+              taskName: "reviewer",
+            }),
+          },
         },
       });
       sseEmitter.trackDeviceForRun(deviceId, compoundA);
@@ -444,13 +513,13 @@ describe("subagent via sessions_spawn tool", () => {
       // Subagent A thinking (subagent's own sessionKey)
       const calls = captureBroadcastToRunCalls();
       forwardAgentEventRaw({
-        runId: compoundA, seq: 1, stream: "thinking",
+        runId: compoundA,
+        seq: 1,
+        stream: "thinking",
         data: { text: "reviewing code..." },
         sessionKey: childKeyA,
       });
-      const thinkingA = calls.find(
-        ([, e]) => e.type === "agent" && e.data.stream === "thinking",
-      );
+      const thinkingA = calls.find(([, e]) => e.type === "agent" && e.data.stream === "thinking");
       expect(thinkingA![1].data.subagent).toEqual({
         label: "reviewer",
         parentRunId: mainRunId,
@@ -461,36 +530,50 @@ describe("subagent via sessions_spawn tool", () => {
       // In reality, B is spawned from a tool call inside A's run, but here we simulate it from the main run
       // The registry handles nesting via requesterSessionKey chain
       forwardAgentEventRaw({
-        runId: compoundA, seq: 2, stream: "tool",
+        runId: compoundA,
+        seq: 2,
+        stream: "tool",
         sessionKey: mainSessionKey,
         data: {
-          phase: "result", name: "sessions_spawn", toolCallId: "c2",
-          result: { details: makeSpawnToolResult({ childSessionKey: childKeyB, runId: bareB, taskName: "lint" }) },
+          phase: "result",
+          name: "sessions_spawn",
+          toolCallId: "c2",
+          result: {
+            details: makeSpawnToolResult({
+              childSessionKey: childKeyB,
+              runId: bareB,
+              taskName: "lint",
+            }),
+          },
         },
       });
       sseEmitter.trackDeviceForRun(deviceId, compoundB);
 
       // Subagent B thinking (subagent's own sessionKey)
       forwardAgentEventRaw({
-        runId: compoundB, seq: 1, stream: "assistant",
+        runId: compoundB,
+        seq: 1,
+        stream: "assistant",
         data: { text: "no lint errors" },
         sessionKey: childKeyB,
       });
-      const assistantB = calls.find(
-        ([, e]) => e.type === "agent" && e.data.stream === "assistant",
-      );
+      const assistantB = calls.find(([, e]) => e.type === "agent" && e.data.stream === "assistant");
       expect(assistantB![1].data.subagent).toBeDefined();
 
       // B ends (subagent's own sessionKey)
       forwardAgentEventRaw({
-        runId: compoundB, seq: 5, stream: "lifecycle",
+        runId: compoundB,
+        seq: 5,
+        stream: "lifecycle",
         data: { phase: "end" },
         sessionKey: childKeyB,
       });
 
       // A ends (subagent's own sessionKey)
       forwardAgentEventRaw({
-        runId: compoundA, seq: 6, stream: "lifecycle",
+        runId: compoundA,
+        seq: 6,
+        stream: "lifecycle",
         data: { phase: "end" },
         sessionKey: childKeyA,
       });

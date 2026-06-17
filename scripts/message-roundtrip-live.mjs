@@ -76,7 +76,9 @@ const ssePromise = (async () => {
   if (!ct.includes("text/event-stream")) {
     const t = await res.text();
     if (t.includes("<!doctype html>")) {
-      throw new Error("Got HTML — friday-next routes not registered (check channels.friday-next.transport)");
+      throw new Error(
+        "Got HTML — friday-next routes not registered (check channels.friday-next.transport)",
+      );
     }
     throw new Error(`Expected event-stream, got ${ct}`);
   }

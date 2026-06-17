@@ -21,7 +21,9 @@ describe("downloadRemoteMedia", () => {
     const bytes = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
     vi.stubGlobal(
       "fetch",
-      vi.fn(async () => new Response(bytes, { status: 200, headers: { "content-type": "image/png" } })),
+      vi.fn(
+        async () => new Response(bytes, { status: 200, headers: { "content-type": "image/png" } }),
+      ),
     );
 
     const result = await downloadRemoteMedia("https://picsum.photos/600/400");
@@ -48,7 +50,10 @@ describe("downloadRemoteMedia", () => {
   });
 
   it("returns null on a non-2xx response", async () => {
-    vi.stubGlobal("fetch", vi.fn(async () => new Response("nope", { status: 404 })));
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response("nope", { status: 404 })),
+    );
     expect(await downloadRemoteMedia("https://example.com/missing.png")).toBeNull();
   });
 

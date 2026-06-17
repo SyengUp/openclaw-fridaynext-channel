@@ -64,7 +64,9 @@ async function readMediaFile(
       if (buffer?.length) {
         return { buffer, mimeType: guessMimeType(mediaPath) };
       }
-    } catch { /* fall through */ }
+    } catch {
+      /* fall through */
+    }
   }
   try {
     const buffer = fs.readFileSync(mediaPath);

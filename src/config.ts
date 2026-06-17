@@ -52,10 +52,7 @@ export function resolveFridayNextConfig(cfg: unknown): FridayNextConfig {
     pathPrefix: asString(section.pathPrefix, "/friday-next"),
     transport: asString(section.transport, "http+sse"),
     historyLimit: asNumber(section.historyLimit, 25, 1, 200),
-    historyDir: asString(
-      section.historyDir,
-      `${homedir()}/.openclaw/friday-next/history`,
-    ),
+    historyDir: asString(section.historyDir, `${homedir()}/.openclaw/friday-next/history`),
     logLevel: asString(section.logLevel, "info") as FridayNextLogLevel,
     authToken,
     corsEnabled: asBool(cors.enabled, false),

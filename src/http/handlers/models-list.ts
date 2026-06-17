@@ -44,7 +44,7 @@ function resolveConfiguredModels(): ResolvedModels {
       seen.add(modelKey);
       entries.push({
         id: modelKey,
-        name: typeof info?.alias === "string" ? info.alias : meta?.name ?? split.modelId,
+        name: typeof info?.alias === "string" ? info.alias : (meta?.name ?? split.modelId),
         provider: split.provider,
         reasoning: meta?.reasoning,
         contextWindow: meta?.contextWindow,
@@ -104,13 +104,19 @@ function resolveConfiguredModels(): ResolvedModels {
   return { models: entries, defaultModel };
 }
 
-function buildProviderModelMeta(cfg: Record<string, unknown>): Map<string, {
-  name?: string;
-  reasoning?: boolean;
-  contextWindow?: number;
-  maxTokens?: number;
-}> {
-  const meta = new Map<string, { name?: string; reasoning?: boolean; contextWindow?: number; maxTokens?: number }>();
+function buildProviderModelMeta(cfg: Record<string, unknown>): Map<
+  string,
+  {
+    name?: string;
+    reasoning?: boolean;
+    contextWindow?: number;
+    maxTokens?: number;
+  }
+> {
+  const meta = new Map<
+    string,
+    { name?: string; reasoning?: boolean; contextWindow?: number; maxTokens?: number }
+  >();
   const models = cfg?.models as Record<string, unknown> | undefined;
   const providers = models?.providers as Record<string, unknown> | undefined;
   if (providers) {

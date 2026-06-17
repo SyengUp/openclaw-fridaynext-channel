@@ -68,7 +68,9 @@ class MockRes extends Writable {
 }
 
 function createRouteHarness() {
-  let routeHandler: ((req: Readable & { method?: string; url?: string }, res: Writable) => Promise<boolean>) | null = null;
+  let routeHandler:
+    | ((req: Readable & { method?: string; url?: string }, res: Writable) => Promise<boolean>)
+    | null = null;
   const fakeApi = {
     logger: { info: () => {}, warn: () => {}, error: () => {}, debug: () => {} },
     registerHttpRoute(route: { handler: (req: never, res: never) => Promise<boolean> }) {
@@ -193,7 +195,14 @@ export function createAppSimulator(opts?: { deviceId?: string; token?: string })
       });
       return { status: res.statusCode, body: jsonBody(res) };
     },
-    async uploadFiles(parts: Array<{ name: string; filename: string; contentType: string; content: string | Buffer }>) {
+    async uploadFiles(
+      parts: Array<{
+        name: string;
+        filename: string;
+        contentType: string;
+        content: string | Buffer;
+      }>,
+    ) {
       const boundary = "----friday-next-e2e-boundary";
       const chunks: Buffer[] = [];
       for (const part of parts) {
@@ -235,7 +244,12 @@ export function createAppSimulator(opts?: { deviceId?: string; token?: string })
       const res = await request({ method: "OPTIONS", path, headers: { origin } });
       return { status: res.statusCode, headers: res.headers };
     },
-    async rawRequest(arg: { method: string; path: string; headers?: Headers; body?: string | Buffer }) {
+    async rawRequest(arg: {
+      method: string;
+      path: string;
+      headers?: Headers;
+      body?: string | Buffer;
+    }) {
       const res = await request(arg);
       return { status: res.statusCode, body: res.body.toString("utf-8"), headers: res.headers };
     },

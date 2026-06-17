@@ -39,8 +39,10 @@ export function accumulateRunUsage(
   const entry = ensure(runId);
   if (typeof usage.input === "number" && usage.input > 0) entry.input += usage.input;
   if (typeof usage.output === "number" && usage.output > 0) entry.output += usage.output;
-  if (typeof usage.cacheRead === "number" && usage.cacheRead > 0) entry.cacheRead += usage.cacheRead;
-  if (typeof usage.cacheWrite === "number" && usage.cacheWrite > 0) entry.cacheWrite += usage.cacheWrite;
+  if (typeof usage.cacheRead === "number" && usage.cacheRead > 0)
+    entry.cacheRead += usage.cacheRead;
+  if (typeof usage.cacheWrite === "number" && usage.cacheWrite > 0)
+    entry.cacheWrite += usage.cacheWrite;
   if (typeof usage.total === "number" && usage.total > 0) entry.total += usage.total;
   if (model && model.trim()) entry.model = model.trim();
   if (provider && provider.trim()) entry.provider = provider.trim();

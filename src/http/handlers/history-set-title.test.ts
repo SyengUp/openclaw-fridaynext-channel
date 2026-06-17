@@ -42,7 +42,8 @@ function setForward(store: Record<string, unknown>, withWriter = true): void {
     runtime: {
       agent: {
         session: {
-          resolveStorePath: (_s?: string, opts?: { agentId?: string }) => `/store/${opts?.agentId ?? "main"}.json`,
+          resolveStorePath: (_s?: string, opts?: { agentId?: string }) =>
+            `/store/${opts?.agentId ?? "main"}.json`,
           loadSessionStore: () => store,
           ...(withWriter
             ? {
@@ -61,7 +62,9 @@ function setForward(store: Record<string, unknown>, withWriter = true): void {
 }
 
 describe("handleHistorySetTitle", () => {
-  beforeEach(() => setFridayNextRuntime({ config: { loadConfig: () => CFG }, logger: {} } as never));
+  beforeEach(() =>
+    setFridayNextRuntime({ config: { loadConfig: () => CFG }, logger: {} } as never),
+  );
   afterEach(() => resetFridayAgentForwardRuntimeForTest());
 
   it("rejects GET with 405", async () => {
@@ -102,14 +105,20 @@ describe("handleHistorySetTitle", () => {
   it("404s when the session is unknown", async () => {
     setForward({});
     const res = new MockRes();
-    await handleHistorySetTitle(makeReq({ sessionKey: "agent:main:nope", title: "x" }, AUTH), res as any);
+    await handleHistorySetTitle(
+      makeReq({ sessionKey: "agent:main:nope", title: "x" }, AUTH),
+      res as any,
+    );
     expect(res.statusCode).toBe(404);
   });
 
   it("503s when the store writer is unavailable", async () => {
     setForward({ "agent:main:main": { sessionId: "s" } }, false);
     const res = new MockRes();
-    await handleHistorySetTitle(makeReq({ sessionKey: "agent:main:main", title: "x" }, AUTH), res as any);
+    await handleHistorySetTitle(
+      makeReq({ sessionKey: "agent:main:main", title: "x" }, AUTH),
+      res as any,
+    );
     expect(res.statusCode).toBe(503);
   });
-})
+});

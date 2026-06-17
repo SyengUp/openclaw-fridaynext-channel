@@ -141,11 +141,7 @@ describe("handleAgentsList", () => {
   it("defaults to the first entry when none is marked default and dedups ids", async () => {
     setConfig({
       agents: {
-        list: [
-          { id: "alpha" },
-          { id: "alpha", name: "dup" },
-          { id: "beta" },
-        ],
+        list: [{ id: "alpha" }, { id: "alpha", name: "dup" }, { id: "beta" }],
       },
     });
     const res = new MockRes();

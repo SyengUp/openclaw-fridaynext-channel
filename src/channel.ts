@@ -194,151 +194,151 @@ export const fridayNextChannelPlugin = createChatChannelPlugin({
   outbound: {
     deliveryMode: "direct" as const,
     sendText: async (ctx: any) => {
-        const text = ctx.text ?? "";
-        const rawCtx = ctx as unknown as Record<string, unknown>;
-        const deviceId = resolveFridayDeviceIdForOutbound(ctx.to, rawCtx);
-        const runIdFromCtx = pickFirstString(rawCtx, [
-          "parentRunId",
-          "requesterRunId",
-          "originRunId",
-          "runId",
-        ]);
-        const runId = runIdFromCtx ?? sseEmitter.getLastRunIdForDevice(deviceId) ?? undefined;
-        const sessionKey = resolveOutboundSessionKey(deviceId, runId, rawCtx);
+      const text = ctx.text ?? "";
+      const rawCtx = ctx as unknown as Record<string, unknown>;
+      const deviceId = resolveFridayDeviceIdForOutbound(ctx.to, rawCtx);
+      const runIdFromCtx = pickFirstString(rawCtx, [
+        "parentRunId",
+        "requesterRunId",
+        "originRunId",
+        "runId",
+      ]);
+      const runId = runIdFromCtx ?? sseEmitter.getLastRunIdForDevice(deviceId) ?? undefined;
+      const sessionKey = resolveOutboundSessionKey(deviceId, runId, rawCtx);
 
-        const conn = sseEmitter.getConnection(deviceId);
-        logger.info(
-          `[SEND_TEXT] to=${deviceId} runId=${runId ?? "(none)"} sessionKey=${sessionKey ?? "(none)"} textLen=${text.length} online=${!!conn}`,
-        );
+      const conn = sseEmitter.getConnection(deviceId);
+      logger.info(
+        `[SEND_TEXT] to=${deviceId} runId=${runId ?? "(none)"} sessionKey=${sessionKey ?? "(none)"} textLen=${text.length} online=${!!conn}`,
+      );
 
-        if (conn) {
-          sseEmitter.broadcast(
-            {
-              type: "outbound",
-              data: {
-                op: "text",
-                ts: Date.now(),
-                runId,
-                deviceId,
-                sessionKey,
-                ctx: {
-                  text,
-                  to: ctx.to,
-                  mediaUrl: ctx.mediaUrl,
-                  audioAsVoice: ctx.audioAsVoice,
-                },
+      if (conn) {
+        sseEmitter.broadcast(
+          {
+            type: "outbound",
+            data: {
+              op: "text",
+              ts: Date.now(),
+              runId,
+              deviceId,
+              sessionKey,
+              ctx: {
+                text,
+                to: ctx.to,
+                mediaUrl: ctx.mediaUrl,
+                audioAsVoice: ctx.audioAsVoice,
               },
             },
-            deviceId,
-            true,
-          );
-        }
+          },
+          deviceId,
+          true,
+        );
+      }
 
+      return {
+        channel: CHANNEL_ID,
+        messageId: crypto.randomUUID(),
+        timestamp: Date.now(),
+      };
+    },
+    sendMedia: async (ctx: any) => {
+      const rawCtx = ctx as unknown as Record<string, unknown>;
+      const deviceId = resolveFridayDeviceIdForOutbound(ctx.to, rawCtx);
+      const mediaUrl = ctx.mediaUrl;
+      const runIdFromCtx = pickFirstString(rawCtx, [
+        "parentRunId",
+        "requesterRunId",
+        "originRunId",
+        "runId",
+      ]);
+      const runId = runIdFromCtx ?? sseEmitter.getLastRunIdForDevice(deviceId) ?? undefined;
+      const sessionKey = resolveOutboundSessionKey(deviceId, runId, rawCtx);
+      const audioAsVoice = ctx.audioAsVoice === true;
+      const caption = ctx.text ?? "";
+
+      if (!mediaUrl) {
         return {
           channel: CHANNEL_ID,
           messageId: crypto.randomUUID(),
           timestamp: Date.now(),
         };
-      },
-      sendMedia: async (ctx: any) => {
-        const rawCtx = ctx as unknown as Record<string, unknown>;
-        const deviceId = resolveFridayDeviceIdForOutbound(ctx.to, rawCtx);
-        const mediaUrl = ctx.mediaUrl;
-        const runIdFromCtx = pickFirstString(rawCtx, [
-          "parentRunId",
-          "requesterRunId",
-          "originRunId",
-          "runId",
-        ]);
-        const runId = runIdFromCtx ?? sseEmitter.getLastRunIdForDevice(deviceId) ?? undefined;
-        const sessionKey = resolveOutboundSessionKey(deviceId, runId, rawCtx);
-        const audioAsVoice = ctx.audioAsVoice === true;
-        const caption = ctx.text ?? "";
+      }
 
-        if (!mediaUrl) {
-          return {
-            channel: CHANNEL_ID,
-            messageId: crypto.randomUUID(),
-            timestamp: Date.now(),
-          };
+      let buffer: Buffer | null = null;
+      let downloadedMimeType: string | null = null;
+
+      if (ctx.mediaReadFile) {
+        try {
+          buffer = await ctx.mediaReadFile(mediaUrl);
+        } catch {
+          // fall through to remote download / fs
         }
+      }
 
-        let buffer: Buffer | null = null;
-        let downloadedMimeType: string | null = null;
-
-        if (ctx.mediaReadFile) {
-          try {
-            buffer = await ctx.mediaReadFile(mediaUrl);
-          } catch {
-            // fall through to remote download / fs
-          }
+      if (!buffer && isHttpUrl(mediaUrl)) {
+        const remote = await downloadRemoteMedia(mediaUrl);
+        if (remote) {
+          buffer = remote.buffer;
+          downloadedMimeType = remote.mimeType;
         }
+      }
 
-        if (!buffer && isHttpUrl(mediaUrl)) {
-          const remote = await downloadRemoteMedia(mediaUrl);
-          if (remote) {
-            buffer = remote.buffer;
-            downloadedMimeType = remote.mimeType;
-          }
+      if (!buffer) {
+        try {
+          const resolvedPath = resolveLocalMediaPath(mediaUrl, ctx.mediaLocalRoots);
+          buffer = fs.readFileSync(resolvedPath);
+        } catch {
+          // file not found — skip media
         }
+      }
 
-        if (!buffer) {
-          try {
-            const resolvedPath = resolveLocalMediaPath(mediaUrl, ctx.mediaLocalRoots);
-            buffer = fs.readFileSync(resolvedPath);
-          } catch {
-            // file not found — skip media
-          }
-        }
+      if (buffer) {
+        const mimeType = downloadedMimeType ?? guessMimeType(mediaUrl);
+        // Match what openclaw itself supports for this media kind rather than
+        // saveMediaBuffer's 5MB default.
+        const maxBytes = await resolveMediaMaxBytes(mimeType);
+        const saved = await saveMediaBuffer(buffer, mimeType, "inbound", maxBytes);
+        if (saved.id) {
+          const fileUrl = `/friday-next/files/${encodeURIComponent(saved.id)}`;
+          const resolved = resolveMediaAttachment(fileUrl);
+          const publicUrl = resolved ? resolved.url : fileUrl;
 
-        if (buffer) {
-          const mimeType = downloadedMimeType ?? guessMimeType(mediaUrl);
-          // Match what openclaw itself supports for this media kind rather than
-          // saveMediaBuffer's 5MB default.
-          const maxBytes = await resolveMediaMaxBytes(mimeType);
-          const saved = await saveMediaBuffer(buffer, mimeType, "inbound", maxBytes);
-          if (saved.id) {
-            const fileUrl = `/friday-next/files/${encodeURIComponent(saved.id)}`;
-            const resolved = resolveMediaAttachment(fileUrl);
-            const publicUrl = resolved ? resolved.url : fileUrl;
+          const conn = sseEmitter.getConnection(deviceId);
+          logger.info(
+            `[SEND_MEDIA] to=${deviceId} runId=${runId ?? "(none)"} sessionKey=${sessionKey ?? "(none)"} audioAsVoice=${audioAsVoice} url=${publicUrl} online=${!!conn}`,
+          );
 
-            const conn = sseEmitter.getConnection(deviceId);
-            logger.info(
-              `[SEND_MEDIA] to=${deviceId} runId=${runId ?? "(none)"} sessionKey=${sessionKey ?? "(none)"} audioAsVoice=${audioAsVoice} url=${publicUrl} online=${!!conn}`,
-            );
-
-            if (conn) {
-              sseEmitter.broadcast(
-                {
-                  type: "outbound",
-                  data: {
-                    op: "media",
-                    ts: Date.now(),
-                    runId,
-                    deviceId,
-                    sessionKey,
-                    audioAsVoice,
-                    caption,
-                    mediaUrl: publicUrl,
-                    ctx: {
-                      to: ctx.to,
-                      text: caption,
-                      originalMediaUrl: mediaUrl,
-                    },
+          if (conn) {
+            sseEmitter.broadcast(
+              {
+                type: "outbound",
+                data: {
+                  op: "media",
+                  ts: Date.now(),
+                  runId,
+                  deviceId,
+                  sessionKey,
+                  audioAsVoice,
+                  caption,
+                  mediaUrl: publicUrl,
+                  ctx: {
+                    to: ctx.to,
+                    text: caption,
+                    originalMediaUrl: mediaUrl,
                   },
                 },
-                deviceId,
-                true,
-              );
-            }
+              },
+              deviceId,
+              true,
+            );
           }
         }
+      }
 
-        return {
-          channel: CHANNEL_ID,
-          messageId: crypto.randomUUID(),
-          timestamp: Date.now(),
-        };
-      },
+      return {
+        channel: CHANNEL_ID,
+        messageId: crypto.randomUUID(),
+        timestamp: Date.now(),
+      };
+    },
   },
 });

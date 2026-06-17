@@ -16,7 +16,11 @@ declare module "openclaw/plugin-sdk/agent-harness" {
 
 declare module "openclaw/plugin-sdk/device-bootstrap" {
   export const listDevicePairing: (baseDir?: string) => Promise<DevicePairingList>;
-  export const approveDevicePairing: (requestId: string, options?: { callerScopes?: readonly string[] }, baseDir?: string) => Promise<ApproveDevicePairingResult>;
+  export const approveDevicePairing: (
+    requestId: string,
+    options?: { callerScopes?: readonly string[] },
+    baseDir?: string,
+  ) => Promise<ApproveDevicePairingResult>;
 
   interface DevicePairingPendingRequest {
     requestId: string;
@@ -34,14 +38,17 @@ declare module "openclaw/plugin-sdk/device-bootstrap" {
     pending: DevicePairingPendingRequest[];
     paired: PairedDevice[];
   }
-  type ApproveDevicePairingResult = {
-    status: "approved";
-    requestId: string;
-    device: PairedDevice;
-  } | {
-    status: "forbidden";
-    reason: string;
-  } | null;
+  type ApproveDevicePairingResult =
+    | {
+        status: "approved";
+        requestId: string;
+        device: PairedDevice;
+      }
+    | {
+        status: "forbidden";
+        reason: string;
+      }
+    | null;
 }
 
 declare module "openclaw/plugin-sdk/core" {

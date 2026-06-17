@@ -139,12 +139,14 @@ function readAgentSessions(agentId: string): FridayHistorySessionSummary[] {
       sessionKey: canonicalKey,
       agentId,
       ...(readString(entry.sessionId) ? { sessionId: readString(entry.sessionId) } : {}),
-      ...(readNumber(entry.updatedAt) !== undefined ? { updatedAt: readNumber(entry.updatedAt) } : {}),
-      ...(readString(entry.model) ?? readString(entry.modelOverride)
+      ...(readNumber(entry.updatedAt) !== undefined
+        ? { updatedAt: readNumber(entry.updatedAt) }
+        : {}),
+      ...((readString(entry.model) ?? readString(entry.modelOverride))
         ? { model: readString(entry.model) ?? readString(entry.modelOverride) }
         : {}),
       // Server-side session display name (matches OpenClaw's resolution order).
-      ...(readString(entry.displayName) ?? readString(entry.label)
+      ...((readString(entry.displayName) ?? readString(entry.label))
         ? { title: readString(entry.displayName) ?? readString(entry.label) }
         : {}),
     });

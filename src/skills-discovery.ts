@@ -80,7 +80,12 @@ function parseSkillFrontmatter(content: string): { name?: string; description?: 
  * not descended into further; other directories are recursed up to a bounded depth.
  * First occurrence of an id wins (call higher-priority sources first). Best-effort.
  */
-function collectSkills(root: string, source: SkillSource, out: Map<string, DiscoveredSkill>, depth = 0): void {
+function collectSkills(
+  root: string,
+  source: SkillSource,
+  out: Map<string, DiscoveredSkill>,
+  depth = 0,
+): void {
   if (depth > MAX_SKILL_WALK_DEPTH) return;
   let entries: fs.Dirent[];
   try {
@@ -149,14 +154,17 @@ function computeOpenClawRoot(): string | null {
  * enabled extensions, so we gate on the same set (extension dir name == plugin id).
  */
 export function enabledExtensionNames(cfg: unknown): Set<string> {
-  const plugins = (cfg as Record<string, unknown> | undefined)?.plugins as Record<string, unknown> | undefined;
+  const plugins = (cfg as Record<string, unknown> | undefined)?.plugins as
+    | Record<string, unknown>
+    | undefined;
   const names = new Set<string>();
   const allow = plugins?.allow;
   if (Array.isArray(allow)) for (const n of allow) if (typeof n === "string") names.add(n);
   const entries = plugins?.entries as Record<string, unknown> | undefined;
   if (entries && typeof entries === "object") {
     for (const [name, val] of Object.entries(entries)) {
-      if (val && typeof val === "object" && (val as Record<string, unknown>).enabled === true) names.add(name);
+      if (val && typeof val === "object" && (val as Record<string, unknown>).enabled === true)
+        names.add(name);
     }
   }
   return names;
@@ -168,7 +176,9 @@ export function enabledExtensionNames(cfg: unknown): Set<string> {
  * → "extra" (core tags these `source: "extension"`). Extension skills are included
  * only when the extension is enabled, matching ControlUI's EXTRA bucket.
  */
-function bundledSkillSources(enabledExtensions: Set<string>): Array<{ dir: string; source: SkillSource }> {
+function bundledSkillSources(
+  enabledExtensions: Set<string>,
+): Array<{ dir: string; source: SkillSource }> {
   const root = resolveOpenClawRoot();
   if (!root) return [];
   const out: Array<{ dir: string; source: SkillSource }> = [
@@ -225,14 +235,16 @@ export function discoverAvailableSkills(cfg: unknown, agentId: string): Discover
       }
     }
     // Managed skills dir: `<configDir>/skills`, the workspace's parent sibling.
-    if (defaultWs) sources.push({ dir: path.join(path.dirname(defaultWs), "skills"), source: "installed" });
+    if (defaultWs)
+      sources.push({ dir: path.join(path.dirname(defaultWs), "skills"), source: "installed" });
   }
 
-  const extraDirs = ((c?.skills as Record<string, unknown> | undefined)?.load as
-    | Record<string, unknown>
-    | undefined)?.extraDirs;
+  const extraDirs = (
+    (c?.skills as Record<string, unknown> | undefined)?.load as Record<string, unknown> | undefined
+  )?.extraDirs;
   if (Array.isArray(extraDirs)) {
-    for (const d of extraDirs) if (typeof d === "string" && d.trim()) sources.push({ dir: d.trim(), source: "extra" });
+    for (const d of extraDirs)
+      if (typeof d === "string" && d.trim()) sources.push({ dir: d.trim(), source: "extra" });
   }
 
   sources.push(...bundledSkillSources(enabledExtensionNames(c)));

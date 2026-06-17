@@ -1,7 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { createAppSimulator } from "../test-support/app-simulator.js";
 import { mockDispatchScript, resetMockDispatch } from "../test-support/mock-dispatch.js";
-import { createTempHistoryDir, removeTempHistoryDir, setMockRuntime } from "../test-support/mock-runtime.js";
+import {
+  createTempHistoryDir,
+  removeTempHistoryDir,
+  setMockRuntime,
+} from "../test-support/mock-runtime.js";
 
 describe("e2e tool lifecycle", () => {
   let historyDir = "";

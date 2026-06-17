@@ -67,21 +67,25 @@ export async function handleDeviceApprove(
     if (pairedDevice) {
       res.statusCode = 200;
       res.setHeader("Content-Type", "application/json");
-      res.end(JSON.stringify({
-        ok: true,
-        deviceId: normalizedDeviceId,
-        alreadyApproved: true,
-        approvedAtMs: (pairedDevice as any).approvedAtMs,
-      }));
+      res.end(
+        JSON.stringify({
+          ok: true,
+          deviceId: normalizedDeviceId,
+          alreadyApproved: true,
+          approvedAtMs: (pairedDevice as any).approvedAtMs,
+        }),
+      );
       return true;
     }
 
     res.statusCode = 404;
     res.setHeader("Content-Type", "application/json");
-    res.end(JSON.stringify({
-      error: "No pending device found for this deviceId",
-      deviceId: normalizedDeviceId,
-    }));
+    res.end(
+      JSON.stringify({
+        error: "No pending device found for this deviceId",
+        deviceId: normalizedDeviceId,
+      }),
+    );
     return true;
   }
 
@@ -95,10 +99,12 @@ export async function handleDeviceApprove(
     log.error(`approveDevicePairing failed: ${err instanceof Error ? err.message : String(err)}`);
     res.statusCode = 502;
     res.setHeader("Content-Type", "application/json");
-    res.end(JSON.stringify({
-      error: "Device approval failed",
-      detail: err instanceof Error ? err.message : "Unknown error",
-    }));
+    res.end(
+      JSON.stringify({
+        error: "Device approval failed",
+        detail: err instanceof Error ? err.message : "Unknown error",
+      }),
+    );
     return true;
   }
 
@@ -112,17 +118,23 @@ export async function handleDeviceApprove(
   if (approved.status === "forbidden") {
     res.statusCode = 403;
     res.setHeader("Content-Type", "application/json");
-    res.end(JSON.stringify({ error: `Device approval forbidden: ${(approved as any).reason ?? "unknown"}` }));
+    res.end(
+      JSON.stringify({
+        error: `Device approval forbidden: ${(approved as any).reason ?? "unknown"}`,
+      }),
+    );
     return true;
   }
 
   res.statusCode = 200;
   res.setHeader("Content-Type", "application/json");
-  res.end(JSON.stringify({
-    ok: true,
-    deviceId: normalizedDeviceId,
-    requestId: approved.requestId,
-    approvedAtMs: (approved as any).device?.approvedAtMs,
-  }));
+  res.end(
+    JSON.stringify({
+      ok: true,
+      deviceId: normalizedDeviceId,
+      requestId: approved.requestId,
+      approvedAtMs: (approved as any).device?.approvedAtMs,
+    }),
+  );
   return true;
 }

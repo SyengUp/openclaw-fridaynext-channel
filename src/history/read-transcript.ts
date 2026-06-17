@@ -40,10 +40,7 @@ function resolveEntry(store: Record<string, unknown>, sessionKey: string): unkno
   return undefined;
 }
 
-export function resolveTranscriptPath(
-  entry: unknown,
-  storePath: string,
-): string | undefined {
+export function resolveTranscriptPath(entry: unknown, storePath: string): string | undefined {
   const sessionFile = entryString(entry, "sessionFile");
   if (sessionFile) {
     return path.isAbsolute(sessionFile)

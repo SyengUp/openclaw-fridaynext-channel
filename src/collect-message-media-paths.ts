@@ -50,7 +50,16 @@ export function collectMediaPathsFromToolResult(raw: unknown, acc?: Set<string>)
     else if (media && typeof media === "object" && !Array.isArray(media)) visit(media);
     const filePath = o.filePath;
     if (typeof filePath === "string") add(filePath);
-    for (const k of ["details", "result", "content", "text", "body", "message", "arguments", "args"]) {
+    for (const k of [
+      "details",
+      "result",
+      "content",
+      "text",
+      "body",
+      "message",
+      "arguments",
+      "args",
+    ]) {
       if (o[k] !== undefined) visit(o[k]);
     }
     for (const val of Object.values(o)) {

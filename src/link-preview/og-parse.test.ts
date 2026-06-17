@@ -5,7 +5,9 @@ const BASE = "https://example.com/article/42";
 
 describe("decodeHtmlEntities", () => {
   it("decodes named, decimal, and hex entities", () => {
-    expect(decodeHtmlEntities("Tom &amp; Jerry &mdash; &quot;fun&quot;")).toBe('Tom & Jerry — "fun"');
+    expect(decodeHtmlEntities("Tom &amp; Jerry &mdash; &quot;fun&quot;")).toBe(
+      'Tom & Jerry — "fun"',
+    );
     expect(decodeHtmlEntities("&#20013;&#25991;")).toBe("中文");
     expect(decodeHtmlEntities("&#x27;quoted&#x27;")).toBe("'quoted'");
   });
@@ -143,7 +145,9 @@ describe("parseOpenGraph", () => {
   it("extracts a cover image from inline JSON (extensionless, escaped slashes)", () => {
     const html = `<title>搜索资讯页</title>
       <script>window.__INFO__={"imgUrl":"http:\\/\\/qqpublic.qpic.cn\\/qq_public_cover\\/0\\/0-2342_op"}</script>`;
-    expect(parseOpenGraph(html, BASE).imageUrl).toBe("http://qqpublic.qpic.cn/qq_public_cover/0/0-2342_op");
+    expect(parseOpenGraph(html, BASE).imageUrl).toBe(
+      "http://qqpublic.qpic.cn/qq_public_cover/0/0-2342_op",
+    );
   });
 
   it("standard og tags still win over body/json fallbacks", () => {

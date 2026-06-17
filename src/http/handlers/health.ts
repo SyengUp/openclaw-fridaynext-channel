@@ -75,7 +75,10 @@ export async function handleHealth(req: IncomingMessage, res: ServerResponse): P
     result.nodePairing = await checkNodePairing(nodeDeviceId, selfHeal, result, log);
   }
 
-  result.ok = !result.nodePairing || (result.nodePairing.status === "ok" || result.nodePairing.status === "pending");
+  result.ok =
+    !result.nodePairing ||
+    result.nodePairing.status === "ok" ||
+    result.nodePairing.status === "pending";
 
   res.statusCode = 200;
   res.setHeader("Content-Type", "application/json");
@@ -113,7 +116,8 @@ async function checkNodePairing(
     };
   }
 
-  const pairedNodes: Array<{ nodeId: string; caps?: string[]; commands?: string[] }> = listData?.paired ?? [];
+  const pairedNodes: Array<{ nodeId: string; caps?: string[]; commands?: string[] }> =
+    listData?.paired ?? [];
   const pairedMatch = pairedNodes.find(
     (entry) => entry.nodeId?.trim().toUpperCase() === normalizedNodeId,
   );
@@ -156,16 +160,24 @@ async function checkNodePairing(
 
   if (pendingMatch && selfHeal) {
     try {
-      const callerScopes = ["operator.admin", "operator.pairing", "operator.read", "operator.write"];
+      const callerScopes = [
+        "operator.admin",
+        "operator.pairing",
+        "operator.read",
+        "operator.write",
+      ];
       const approved = await approveNodePairing(pendingMatch.requestId, { callerScopes });
-      const succeeded = approved != null && !("status" in approved && (approved).status === "forbidden") && "requestId" in approved;
+      const succeeded =
+        approved != null &&
+        !("status" in approved && approved.status === "forbidden") &&
+        "requestId" in approved;
       (result.repairActions ??= []).push({
         component: "nodePairing",
         action: "approveNodePairing",
         result: succeeded ? "ok" : "failed",
         detail: succeeded
           ? `Auto-approved node ${normalizedNodeId}`
-          : `approveNodePairing returned status=${(approved)?.status ?? "null"}`,
+          : `approveNodePairing returned status=${approved?.status ?? "null"}`,
       });
       if (succeeded) {
         log.info(`Auto-approved node ${normalizedNodeId}`);
@@ -191,5 +203,9 @@ async function checkNodePairing(
     return { status: "pending", detail: "Node is pending approval", nodePaired: false };
   }
 
-  return { status: "not_found", detail: `Node ${normalizedNodeId} not registered`, nodePaired: false };
+  return {
+    status: "not_found",
+    detail: `Node ${normalizedNodeId} not registered`,
+    nodePaired: false,
+  };
 }

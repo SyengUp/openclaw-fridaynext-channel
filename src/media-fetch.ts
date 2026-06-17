@@ -53,8 +53,7 @@ export function decodeBase64Media(
   }
   if (!buffer.length) return null;
 
-  const mimeType =
-    mimeHint?.trim().toLowerCase() || dataUrlMime || "application/octet-stream";
+  const mimeType = mimeHint?.trim().toLowerCase() || dataUrlMime || "application/octet-stream";
   return { buffer, mimeType };
 }
 

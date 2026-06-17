@@ -25,14 +25,16 @@ export async function handleCancel(req: IncomingMessage, res: ServerResponse): P
   // back-compat fallback for older apps — resolve it to a sessionKey via the run route.
   const sessionKey =
     (typeof body?.sessionKey === "string" ? body.sessionKey.trim() : "") ||
-    (runId ? getRunRoute(runId)?.sessionKey?.trim() ?? "" : "");
+    (runId ? (getRunRoute(runId)?.sessionKey?.trim() ?? "") : "");
   if (!sessionKey && !runId) {
     res.statusCode = 400;
     res.setHeader("Content-Type", "application/json");
     res.end(JSON.stringify({ error: "Missing sessionKey or runId" }));
     return true;
   }
-  const result = sessionKey ? await abortRunForSessionKey(sessionKey) : { aborted: false, drained: false };
+  const result = sessionKey
+    ? await abortRunForSessionKey(sessionKey)
+    : { aborted: false, drained: false };
   if (runId) sseEmitter.untrackRun(runId);
   res.statusCode = 200;
   res.setHeader("Content-Type", "application/json");

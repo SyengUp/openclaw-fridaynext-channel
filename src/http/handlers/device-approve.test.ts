@@ -28,8 +28,14 @@ class MockRes extends EventEmitter {
   }
 }
 
-function mockReq(method: string, headers: Record<string, string> = {}): PassThrough & { method: string; headers: Record<string, string> } {
-  const stream = new PassThrough() as unknown as PassThrough & { method: string; headers: Record<string, string> };
+function mockReq(
+  method: string,
+  headers: Record<string, string> = {},
+): PassThrough & { method: string; headers: Record<string, string> } {
+  const stream = new PassThrough() as unknown as PassThrough & {
+    method: string;
+    headers: Record<string, string>;
+  };
   stream.method = method;
   stream.headers = headers;
   return stream;
@@ -92,7 +98,10 @@ describe("handleDeviceApprove", () => {
   });
 
   it("returns 404 when listDevicePairing returns data without matching device", async () => {
-    mockList.mockResolvedValueOnce({ pending: [{ requestId: "x", deviceId: "UNMATCHED" }], paired: [] });
+    mockList.mockResolvedValueOnce({
+      pending: [{ requestId: "x", deviceId: "UNMATCHED" }],
+      paired: [],
+    });
 
     const req = mockReq("POST", { authorization: "Bearer test-token" });
     const res = new MockRes() as unknown as ServerResponse;

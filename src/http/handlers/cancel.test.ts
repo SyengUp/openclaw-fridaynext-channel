@@ -19,8 +19,14 @@ class MockRes extends EventEmitter {
   }
 }
 
-function mockReq(method: string, headers: Record<string, string> = {}): PassThrough & { method: string; headers: Record<string, string> } {
-  const stream = new PassThrough() as unknown as PassThrough & { method: string; headers: Record<string, string> };
+function mockReq(
+  method: string,
+  headers: Record<string, string> = {},
+): PassThrough & { method: string; headers: Record<string, string> } {
+  const stream = new PassThrough() as unknown as PassThrough & {
+    method: string;
+    headers: Record<string, string>;
+  };
   stream.method = method;
   stream.headers = headers;
   return stream;
@@ -63,7 +69,10 @@ describe("handleCancel", () => {
     req.end(JSON.stringify({ sessionKey: "sk-1" }));
     await p;
     expect((res as unknown as MockRes).statusCode).toBe(200);
-    expect(JSON.parse((res as unknown as MockRes).body)).toMatchObject({ ok: true, sessionKey: "sk-1" });
+    expect(JSON.parse((res as unknown as MockRes).body)).toMatchObject({
+      ok: true,
+      sessionKey: "sk-1",
+    });
   });
 
   it("untracks run by runId fallback under Vitest (abort skipped)", async () => {

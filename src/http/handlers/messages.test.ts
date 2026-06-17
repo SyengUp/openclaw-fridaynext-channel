@@ -35,9 +35,9 @@ describe("composeBodyWithMediaRefs", () => {
   });
 
   it("omits the leading blank line when text is empty (attachment-only)", () => {
-    expect(composeBodyWithMediaRefs("", ["[media attached: file:///a]", "[media attached: file:///b]"])).toBe(
-      "[media attached: file:///a]\n[media attached: file:///b]",
-    );
+    expect(
+      composeBodyWithMediaRefs("", ["[media attached: file:///a]", "[media attached: file:///b]"]),
+    ).toBe("[media attached: file:///a]\n[media attached: file:///b]");
   });
 });
 
@@ -152,7 +152,9 @@ describe("handleMessages dispatch context (owner fields)", () => {
     const dispatchCalled = new Promise<void>((resolve) => {
       __setMockFridayDispatchForTests(async (args: unknown) => {
         const a = args as {
-          dispatcherOptions?: { deliver?: (payload: unknown, info: { kind: string }) => Promise<void> };
+          dispatcherOptions?: {
+            deliver?: (payload: unknown, info: { kind: string }) => Promise<void>;
+          };
         };
         if (a.dispatcherOptions?.deliver) {
           await a.dispatcherOptions.deliver(
@@ -169,10 +171,12 @@ describe("handleMessages dispatch context (owner fields)", () => {
     req.headers = { authorization: "Bearer tok" };
     const res = new MockRes() as unknown as ServerResponse;
     let observedPayload: Record<string, unknown> | null = null;
-    const broadcastSpy = vi.spyOn(sseEmitter, "broadcastToRun").mockImplementation((_: string, evt: unknown) => {
-      const data = (evt as { data?: { payload?: Record<string, unknown> } })?.data;
-      if (data?.payload) observedPayload = data.payload;
-    });
+    const broadcastSpy = vi
+      .spyOn(sseEmitter, "broadcastToRun")
+      .mockImplementation((_: string, evt: unknown) => {
+        const data = (evt as { data?: { payload?: Record<string, unknown> } })?.data;
+        if (data?.payload) observedPayload = data.payload;
+      });
 
     const p = handleMessages(req, res);
     req.end(

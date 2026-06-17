@@ -7,7 +7,14 @@ import { getUpgradeRuntime } from "./upgrade-runtime.js";
 import { PLUGIN_ID, PLUGIN_PACKAGE_NAME } from "./version.js";
 
 /** Install source from the OpenClaw config `plugins.installs[<id>].source`. */
-export type InstallSource = "npm" | "path" | "archive" | "clawhub" | "git" | "marketplace" | "unknown";
+export type InstallSource =
+  | "npm"
+  | "path"
+  | "archive"
+  | "clawhub"
+  | "git"
+  | "marketplace"
+  | "unknown";
 
 /**
  * Infer the install source from the loaded plugin's filesystem path (`api.source`).
@@ -20,7 +27,9 @@ export type InstallSource = "npm" | "path" | "archive" | "clawhub" | "git" | "ma
  * dev-no-duplicate-plugin-install), so anything under the managed projects dir
  * is treated as "npm".
  */
-export function classifyInstallSourceFromLoadedPath(loadedPath: string | null | undefined): InstallSource {
+export function classifyInstallSourceFromLoadedPath(
+  loadedPath: string | null | undefined,
+): InstallSource {
   if (!loadedPath) return "unknown";
   return loadedPath.includes("/.openclaw/npm/projects/") ? "npm" : "path";
 }
@@ -42,9 +51,11 @@ export function getInstallSource(): InstallSource {
   const rt = getUpgradeRuntime();
   if (!rt) return "unknown";
   try {
-    const cfg = rt.currentConfig() as {
-      plugins?: { installs?: Record<string, { source?: string } | undefined> };
-    } | undefined;
+    const cfg = rt.currentConfig() as
+      | {
+          plugins?: { installs?: Record<string, { source?: string } | undefined> };
+        }
+      | undefined;
     const source = cfg?.plugins?.installs?.[PLUGIN_ID]?.source;
     if (
       source === "npm" ||
@@ -94,10 +105,10 @@ export async function fetchLatestVersion(nowMs: number): Promise<string | null> 
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), 5000);
     try {
-      const res = await fetch(
-        `https://registry.npmjs.org/${PLUGIN_PACKAGE_NAME}/latest`,
-        { signal: controller.signal, headers: { Accept: "application/json" } },
-      );
+      const res = await fetch(`https://registry.npmjs.org/${PLUGIN_PACKAGE_NAME}/latest`, {
+        signal: controller.signal,
+        headers: { Accept: "application/json" },
+      });
       if (res.ok) {
         const body = (await res.json()) as { version?: string };
         if (typeof body.version === "string" && body.version) version = body.version;

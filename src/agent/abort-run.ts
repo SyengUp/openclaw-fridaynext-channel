@@ -12,9 +12,8 @@ export async function abortRunForSessionKey(sessionKey: string): Promise<AbortRu
   const key = sessionKey.trim();
   if (!key) return { aborted: false, drained: false };
   try {
-    const { resolveActiveEmbeddedRunSessionId, abortAndDrainAgentHarnessRun } = await import(
-      "openclaw/plugin-sdk/agent-harness"
-    );
+    const { resolveActiveEmbeddedRunSessionId, abortAndDrainAgentHarnessRun } =
+      await import("openclaw/plugin-sdk/agent-harness");
     const sessionId = resolveActiveEmbeddedRunSessionId(key);
     if (!sessionId) return { aborted: false, drained: false };
     const result = await abortAndDrainAgentHarnessRun({ sessionId, sessionKey: key });
