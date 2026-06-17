@@ -14,6 +14,10 @@
   ],
   "scripts": {
     "build": "tsc -p tsconfig.json",
+    "lint": "eslint .",
+    "lint:fix": "eslint . --fix",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
     "prepublishOnly": "pnpm build && rm -rf dist/attachments",
     "test": "npm run test:unit && npm run test:e2e",
     "test:unit": "vitest run",
@@ -58,12 +62,17 @@
     "qrcode-terminal": "^0.12.0"
   },
   "devDependencies": {
+    "@eslint/js": "^10.0.1",
     "@types/node": "^25.6.0",
     "chalk": "^5.6.2",
+    "eslint": "^10.5.0",
+    "eslint-config-prettier": "^10.1.8",
     "jiti": "^2.6.1",
     "json5": "^2.2.3",
+    "prettier": "^3.8.4",
     "tslog": "^4.10.2",
     "typescript": "^6.0.3",
+    "typescript-eslint": "^8.61.1",
     "vitest": "^4.1.5",
     "zod": "^4.3.6"
   }
