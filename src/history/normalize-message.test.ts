@@ -124,7 +124,7 @@ describe("normalizeHistoryMessage", () => {
     expect(out?.toolResult?.images).toBeUndefined();
   });
 
-  it("keeps image blocks on non-canvas toolResults", () => {
+  it("keeps image blocks on image-producing (image_generation) toolResults", () => {
     const out = normalizeHistoryMessage(
       {
         role: "toolResult",
@@ -136,6 +136,28 @@ describe("normalizeHistoryMessage", () => {
       0,
     );
     expect(out?.toolResult?.images).toEqual([{ mimeType: "image/png", data: "REALIMG" }]);
+  });
+
+  it("drops inline image blocks on read toolResults (agent visual input, not an attachment)", () => {
+    // The `read` tool returns the file it fed to the model as an inline base64
+    // image so the agent can "see" it. That is NOT a user-facing attachment —
+    // surfacing it spawned phantom corrupt image bubbles on history rebuild for
+    // turns where the agent only LOOKED at a file and sent nothing.
+    const out = normalizeHistoryMessage(
+      {
+        role: "toolResult",
+        toolCallId: "tc-read",
+        toolName: "read",
+        content: [
+          { type: "text", text: "Read image file [image/jpeg]" },
+          { type: "image", mimeType: "image/jpeg", data: "AGENTVISUALINPUT" },
+        ],
+        ...meta("entry-read", 7),
+      },
+      0,
+    );
+    expect(out?.toolResult?.images).toBeUndefined();
+    expect(out?.toolResult?.text).toBe("Read image file [image/jpeg]");
   });
 
   it("strips MEDIA: lines from text into mediaPaths", () => {

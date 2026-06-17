@@ -104,6 +104,17 @@ function splitMediaLines(text: string): { text: string; paths: string[] } {
   return { text: cleaned, paths };
 }
 
+/**
+ * Tools whose `toolResult` carries a user-facing PRODUCED image, which stays a
+ * chat attachment. Every OTHER tool's inline image block is the agent's visual
+ * INPUT — a file the `read` tool fed to the model, a `canvas` snapshot, a
+ * browser screenshot — and must NOT surface as an attachment on history rebuild
+ * (it spawns phantom, often-corrupt bubbles for turns where the agent never
+ * sent a file). Keep this a whitelist so any new image-CONSUMING tool is safe by
+ * default; add new image-PRODUCING tools here explicitly.
+ */
+const IMAGE_PRODUCING_TOOLS = new Set(["image_generation"]);
+
 const MEDIA_MARKER_RE = /\[media attached:\s*([^\]]+)\]/gi;
 
 /** Pull `[media attached: <url>]` markers out of free text into image refs. */
@@ -254,14 +265,18 @@ export function normalizeHistoryMessage(
   if (role === "toolResult") {
     const split = splitMediaLines(parsed.text);
     const toolName = readString(record.toolName);
-    // Canvas snapshots come back as base64 image blocks on the `canvas` tool result so the *agent*
-    // can "see" the rendered page — they must never surface as chat attachments on history rebuild.
-    // The streaming deliver path already drops the temp-file form (see isCanvasSnapshotMediaPath in
-    // http/handlers/messages.ts); this is the transcript-rebuild counterpart. The canvas tool has no
-    // other image-returning action, so all images on a canvas result are snapshots.
-    const isCanvasResult = toolName === "canvas";
-    const images = isCanvasResult ? [] : parsed.images;
-    const mediaPaths = isCanvasResult ? [] : split.paths;
+    // Inline image blocks on a toolResult are almost always the agent's visual
+    // INPUT — a file the `read` tool fed to the model, a `canvas` snapshot (so the
+    // agent can "see" the rendered page), a browser screenshot — NOT a user-facing
+    // attachment. Surfacing them spawns phantom, often-corrupt attachment bubbles on
+    // history rebuild for turns where the agent never sent a file. Only tools that
+    // PRODUCE a user-facing image keep their blocks. (This was a `canvas`-only
+    // blacklist, which still leaked `read`/screenshot images.) The streaming deliver
+    // path drops the canvas temp-file form separately (isCanvasSnapshotMediaPath in
+    // http/handlers/messages.ts); this is the transcript-rebuild counterpart.
+    const keepInlineImages = toolName ? IMAGE_PRODUCING_TOOLS.has(toolName) : false;
+    const images = keepInlineImages ? parsed.images : [];
+    const mediaPaths = toolName === "canvas" ? [] : split.paths;
     const toolResult: FridayHistoryToolResult = {
       ...(readString(record.toolCallId) ? { toolCallId: readString(record.toolCallId) } : {}),
       ...(toolName ? { toolName } : {}),
