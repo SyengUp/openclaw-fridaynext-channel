@@ -45,20 +45,21 @@ describe("discoverAvailableSkills", () => {
     if (root) fs.rmSync(root, { recursive: true, force: true });
   });
 
-  it("aggregates agent + shared root + managed + extra dirs, deduped and sorted", () => {
+  it("scans only the target agent's own workspace (not the default agent's), plus managed + extra dirs, deduped and sorted", () => {
     root = fs.mkdtempSync(path.join(os.tmpdir(), "friday-disc-"));
     const configRoot = path.join(root, "configdir");
     const extraDir = path.join(root, "extra");
 
-    // Shared root pool (default agent "main" workspace)
-    makeSkills(path.join(configRoot, "workspace", "skills"), ["alpha", "opencli"]);
-    // operator's own workspace — includes a duplicate (opencli) to prove dedup
+    // Default agent "main" workspace — its skills must NOT leak into other agents' catalogs.
+    makeSkills(path.join(configRoot, "workspace", "skills"), ["alpha"]);
+    // operator's own workspace — opencli also lives in the managed dir below, to prove
+    // workspace > installed precedence in dedup.
     makeSkills(path.join(configRoot, "workspace", "agents", "operator", "skills"), [
       "beta",
       "opencli",
     ]);
-    // managed dir: <configDir>/skills (sibling of workspace)
-    makeSkills(path.join(configRoot, "skills"), ["managed-one"]);
+    // managed dir: <configDir>/skills (sibling of the default workspace)
+    makeSkills(path.join(configRoot, "skills"), ["managed-one", "opencli"]);
     // config extraDirs
     makeSkills(extraDir, ["gamma"]);
 
@@ -69,12 +70,12 @@ describe("discoverAvailableSkills", () => {
     wire(configRoot, cfg);
 
     const result = discoverAvailableSkills(cfg, "operator");
-    expect(result.map((s) => s.id)).toEqual(["alpha", "beta", "gamma", "managed-one", "opencli"]);
+    // "alpha" is main-only → absent for operator (regression guard for the main-leak bug).
+    expect(result.map((s) => s.id)).toEqual(["beta", "gamma", "managed-one", "opencli"]);
     const bySource = Object.fromEntries(result.map((s) => [s.id, s.source]));
     expect(bySource).toEqual({
-      alpha: "workspace",
       beta: "workspace",
-      opencli: "workspace",
+      opencli: "workspace", // workspace wins over the managed-dir duplicate
       "managed-one": "installed",
       gamma: "extra",
     });

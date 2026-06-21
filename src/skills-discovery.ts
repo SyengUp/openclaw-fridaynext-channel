@@ -12,7 +12,9 @@
  * marker core's `loadSkillsFromDir` uses).
  *
  * Each discovered skill is tagged with a `source` category for the UI:
- *  - workspace : the agent's own + the shared default-agent workspace `skills/`
+ *  - workspace : the TARGET agent's own workspace `skills/` only — mirroring ControlUI,
+ *                which scans the single workspace resolved for that agent and never folds
+ *                in another agent's workspace (main is just another agent, not a shared pool)
  *  - installed : managed skills dir (`<configDir>/skills`, sibling of the workspace)
  *  - built-in  : bundled core skills (`<openclaw>/skills`)
  *  - extra     : skills from ENABLED extensions (`<openclaw>/dist/extensions/<ext>/skills`,
@@ -210,9 +212,8 @@ function resolveDefaultAgentId(cfg: Record<string, unknown> | undefined): string
 
 /**
  * Full set of skills `agentId` can load, sorted by id, each tagged with its source
- * category. Aggregates the agent's workspace, the shared root workspace, the managed
- * dir, config extra dirs, and bundled core/extension skills. Every source is optional
- * and failure-tolerant.
+ * category. Aggregates the TARGET agent's own workspace, the managed dir, config extra
+ * dirs, and bundled core/extension skills. Every source is optional and failure-tolerant.
  */
 export function discoverAvailableSkills(cfg: unknown, agentId: string): DiscoveredSkill[] {
   const c = cfg as Record<string, unknown> | undefined;
@@ -220,23 +221,26 @@ export function discoverAvailableSkills(cfg: unknown, agentId: string): Discover
   const sources: Array<{ dir: string; source: SkillSource }> = [];
 
   if (resolveWs) {
-    const defaultId = resolveDefaultAgentId(c);
-    const ids = agentId === defaultId ? [agentId] : [agentId, defaultId];
-    let defaultWs: string | undefined;
-    for (const id of ids) {
-      try {
-        const ws = resolveWs(cfg, id);
-        if (ws) {
-          sources.push({ dir: path.join(ws, "skills"), source: "workspace" });
-          if (id === defaultId) defaultWs = ws;
-        }
-      } catch {
-        // skip unresolvable workspace
-      }
+    // Workspace skills come ONLY from the target agent's own workspace — matching ControlUI's
+    // `resolveSkillsAgentWorkspace`→`buildWorkspaceSkillStatus(workspaceDir)`, which scans the
+    // single resolved workspace. Folding in the default agent's workspace (the old behavior)
+    // leaked main's skills into every other agent's catalog.
+    try {
+      const ws = resolveWs(cfg, agentId);
+      if (ws) sources.push({ dir: path.join(ws, "skills"), source: "workspace" });
+    } catch {
+      // skip unresolvable workspace
     }
-    // Managed skills dir: `<configDir>/skills`, the workspace's parent sibling.
-    if (defaultWs)
-      sources.push({ dir: path.join(path.dirname(defaultWs), "skills"), source: "installed" });
+    // Managed skills dir: `<configDir>/skills`. It is agent-independent; anchor it off the
+    // DEFAULT agent's workspace parent (the default workspace lives directly under configDir,
+    // whereas non-default workspaces may be nested under it).
+    try {
+      const defaultWs = resolveWs(cfg, resolveDefaultAgentId(c));
+      if (defaultWs)
+        sources.push({ dir: path.join(path.dirname(defaultWs), "skills"), source: "installed" });
+    } catch {
+      // skip unresolvable managed dir
+    }
   }
 
   const extraDirs = (
