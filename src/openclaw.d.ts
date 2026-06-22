@@ -93,6 +93,16 @@ declare module "openclaw/plugin-sdk/reply-dispatch-runtime" {
   export const dispatchReplyWithDispatcher: (...args: any[]) => any;
 }
 
+declare module "openclaw/plugin-sdk/plugin-runtime" {
+  /**
+   * Returns the request-local plugin gateway-request-scope (operator client/scopes,
+   * context) when called from within a plugin HTTP-route handler's async context.
+   */
+  export const getPluginRuntimeGatewayRequestScope: () =>
+    | { client?: { connect?: { scopes?: string[] } } }
+    | undefined;
+}
+
 declare module "openclaw/plugin-sdk/status-helpers" {
   export type ChannelAccountSnapshot = any;
 }

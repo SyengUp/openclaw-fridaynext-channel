@@ -48,6 +48,7 @@ import {
   resolveMediaUrl,
 } from "./files.js";
 import { runFridayDispatch } from "../../agent/dispatch-bridge.js";
+import { ensureSubagentSpawnScope } from "../../agent/operator-scope.js";
 import { saveInboundMediaBuffer } from "../../agent/media-bridge.js";
 import {
   contextTokensFromUsageRecord,
@@ -673,6 +674,15 @@ export async function handleMessages(req: IncomingMessage, res: ServerResponse):
       sseEmitter.untrackRun(runId);
     }
   };
+
+  // Elevate the route's (empty) operator scope so the dispatched agent can spawn
+  // subagents. Must run here, synchronously inside the route's AsyncLocalStorage
+  // context, so the live scope object the subagent spawn later reads carries
+  // operator.write. See agent/operator-scope.ts.
+  const elevatedScopes = ensureSubagentSpawnScope();
+  if (elevatedScopes.length > 0) {
+    log("SCOPE_ELEVATED", normalizedDeviceId, runId, elevatedScopes.join(","));
+  }
 
   runAgent().catch((err) => {
     log("RUN_ERROR", normalizedDeviceId, runId, String(err), "error");
