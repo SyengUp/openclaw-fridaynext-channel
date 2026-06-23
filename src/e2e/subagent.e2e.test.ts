@@ -295,6 +295,9 @@ describe("subagent via sessions_spawn tool", () => {
         label: "cr",
         parentRunId: mainRunId,
         depth: 1,
+        // A1: annotation now ships stable identity (childSessionKey) + lifecycle status.
+        childSessionKey: childKey,
+        status: "running",
       });
     });
 
@@ -524,6 +527,9 @@ describe("subagent via sessions_spawn tool", () => {
         label: "reviewer",
         parentRunId: mainRunId,
         depth: 1,
+        // A1: annotation now ships stable identity (childSessionKey) + lifecycle status.
+        childSessionKey: childKeyA,
+        status: "running",
       });
 
       // sessions_spawn for B (nested from A's tool call — but parentRunId should come from the context)

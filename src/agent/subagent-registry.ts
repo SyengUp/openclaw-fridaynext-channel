@@ -48,7 +48,9 @@ export function registerSessionKeyForRun(sessionKey: string, runId: string): voi
  */
 const ANNOUNCE_RUN_ID_RE = /^announce:v\d+:(agent:.+?):([^:]+)$/;
 
-function parseAnnounceRunId(runId: string): { childSessionKey: string; bareRunId: string } | null {
+export function parseAnnounceRunId(
+  runId: string,
+): { childSessionKey: string; bareRunId: string } | null {
   const m = runId.match(ANNOUNCE_RUN_ID_RE);
   if (!m) return null;
   return { childSessionKey: m[1] ?? "", bareRunId: m[2] ?? "" };

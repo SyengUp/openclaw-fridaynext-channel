@@ -9,6 +9,8 @@ import type { FridaySessionUsagePayload } from "./session-usage-snapshot.js";
 import { readSessionUsageSnapshotFromStore } from "./session-usage-store.js";
 import {
   lookupByRunId,
+  lookupByChildSessionKey,
+  parseAnnounceRunId,
   registerSessionKeyForRun,
   registerSpawnIntent,
   consumeSpawnIntent,
@@ -234,7 +236,13 @@ function completeAgentEventForward(params: {
   deviceIdRaw: string;
   outgoingData: Record<string, unknown>;
   isTerminalLifecycle: boolean;
-  subagentMeta?: { label?: string; parentRunId?: string; depth: number };
+  subagentMeta?: {
+    label?: string;
+    parentRunId?: string;
+    depth: number;
+    childSessionKey?: string;
+    status?: string;
+  };
 }): void {
   const { evt, sk, deviceIdRaw, outgoingData, isTerminalLifecycle, subagentMeta } = params;
 
@@ -367,6 +375,10 @@ export function forwardAgentEventRaw(evt: ForwardAgentEventArgs): void {
             phase: "spawning",
             childSessionKey: null,
             runId: null,
+            // A2: the spawn tool-call id is the only stable correlation key before the
+            // gateway assigns childSessionKey/runId — the app mints the placeholder window
+            // under it, then rekeys to childSessionKey on spawned.
+            toolCallId,
             label: intent.label ?? null,
             parentRunId: intent.parentRunId,
             depth: intent.depth,
@@ -408,6 +420,9 @@ export function forwardAgentEventRaw(evt: ForwardAgentEventArgs): void {
             phase: "spawned",
             runId: compoundRunId,
             childSessionKey: entry.childSessionKey,
+            // A2: echo the spawn toolCallId so the app deterministically links this
+            // spawned event to the placeholder window it minted at spawning time.
+            toolCallId: toolCallId || null,
             label: entry.label ?? null,
             parentRunId: entry.parentRunId ?? null,
             depth: entry.depth,
@@ -415,6 +430,33 @@ export function forwardAgentEventRaw(evt: ForwardAgentEventArgs): void {
           },
         },
         entry.deviceId,
+      );
+    }
+  }
+
+  // Phase 3 (A3): announce-summary delivery to the parent. OpenClaw emits the parent's
+  // `lifecycle.start` under the announce compound runId once a subagent's result is being
+  // folded back in. We parse the authoritative childSessionKey here (the registry already
+  // knows how) and broadcast an explicit `dismissed` subagent event, so the app removes the
+  // settled window by childSessionKey instead of re-parsing the announce runId itself.
+  if (evt.stream === "lifecycle" && evt.data.phase === "start") {
+    const announced = parseAnnounceRunId(evt.runId);
+    if (announced) {
+      const entry =
+        lookupByChildSessionKey(announced.childSessionKey) ?? lookupByRunId(evt.runId);
+      sseEmitter.broadcast(
+        {
+          type: "subagent",
+          data: {
+            phase: "dismissed",
+            childSessionKey: entry?.childSessionKey ?? announced.childSessionKey,
+            runId: entry?.runId ?? announced.bareRunId ?? null,
+            parentRunId: entry?.parentRunId ?? null,
+            depth: entry?.depth ?? 1,
+            deviceId: deviceIdRaw,
+          },
+        },
+        deviceIdRaw,
       );
     }
   }
@@ -429,6 +471,11 @@ export function forwardAgentEventRaw(evt: ForwardAgentEventArgs): void {
         label: subagentEntry.label,
         parentRunId: subagentEntry.parentRunId,
         depth: subagentEntry.depth,
+        // A1: ship the authoritative childSessionKey + lifecycle status on every
+        // subagent agent-delta so the app routes/identifies by stable keys instead of
+        // guessing from runId.
+        childSessionKey: subagentEntry.childSessionKey,
+        status: subagentEntry.status,
       }
     : undefined;
 
