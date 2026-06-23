@@ -17,12 +17,19 @@
  *                in another agent's workspace (main is just another agent, not a shared pool)
  *  - installed : managed skills dir (`<configDir>/skills`, sibling of the workspace)
  *  - built-in  : bundled core skills (`<openclaw>/skills`)
- *  - extra     : skills from ENABLED extensions (`<openclaw>/dist/extensions/<ext>/skills`,
- *                gated by `plugins.allow`/`entries.enabled` like ControlUI) + config
- *                `skills.load.extraDirs` — mirrors ControlUI's "EXTRA" bucket
- *                (core tags extension skills `source: "extension"`).
+ *  - extra     : everything ControlUI buckets as "EXTRA" —
+ *                  • `<configDir>/plugin-skills/` : OpenClaw's symlink dir where every ACTIVATED
+ *                    plugin's skills land, incl. third-party plugins (e.g. the miloco-* set)
+ *                  • `<workspace>/.agents/skills`  : project-level agents skills (target agent)
+ *                  • `~/.agents/skills`            : personal agents skills
+ *                  • config `skills.load.extraDirs`
+ *                  • ENABLED bundled extensions (`<openclaw>/dist/extensions/<ext>/skills`,
+ *                    gated by `plugins.allow`/`entries.enabled`) — now mostly redundant with
+ *                    plugin-skills, kept as a belt-and-suspenders fallback
  *
  * Dedup is by skill id, first source wins (workspace > installed > extra > built-in).
+ * The walk FOLLOWS symlinked directories — plugin-skills entries are symlinks, so without
+ * this the entire plugin-provided set is invisible.
  *
  * A skill's id is the `name:` field in its `SKILL.md` frontmatter (falling back to
  * the containing dir name) — NOT the dir name itself, which often differs (e.g. the
@@ -37,6 +44,7 @@
  */
 
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { createRequire } from "node:module";
 import { getFridayAgentForwardRuntime } from "./agent-forward-runtime.js";
@@ -107,9 +115,21 @@ function collectSkills(
     return; // a skill is a leaf — don't treat its internals as nested skills
   }
   for (const e of entries) {
-    if (e.isDirectory() && !e.name.startsWith(".") && !IGNORED_WALK_DIRS.has(e.name)) {
-      collectSkills(path.join(root, e.name), source, out, depth + 1);
+    if (e.name.startsWith(".") || IGNORED_WALK_DIRS.has(e.name)) continue;
+    const full = path.join(root, e.name);
+    // Follow symlinked dirs: `readdirSync(withFileTypes)` reports a symlink as
+    // `isSymbolicLink()` (never `isDirectory()`), and OpenClaw publishes plugin
+    // skills as symlinks under `<configDir>/plugin-skills/` — so without this the
+    // entire plugin-skills (e.g. the miloco-* set) source would be silently skipped.
+    let isDir = e.isDirectory();
+    if (!isDir && e.isSymbolicLink()) {
+      try {
+        isDir = fs.statSync(full).isDirectory();
+      } catch {
+        isDir = false; // broken/unreadable symlink
+      }
     }
+    if (isDir) collectSkills(full, source, out, depth + 1);
   }
 }
 
@@ -227,20 +247,40 @@ export function discoverAvailableSkills(cfg: unknown, agentId: string): Discover
     // leaked main's skills into every other agent's catalog.
     try {
       const ws = resolveWs(cfg, agentId);
-      if (ws) sources.push({ dir: path.join(ws, "skills"), source: "workspace" });
+      if (ws) {
+        sources.push({ dir: path.join(ws, "skills"), source: "workspace" });
+        // Project-level agents skills: `<workspace>/.agents/skills` (core source
+        // `agents-skills-project`), scoped to this same target agent's workspace.
+        sources.push({ dir: path.join(ws, ".agents", "skills"), source: "extra" });
+      }
     } catch {
       // skip unresolvable workspace
     }
-    // Managed skills dir: `<configDir>/skills`. It is agent-independent; anchor it off the
-    // DEFAULT agent's workspace parent (the default workspace lives directly under configDir,
-    // whereas non-default workspaces may be nested under it).
+    // Managed (`<configDir>/skills`) + plugin-skills (`<configDir>/plugin-skills`) dirs. Both are
+    // agent-independent; anchor off the DEFAULT agent's workspace parent (the default workspace
+    // lives directly under configDir, whereas non-default workspaces may be nested under it).
     try {
       const defaultWs = resolveWs(cfg, resolveDefaultAgentId(c));
-      if (defaultWs)
-        sources.push({ dir: path.join(path.dirname(defaultWs), "skills"), source: "installed" });
+      if (defaultWs) {
+        const configDir = path.dirname(defaultWs);
+        sources.push({ dir: path.join(configDir, "skills"), source: "installed" });
+        // OpenClaw symlinks every ACTIVATED plugin's skills (incl. third-party plugins under
+        // `<configDir>/extensions/*`, e.g. the miloco-* set) into `<configDir>/plugin-skills/`
+        // and loads it as an "extra" source. The old dist/extensions scan only caught BUNDLED
+        // extensions, so plugin-provided skills were missing entirely.
+        sources.push({ dir: path.join(configDir, "plugin-skills"), source: "extra" });
+      }
     } catch {
       // skip unresolvable managed dir
     }
+  }
+
+  // Personal agents skills: `~/.agents/skills` (core source `agents-skills-personal`).
+  try {
+    const home = os.homedir();
+    if (home) sources.push({ dir: path.join(home, ".agents", "skills"), source: "extra" });
+  } catch {
+    // home dir unresolvable on this platform — skip
   }
 
   const extraDirs = (

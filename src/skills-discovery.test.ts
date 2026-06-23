@@ -1,4 +1,4 @@
-import { describe, it, expect, afterEach } from "vitest";
+import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -22,6 +22,8 @@ function makeSkills(parent: string, ids: string[]): void {
 
 describe("discoverAvailableSkills", () => {
   let root: string;
+  let emptyHome: string;
+  let savedHome: string | undefined;
 
   function wire(configRoot: string, cfg: unknown): void {
     setFridayAgentForwardRuntime({
@@ -39,10 +41,21 @@ describe("discoverAvailableSkills", () => {
     } as never);
   }
 
+  beforeEach(() => {
+    // Isolate `~/.agents/skills` (a real discovery source) from the dev machine's
+    // home so exact-match assertions don't pick up the operator's actual skills.
+    savedHome = process.env.HOME;
+    emptyHome = fs.mkdtempSync(path.join(os.tmpdir(), "friday-home-"));
+    process.env.HOME = emptyHome;
+  });
+
   afterEach(() => {
+    if (savedHome === undefined) delete process.env.HOME;
+    else process.env.HOME = savedHome;
     resetFridayAgentForwardRuntimeForTest();
     resetOpenClawRootCacheForTest();
     if (root) fs.rmSync(root, { recursive: true, force: true });
+    if (emptyHome) fs.rmSync(emptyHome, { recursive: true, force: true });
   });
 
   it("scans only the target agent's own workspace (not the default agent's), plus managed + extra dirs, deduped and sorted", () => {
@@ -116,6 +129,42 @@ describe("discoverAvailableSkills", () => {
     const result = discoverAvailableSkills(cfg, "main");
     expect(result.map((s) => s.id)).toEqual(["my-coffee", "self-improvement"]);
     expect(result.find((s) => s.id === "self-improvement")?.description).toBe("x");
+  });
+
+  it("discovers plugin-skills (symlinks), plus project + personal agents skills as 'extra'", () => {
+    root = fs.mkdtempSync(path.join(os.tmpdir(), "friday-disc-"));
+    const configRoot = path.join(root, "configdir");
+    const operatorWs = path.join(configRoot, "workspace", "agents", "operator");
+
+    // target agent's own workspace skills
+    makeSkills(path.join(operatorWs, "skills"), ["own-skill"]);
+    // project-level agents skills: <workspace>/.agents/skills
+    makeSkills(path.join(operatorWs, ".agents", "skills"), ["project-skill"]);
+    // personal agents skills: <home>/.agents/skills  (HOME isolated in beforeEach)
+    makeSkills(path.join(emptyHome, ".agents", "skills"), ["personal-skill"]);
+
+    // plugin-skills: real plugin skill dirs SYMLINKED into <configDir>/plugin-skills/,
+    // exactly how OpenClaw publishes third-party plugin skills (e.g. the miloco-* set).
+    const pluginPkg = path.join(root, "miloco-openclaw-plugin", "skills");
+    makeSkills(pluginPkg, ["miloco-devices", "miloco-notify"]);
+    const pluginSkillsDir = path.join(configRoot, "plugin-skills");
+    fs.mkdirSync(pluginSkillsDir, { recursive: true });
+    for (const id of ["miloco-devices", "miloco-notify"]) {
+      fs.symlinkSync(path.join(pluginPkg, id), path.join(pluginSkillsDir, id), "dir");
+    }
+
+    const cfg = { agents: { list: [{ id: "main", default: true }, { id: "operator" }] } };
+    wire(configRoot, cfg);
+
+    const result = discoverAvailableSkills(cfg, "operator");
+    const bySource = Object.fromEntries(result.map((s) => [s.id, s.source]));
+    expect(bySource).toEqual({
+      "own-skill": "workspace",
+      "project-skill": "extra",
+      "personal-skill": "extra",
+      "miloco-devices": "extra", // followed through the symlink — the miloco regression
+      "miloco-notify": "extra",
+    });
   });
 
   it("returns [] without throwing when nothing is resolvable", () => {
