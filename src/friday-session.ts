@@ -373,6 +373,31 @@ export function forwardAgentEventRaw(evt: ForwardAgentEventArgs): void {
     codexRunIds.add(evt.runId);
   }
 
+  // Codex app-server reasoning: newer OpenClaw cores stopped invoking the dispatch
+  // `onReasoningStream` callback (the A2 path in messages.ts) and instead stream the
+  // reasoning summary on the agent-event bus as `stream:"item" kind:"preamble"` with a
+  // cumulative `progressText` (source "codex-app-server"). The Friday app only renders
+  // `stream:"thinking"`, so translate it here — synthesize a thinking event reusing the
+  // cumulative→delta rewrite below. The raw preamble item is still forwarded but the app
+  // ignores unknown item kinds. (The onReasoningStream callback stays as a harmless
+  // fallback for cores that still fire it.)
+  if (
+    evt.stream === "item" &&
+    evt.data.kind === "preamble" &&
+    evt.data.source === "codex-app-server"
+  ) {
+    codexRunIds.add(evt.runId);
+    const reasoningText = typeof evt.data.progressText === "string" ? evt.data.progressText : "";
+    if (reasoningText) {
+      forwardAgentEventRaw({
+        runId: evt.runId,
+        stream: "thinking",
+        data: { text: reasoningText },
+        sessionKey: evt.sessionKey ?? sk,
+      });
+    }
+  }
+
   // Register sessionKey → runId so we can resolve parentRunId
   if (sk && evt.stream === "lifecycle" && evt.data.phase === "start") {
     registerSessionKeyForRun(sk, evt.runId);
@@ -469,8 +494,7 @@ export function forwardAgentEventRaw(evt: ForwardAgentEventArgs): void {
   if (evt.stream === "lifecycle" && evt.data.phase === "start") {
     const announced = parseAnnounceRunId(evt.runId);
     if (announced) {
-      const entry =
-        lookupByChildSessionKey(announced.childSessionKey) ?? lookupByRunId(evt.runId);
+      const entry = lookupByChildSessionKey(announced.childSessionKey) ?? lookupByRunId(evt.runId);
       sseEmitter.broadcast(
         {
           type: "subagent",

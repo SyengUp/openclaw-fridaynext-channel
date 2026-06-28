@@ -139,6 +139,56 @@ describe("forwardAgentEventRaw (thinking delta rewrite)", () => {
     expect(third.delta).toBe(t1);
   });
 
+  it("translates a Codex preamble item (progressText) into streamed thinking deltas", () => {
+    // Newer OpenClaw cores stopped invoking dispatch onReasoningStream for Codex and instead
+    // stream the reasoning summary on the agent-event bus as item/preamble with cumulative
+    // progressText. We translate it back into stream:"thinking" so the app renders it.
+    forwardAgentEventRaw({
+      runId,
+      seq: 1,
+      stream: "item",
+      sessionKey,
+      data: { kind: "preamble", source: "codex-app-server", phase: "update", progressText: "先把" },
+    });
+    forwardAgentEventRaw({
+      runId,
+      seq: 2,
+      stream: "item",
+      sessionKey,
+      data: {
+        kind: "preamble",
+        source: "codex-app-server",
+        phase: "update",
+        progressText: "先把标准",
+      },
+    });
+
+    const thinking = (sseEmitter.broadcastToRun as ReturnType<typeof vi.fn>).mock.calls
+      .map((c) => c[1].data)
+      .filter((d: { stream?: string }) => d.stream === "thinking");
+    expect(thinking).toHaveLength(2);
+    expect(thinking[0].data.text).toBe("先把");
+    expect(thinking[0].data.delta).toBe("先把");
+    expect(thinking[0].data.reasoningPrefixChars).toBe(0);
+    expect(thinking[1].data.text).toBe("先把标准");
+    expect(thinking[1].data.delta).toBe("标准");
+    expect(thinking[1].data.reasoningPrefixChars).toBe(2);
+  });
+
+  it("does not translate preamble items from a non-Codex source", () => {
+    forwardAgentEventRaw({
+      runId,
+      seq: 1,
+      stream: "item",
+      sessionKey,
+      data: { kind: "preamble", source: "something-else", progressText: "x" },
+    });
+    const thinking = (sseEmitter.broadcastToRun as ReturnType<typeof vi.fn>).mock.calls
+      .map((c) => c[1].data)
+      .filter((d: { stream?: string }) => d.stream === "thinking");
+    expect(thinking).toHaveLength(0);
+  });
+
   it("merges run metadata into lifecycle.end (model, tokens, context usage)", () => {
     forwardAgentEventRaw({
       runId,
