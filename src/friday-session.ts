@@ -34,6 +34,27 @@ export function resetThinkingStreamAccumStateForTest(): void {
 }
 
 /**
+ * Runs backed by the OpenClaw Codex app-server backend (model api `openai-chatgpt-responses`).
+ * They emit their activity under a `codex_app_server.*` stream namespace and — unlike the embedded
+ * runner — do NOT put reasoning text on the agent-event bus (`stream: "thinking"`); that text only
+ * arrives via the dispatch `onReasoningStream` callback. Likewise exec stdout never reaches the
+ * `command_output` stream. We mark a run as Codex the first time we see any `codex_app_server.*`
+ * frame so the message handler / tool hooks know to synthesize the missing `thinking` /
+ * `command_output` events for it (and ONLY for it — embedded runs already get both via the bus).
+ */
+const codexRunIds = new Set<string>();
+
+/** True once a `codex_app_server.*` frame has been seen for this run. */
+export function isCodexRun(runId: string): boolean {
+  return codexRunIds.has(runId);
+}
+
+/** Vitest-only */
+export function resetCodexRunTrackingForTest(): void {
+  codexRunIds.clear();
+}
+
+/**
  * OpenClaw `runId` → device UUID (uppercase).
  * When `lifecycle.end` / `error` is emitted, the gateway may call `clearAgentRunContext` before this extension's
  * `onAgentEvent` runs; combined with stripped `sessionKey` for non–Control-UI-visible runs, `forwardAgentEventRaw`
@@ -346,6 +367,12 @@ export function forwardAgentEventRaw(evt: ForwardAgentEventArgs): void {
 
   openClawRunIdToDeviceId.set(evt.runId, deviceIdRaw.toUpperCase());
 
+  // Flag Codex app-server runs so the message handler / tool hooks synthesize the `thinking` /
+  // `command_output` events that this backend never emits on the bus (see `isCodexRun`).
+  if (typeof evt.stream === "string" && evt.stream.startsWith("codex_app_server")) {
+    codexRunIds.add(evt.runId);
+  }
+
   // Register sessionKey → runId so we can resolve parentRunId
   if (sk && evt.stream === "lifecycle" && evt.data.phase === "start") {
     registerSessionKeyForRun(sk, evt.runId);
@@ -500,6 +527,7 @@ export function forwardAgentEventRaw(evt: ForwardAgentEventArgs): void {
     }
     if (phase === "end" || phase === "error") {
       lastThinkingTextByRun.delete(evt.runId);
+      codexRunIds.delete(evt.runId);
     }
   }
 

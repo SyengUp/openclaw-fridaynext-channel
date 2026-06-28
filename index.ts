@@ -15,6 +15,7 @@ import { sseEmitter } from "./src/sse/emitter.js";
 import {
   forwardAgentEventRaw,
   getLastRegisteredFridayDeviceId,
+  isCodexRun,
   resolveFridayDeviceIdForSessionKey,
 } from "./src/friday-session.js";
 import { setFridayAgentForwardRuntime } from "./src/agent-forward-runtime.js";
@@ -22,6 +23,7 @@ import { setUpgradeRuntime } from "./src/upgrade-runtime.js";
 import { getOpenClawAgentRunContext } from "./src/agent-run-context-bridge.js";
 import { accumulateRunUsage } from "./src/agent/run-usage-accumulator.js";
 import { createFridayNextLogger } from "./src/logging.js";
+import { ensureCodexReasoningSummary } from "./src/codex-reasoning-config.js";
 
 const hookLogger = createFridayNextLogger("hook");
 
@@ -61,6 +63,38 @@ function deviceIdFromToolContext(ctx: PluginHookToolContext): string | null {
 
 function isFridaySessionKey(sk: string): boolean {
   return /^friday-next-/i.test(sk) || /^agent:main:friday-next-/i.test(sk);
+}
+
+/** Shell/exec-style tools whose stdout the app renders as a `command_output` row (A3). */
+const COMMAND_TOOL_NAMES = new Set([
+  "exec",
+  "bash",
+  "shell",
+  "local_shell",
+  "command",
+  "process",
+  "run_terminal_cmd",
+]);
+
+function isCommandTool(toolName: unknown): boolean {
+  return typeof toolName === "string" && COMMAND_TOOL_NAMES.has(toolName.trim().toLowerCase());
+}
+
+/** Best-effort flatten of an after-hook tool result into the stdout string the app expects. */
+function coerceCommandOutput(result: unknown): string {
+  if (typeof result === "string") return result;
+  if (result && typeof result === "object") {
+    const r = result as Record<string, unknown>;
+    for (const key of ["output", "stdout", "text"]) {
+      if (typeof r[key] === "string") return r[key] as string;
+    }
+    try {
+      return JSON.stringify(result);
+    } catch {
+      return "";
+    }
+  }
+  return result == null ? "" : String(result);
 }
 
 function shouldForwardToolEventToFriday(ctx: PluginHookToolContext): boolean {
@@ -133,6 +167,10 @@ export default defineChannelPluginEntry({
       return;
     }
     fridayNextToolHooksRegistered = true;
+
+    // Make Codex (ChatGPT/OAuth) models emit reasoning summary text so the app can stream
+    // "thinking". OpenClaw never sets this; we assert it on the plugin side. Best-effort.
+    ensureCodexReasoningSummary((msg) => hookLogger.info(msg));
 
     api.on("subagent_delivery_target", (event: any) => {
       if (!event.expectsCompletionMessage) return;
@@ -219,6 +257,29 @@ export default defineChannelPluginEntry({
           ts: Date.now(),
         },
       });
+
+      // A3: the Codex app-server backend never puts exec stdout on the `command_output` stream
+      // (its tool result carries only exitCode/duration), so the app shows the command row with no
+      // output. The after-hook DOES carry the full stdout — synthesize a `command_output` end event
+      // keyed by toolCallId (== the forwarded `item kind:command` itemId) so the app attaches it.
+      // Codex-only: embedded runs already stream `command_output` on the bus.
+      if (isCodexRun(runId) && event.toolCallId && isCommandTool(event.toolName)) {
+        const output = coerceCommandOutput(event.result);
+        if (output) {
+          forwardAgentEventRaw({
+            runId,
+            stream: "command_output",
+            data: {
+              itemId: event.toolCallId,
+              phase: "end",
+              output,
+              status: event.error ? "failed" : "completed",
+              durationMs: event.durationMs ?? null,
+            },
+            sessionKey: ctx.sessionKey,
+          });
+        }
+      }
     });
   },
 });

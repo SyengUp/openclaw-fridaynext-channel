@@ -37,7 +37,11 @@ import {
 import { sseEmitter } from "../../sse/emitter.js";
 import { extractBearerToken } from "../middleware/auth.js";
 import { readJsonBody } from "../middleware/body.js";
-import { registerFridaySessionDeviceMapping } from "../../friday-session.js";
+import {
+  forwardAgentEventRaw,
+  isCodexRun,
+  registerFridaySessionDeviceMapping,
+} from "../../friday-session.js";
 import { touchFridayInbound } from "../../friday-inbound-stats.js";
 import {
   fridayAttachmentLookupKey,
@@ -631,6 +635,12 @@ export async function handleMessages(req: IncomingMessage, res: ServerResponse):
           runId,
           suppressTyping: true,
           disableBlockStreaming: true,
+          // A1: feed the chosen thinking level into the run as a one-shot override so the model
+          // request asks for a reasoning summary. The session-stored `thinkingLevel` alone is NOT
+          // honored by the reply dispatch; `thinkingLevelOverride` has top priority in OpenClaw's
+          // resolution chain (get-reply-directives). Required for Codex (openai-chatgpt-responses)
+          // to emit any reasoning at all.
+          ...(thinkingLevel ? { thinkingLevelOverride: thinkingLevel } : {}),
           onModelSelected: (sel: any) => {
             const name = typeof sel.model === "string" ? sel.model.trim() : "";
             if (name) {
@@ -646,6 +656,18 @@ export async function handleMessages(req: IncomingMessage, res: ServerResponse):
                 : undefined;
             const text = typeof rawText === "string" ? rawText : "";
             log("REASONING_STREAM", normalizedDeviceId, runId, `textLen=${text.length}`);
+            // A2: the embedded runner already emits `stream: "thinking"` on the agent-event bus, so
+            // forwarding here would double it. The Codex app-server backend does NOT — reasoning text
+            // only arrives via this callback (cumulative snapshot). Forward it as a thinking event
+            // (reusing forwardAgentEventRaw's cumulative→delta rewrite) ONLY for Codex runs.
+            if (text && isCodexRun(runId)) {
+              forwardAgentEventRaw({
+                runId,
+                stream: "thinking",
+                data: { text },
+                sessionKey: baseSessionKey,
+              });
+            }
           },
           onReasoningEnd: async () => {
             log("REASONING_STREAM_END", normalizedDeviceId, runId);

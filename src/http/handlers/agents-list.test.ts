@@ -71,6 +71,34 @@ describe("handleAgentsList", () => {
     expect(body.agents).toEqual([{ id: "main", isDefault: true }]);
   });
 
+  it("resolves the implicit main name from IDENTITY.md when no agents.list exists", async () => {
+    const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "friday-identity-main-"));
+    fs.writeFileSync(
+      path.join(workspace, "IDENTITY.md"),
+      "# IDENTITY.md\n\n- **Name:** F.R.I.D.A.Y\n- **Emoji:** 🌿\n",
+    );
+    try {
+      setFridayAgentForwardRuntime({
+        runtime: {
+          agent: {
+            session: { resolveStorePath: () => "", loadSessionStore: () => ({}) },
+            resolveAgentWorkspaceDir: () => workspace,
+          },
+          config: { current: () => ({ agents: { defaults: {} } }) },
+        },
+      } as any);
+
+      const res = new MockRes();
+      await handleAgentsList(makeReq(AUTH), res as any);
+
+      const body = JSON.parse(res.body);
+      expect(body.defaultAgentId).toBe("main");
+      expect(body.agents).toEqual([{ id: "main", name: "F.R.I.D.A.Y", isDefault: true }]);
+    } finally {
+      fs.rmSync(workspace, { recursive: true, force: true });
+    }
+  });
+
   it("lists configured agents with normalized ids and resolved fields", async () => {
     setConfig({
       agents: {

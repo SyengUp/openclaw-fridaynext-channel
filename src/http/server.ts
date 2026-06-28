@@ -13,6 +13,7 @@ import { handleFilesDownload } from "./handlers/files-download.js";
 import { handleCancel } from "./handlers/cancel.js";
 import { handleDeviceApprove } from "./handlers/device-approve.js";
 import { handleNodesApprove } from "./handlers/nodes-approve.js";
+import { handleApprovalDecision } from "./handlers/approvals.js";
 import { handleSessionsSettings } from "./handlers/sessions-settings.js";
 import { handleModelsList } from "./handlers/models-list.js";
 import { handleAgentsList } from "./handlers/agents-list.js";
@@ -74,6 +75,12 @@ async function handleFridayNextRoute(req: IncomingMessage, res: ServerResponse):
 
   if (req.method === "POST" && pathname === "/friday-next/nodes-approve") {
     return await handleNodesApprove(req, res);
+  }
+
+  // Route: POST /friday-next/approvals/{approvalId} (submit exec/plugin approval decision)
+  if (req.method === "POST" && pathname.startsWith("/friday-next/approvals/")) {
+    const approvalId = decodeURIComponent(pathname.slice("/friday-next/approvals/".length));
+    return await handleApprovalDecision(req, res, approvalId);
   }
 
   if (

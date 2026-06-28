@@ -106,8 +106,12 @@ function resolveConfiguredAgents(): ResolvedAgents {
   const list = agents?.list as Array<Record<string, unknown>> | undefined;
 
   if (!Array.isArray(list) || list.length === 0) {
+    // Implicit `main` agent (no `agents.list`): config carries no name, so fall
+    // back to the workspace IDENTITY.md `Name` — the same source ControlUI and
+    // the list branch below use — instead of letting the app show the raw id.
+    const name = readWorkspaceIdentityName(rt, cfg, DEFAULT_AGENT_ID);
     return {
-      agents: [{ id: DEFAULT_AGENT_ID, isDefault: true }],
+      agents: [{ id: DEFAULT_AGENT_ID, isDefault: true, ...(name ? { name } : {}) }],
       defaultAgentId: DEFAULT_AGENT_ID,
     };
   }

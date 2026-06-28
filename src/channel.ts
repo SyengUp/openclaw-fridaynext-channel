@@ -10,6 +10,9 @@ import os from "node:os";
 import path from "node:path";
 import { createChatChannelPlugin } from "openclaw/plugin-sdk/core";
 import { waitUntilAbort } from "openclaw/plugin-sdk/channel-lifecycle";
+import { registerChannelRuntimeContext } from "openclaw/plugin-sdk/channel-runtime-context";
+import { CHANNEL_APPROVAL_NATIVE_RUNTIME_CONTEXT_CAPABILITY } from "openclaw/plugin-sdk/approval-handler-adapter-runtime";
+import type { ChannelGatewayContext } from "openclaw/plugin-sdk/channel-contract";
 import { createFridayNextLogger } from "./logging.js";
 import type { ChannelAccountSnapshot } from "openclaw/plugin-sdk/status-helpers";
 import { saveMediaBuffer } from "openclaw/plugin-sdk/media-store";
@@ -24,6 +27,7 @@ import {
 } from "./friday-session.js";
 import { getRunRoute } from "./run-metadata.js";
 import { getLastFridayInboundAt } from "./friday-inbound-stats.js";
+import { fridayApprovalCapability } from "./approval/friday-approval-capability.js";
 
 const logger = createFridayNextLogger("channel");
 const CHANNEL_ID = "friday-next" as const;
@@ -113,7 +117,22 @@ const fridayLifecycle = {
  * (reload/shutdown) so the channel stays `running:true` and continuously deliverable.
  */
 const fridayGateway = {
-  startAccount: async (ctx: { abortSignal: AbortSignal }): Promise<void> => {
+  startAccount: async (ctx: ChannelGatewayContext): Promise<void> => {
+    // Activate exec/plugin approval delivery to the app. The gateway's approval-handler bootstrap
+    // only wires up our `approvalCapability` once the channel registers an "approval.native" runtime
+    // context (the registration event is the gate — without it approvals silently skip friday-next
+    // and only reach ControlUI). friday-next's nativeRuntime needs no per-account state — it resolves
+    // the target device from each request's sessionKey via global singletons — so context is empty.
+    if (ctx.channelRuntime) {
+      registerChannelRuntimeContext({
+        channelRuntime: ctx.channelRuntime,
+        channelId: CHANNEL_ID,
+        accountId: ctx.accountId,
+        capability: CHANNEL_APPROVAL_NATIVE_RUNTIME_CONTEXT_CAPABILITY,
+        context: {},
+        abortSignal: ctx.abortSignal,
+      });
+    }
     await waitUntilAbort(ctx.abortSignal);
   },
 };
@@ -342,3 +361,8 @@ export const fridayNextChannelPlugin = createChatChannelPlugin({
     },
   },
 });
+
+// Attach exec/plugin approval delivery to the app. `createChatChannelPlugin` has no config slot for
+// it, so it's set on the returned plugin object; setting it auto-registers the native approval
+// handler via the gateway's approval bootstrap. Additive with ControlUI (no forwarding suppressor).
+fridayNextChannelPlugin.approvalCapability = fridayApprovalCapability;

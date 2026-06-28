@@ -11,7 +11,8 @@ export type SseEventType =
   | "tool-hook"
   | "outbound"
   | "ping"
-  | "subagent";
+  | "subagent"
+  | "approval";
 
 export interface SseEvent {
   type: SseEventType;
