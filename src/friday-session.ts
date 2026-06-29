@@ -398,6 +398,18 @@ export function forwardAgentEventRaw(evt: ForwardAgentEventArgs): void {
     }
   }
 
+  // Codex app-server projects every tool/command call onto BOTH the standard `tool` stream
+  // (carrying args + the real result) AND a redundant `item` event (kind:"tool"/"command"),
+  // and core flags that item `suppressChannelProgress: true` ("do not surface in channel
+  // progress"). Forwarding the suppressed item anyway double-renders every non-exec tool in
+  // the app — the `tool`-stream row plus a second `item kind:tool` row, with the result landing
+  // only on the first. Honor the flag and drop suppressed items; the `tool` stream (and, for
+  // exec, the synthesized `command_output`) already carries everything the app renders. Codex
+  // reasoning items (preamble/analysis) are NOT suppressed, so this never touches thinking.
+  if (evt.stream === "item" && evt.data.suppressChannelProgress === true) {
+    return;
+  }
+
   // Register sessionKey → runId so we can resolve parentRunId
   if (sk && evt.stream === "lifecycle" && evt.data.phase === "start") {
     registerSessionKeyForRun(sk, evt.runId);

@@ -175,6 +175,37 @@ describe("forwardAgentEventRaw (thinking delta rewrite)", () => {
     expect(thinking[1].data.reasoningPrefixChars).toBe(2);
   });
 
+  it("drops item events flagged suppressChannelProgress (Codex tool/command duplicates)", () => {
+    // Codex app-server projects every tool/command onto both the `tool` stream and a redundant
+    // `item` event flagged suppressChannelProgress:true. Forwarding the item double-renders the
+    // tool in the app. We honor the flag and drop it.
+    forwardAgentEventRaw({
+      runId,
+      seq: 1,
+      stream: "item",
+      sessionKey,
+      data: {
+        itemId: "call_abc",
+        kind: "tool",
+        phase: "start",
+        name: "web_search",
+        suppressChannelProgress: true,
+      },
+    });
+    expect(sseEmitter.broadcastToRun).not.toHaveBeenCalled();
+  });
+
+  it("forwards item events that are not suppressed (e.g. reasoning analysis markers)", () => {
+    forwardAgentEventRaw({
+      runId,
+      seq: 1,
+      stream: "item",
+      sessionKey,
+      data: { itemId: "rs_1", kind: "analysis", phase: "start", title: "Reasoning" },
+    });
+    expect(sseEmitter.broadcastToRun).toHaveBeenCalledTimes(1);
+  });
+
   it("does not translate preamble items from a non-Codex source", () => {
     forwardAgentEventRaw({
       runId,
