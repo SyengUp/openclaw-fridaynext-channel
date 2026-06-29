@@ -195,6 +195,27 @@ describe("forwardAgentEventRaw (thinking delta rewrite)", () => {
     expect(sseEmitter.broadcastToRun).not.toHaveBeenCalled();
   });
 
+  it("KEEPS suppressed item kind:command (exec row the command_output stdout attaches to)", () => {
+    // The `tool`-stream exec result is just {exitCode,duration}; the real stdout arrives on the
+    // synthesized `command_output` end event, which the app attaches to the command-terminal row
+    // bootstrapped from THIS `item kind:command`. Dropping it (as the old broad filter did) left
+    // exec tools with a command line and no output in the trace.
+    forwardAgentEventRaw({
+      runId,
+      seq: 1,
+      stream: "item",
+      sessionKey,
+      data: {
+        itemId: "call_exec1",
+        kind: "command",
+        phase: "start",
+        name: "bash",
+        suppressChannelProgress: true,
+      },
+    });
+    expect(sseEmitter.broadcastToRun).toHaveBeenCalledTimes(1);
+  });
+
   it("forwards item events that are not suppressed (e.g. reasoning analysis markers)", () => {
     forwardAgentEventRaw({
       runId,

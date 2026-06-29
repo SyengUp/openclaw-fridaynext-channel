@@ -401,12 +401,20 @@ export function forwardAgentEventRaw(evt: ForwardAgentEventArgs): void {
   // Codex app-server projects every tool/command call onto BOTH the standard `tool` stream
   // (carrying args + the real result) AND a redundant `item` event (kind:"tool"/"command"),
   // and core flags that item `suppressChannelProgress: true` ("do not surface in channel
-  // progress"). Forwarding the suppressed item anyway double-renders every non-exec tool in
-  // the app — the `tool`-stream row plus a second `item kind:tool` row, with the result landing
-  // only on the first. Honor the flag and drop suppressed items; the `tool` stream (and, for
-  // exec, the synthesized `command_output`) already carries everything the app renders. Codex
-  // reasoning items (preamble/analysis) are NOT suppressed, so this never touches thinking.
-  if (evt.stream === "item" && evt.data.suppressChannelProgress === true) {
+  // progress"). Forwarding the suppressed *tool* item double-renders every non-exec tool in the
+  // app — the `tool`-stream row plus a second `item kind:tool` row, with the result landing only
+  // on the first. So drop ONLY suppressed `kind:"tool"` items.
+  //
+  // BUT keep suppressed `kind:"command"`/`"process"` items: the `tool` stream's exec result is
+  // just {exitCode,duration} (no stdout), and the app bootstraps its command-terminal row from
+  // the `item kind:command` event — that row is what the synthesized `command_output` end event
+  // then attaches the real stdout to. Dropping it left exec tools with a command line and no
+  // output in the trace. (Reasoning items preamble/analysis are never suppressed.)
+  if (
+    evt.stream === "item" &&
+    evt.data.suppressChannelProgress === true &&
+    evt.data.kind === "tool"
+  ) {
     return;
   }
 

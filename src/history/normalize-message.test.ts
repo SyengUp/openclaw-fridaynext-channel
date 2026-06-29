@@ -185,6 +185,33 @@ describe("normalizeHistoryMessage", () => {
     expect(plain?.mediaPaths).toBeUndefined();
   });
 
+  it("extracts Codex exec stdout from a `toolResult`-typed content block", () => {
+    // Codex (app-server) persists bash/exec stdout in a content block whose `type` is
+    // "toolResult" (not "text"); the native path only ever emits "text" blocks. Before the
+    // fix this fell through `default` and the command output was dropped (text="").
+    const out = normalizeHistoryMessage(
+      {
+        role: "toolResult",
+        toolCallId: "call_GSu3",
+        toolName: "bash",
+        content: [
+          {
+            type: "toolResult",
+            toolCallId: "call_GSu3",
+            name: "bash",
+            content: "Applications\nDesktop\nDocuments",
+            text: "Applications\nDesktop\nDocuments",
+          },
+        ],
+        ...meta("tr-1", 3),
+      },
+      0,
+    );
+    expect(out?.role).toBe("toolResult");
+    expect(out?.toolResult?.text).toBe("Applications\nDesktop\nDocuments");
+    expect(out?.toolResult?.toolCallId).toBe("call_GSu3");
+  });
+
   it("flags compaction records via __openclaw.kind", () => {
     const out = normalizeHistoryMessage(
       {

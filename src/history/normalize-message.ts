@@ -158,6 +158,21 @@ function parseContent(content: unknown): ParsedContent {
         }
         break;
       }
+      case "toolResult":
+      case "tool_result": {
+        // Codex (app-server backend) persists an exec/bash tool's STDOUT in a content
+        // block whose `type` is "toolResult" (not "text") — the output lives in the
+        // block's `text`/`content`. The native/Anthropic path uses plain "text" blocks,
+        // so this case was never hit and the command output was silently dropped from
+        // history (`parsed.text` stayed ""), leaving the app's trace tool row with no
+        // result. ControlUI shows it because its projection reads these blocks.
+        const t = readString(block.text) || readString(block.content);
+        if (t) {
+          textParts.push(t);
+          out.images.push(...extractMediaMarkers(t));
+        }
+        break;
+      }
       case "thinking": {
         const t = readString(block.thinking);
         if (t) thinkingParts.push(t);

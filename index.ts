@@ -30,8 +30,6 @@ const hookLogger = createFridayNextLogger("hook");
 export { fridayNextChannelPlugin } from "./src/channel.js";
 export { setFridayNextRuntime } from "./src/runtime.js";
 
-/** `api.on` returns void — register tool hooks at most once per process. */
-let fridayNextToolHooksRegistered = false;
 let disposeAgentEventListener: (() => void) | null = null;
 /**
  * Track the last `api` instance on which HTTP routes were registered.
@@ -163,10 +161,17 @@ export default defineChannelPluginEntry({
       );
     });
 
-    if (fridayNextToolHooksRegistered) {
+    // Tool hooks (subagent_delivery_target / before_tool_call / after_tool_call) must follow the
+    // SAME re-registration discipline as the HTTP routes and onAgentEvent listener above. When the
+    // health-monitor restarts the plugin, `registerFull` receives a fresh `api` and the host
+    // dispatches hooks on THAT api; hooks left bound to the first api go silent for the rest of the
+    // process. The old one-time boolean guard bound them to whichever api arrived first — which is
+    // exactly why Codex `command_output` (the A3 after_tool_call stdout synthesis) fired on some
+    // gateway processes and not others. Re-register on every genuinely-new api; skip only a repeat
+    // call with the same api (matching the `!sameApi` gate the routes use).
+    if (sameApi) {
       return;
     }
-    fridayNextToolHooksRegistered = true;
 
     // Make Codex (ChatGPT/OAuth) models emit reasoning summary text so the app can stream
     // "thinking". OpenClaw never sets this; we assert it on the plugin side. Best-effort.
