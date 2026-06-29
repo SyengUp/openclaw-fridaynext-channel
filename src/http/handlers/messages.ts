@@ -635,6 +635,16 @@ export async function handleMessages(req: IncomingMessage, res: ServerResponse):
           runId,
           suppressTyping: true,
           disableBlockStreaming: true,
+          // friday-next is a direct device channel: the final assistant reply auto-delivers
+          // to the app live over SSE (sendText), and the channel already declares ChatType
+          // "direct" + outbound.deliveryMode "direct". But OpenClaw core's source-reply policy
+          // (resolveSourceReplyDeliveryMode) can still resolve `message_tool_only` for this
+          // channel from its own defaults — when it does, the agent prompt tells the model
+          // "visible replies are NOT auto-delivered; use message(action=send) for everything",
+          // which makes Codex route its whole answer through the `message` tool (and that tool
+          // crashes on friday-next). Pin `automatic` so core honors the channel's own direct
+          // delivery and never instructs the model to deliver via the message tool.
+          sourceReplyDeliveryMode: "automatic",
           // A1: feed the chosen thinking level into the run as a one-shot override so the model
           // request asks for a reasoning summary. The session-stored `thinkingLevel` alone is NOT
           // honored by the reply dispatch; `thinkingLevelOverride` has top priority in OpenClaw's
