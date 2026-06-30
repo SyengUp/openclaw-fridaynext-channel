@@ -1,5 +1,6 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { abortRunForSessionKey } from "../../agent/abort-run.js";
+import { markUserAbort } from "../../agent/recent-aborts.js";
 import { getRunRoute } from "../../run-metadata.js";
 import { sseEmitter } from "../../sse/emitter.js";
 import { readJsonBody } from "../middleware/body.js";
@@ -34,7 +35,10 @@ export async function handleCancel(req: IncomingMessage, res: ServerResponse): P
   }
   const result = sessionKey
     ? await abortRunForSessionKey(sessionKey)
-    : { aborted: false, drained: false };
+    : { aborted: false };
+  // Record the user stop so abort-induced error deliveries are suppressed for a short window
+  // (the aborted run's own failover, or a generic failure on the immediate next turn).
+  if (sessionKey) markUserAbort(sessionKey);
   if (runId) sseEmitter.untrackRun(runId);
   res.statusCode = 200;
   res.setHeader("Content-Type", "application/json");

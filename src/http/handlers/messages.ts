@@ -25,6 +25,7 @@ export type FridayReplyPayload = {
   channelData?: unknown;
 };
 import { resolveFridayNextConfig } from "../../config.js";
+import { wasRecentlyUserAborted } from "../../agent/recent-aborts.js";
 import { getHostOpenClawConfigSnapshot } from "../../host-config.js";
 import { getFridayNextRuntime } from "../../runtime.js";
 import {
@@ -589,6 +590,14 @@ export async function handleMessages(req: IncomingMessage, res: ServerResponse):
               }
             }
             const payload = translateDeliverPayload(pl, info.kind, meta);
+            const deliverIsError =
+              (payload as { isError?: boolean })?.isError || (pl as { isError?: boolean })?.isError;
+            // Drop error deliveries that are a direct consequence of a user stop (the aborted
+            // run's own failover, e.g. "LLM request failed."). The user already chose to stop;
+            // surfacing it as an error toast is abort-noise, not a real failure.
+            if (deliverIsError && wasRecentlyUserAborted(baseSessionKey)) {
+              return;
+            }
             log("EVENT_SENT", normalizedDeviceId, runId, `deliver kind=${info.kind}`);
             sseEmitter.broadcastToRun(
               runId,
@@ -613,6 +622,9 @@ export async function handleMessages(req: IncomingMessage, res: ServerResponse):
             }
           },
           onError: (err: unknown) => {
+            if (wasRecentlyUserAborted(baseSessionKey)) {
+              return;
+            }
             log("RUN_ERROR", normalizedDeviceId, runId, String(err), "error");
             sseEmitter.broadcastToRun(
               runId,
