@@ -17,6 +17,7 @@ import { createFridayNextLogger } from "./logging.js";
 import type { ChannelAccountSnapshot } from "openclaw/plugin-sdk/status-helpers";
 import { saveMediaBuffer } from "openclaw/plugin-sdk/media-store";
 import { sseEmitter } from "./sse/emitter.js";
+import { fridayNotificationsStore } from "./notifications/notifications-store.js";
 import { describeMessageActions, handleMessageAction } from "./channel-actions.js";
 import { guessMimeType, resolveMediaAttachment } from "./http/handlers/files.js";
 import { downloadRemoteMedia, isHttpUrl } from "./media-fetch.js";
@@ -225,6 +226,17 @@ export const fridayNextChannelPlugin = createChatChannelPlugin({
       const runId = runIdFromCtx ?? sseEmitter.getLastRunIdForDevice(deviceId) ?? undefined;
       const sessionKey = resolveOutboundSessionKey(deviceId, runId, rawCtx);
 
+      // Durable notification capture for agent-initiated background pushes
+      // (cron/heartbeat). Written BEFORE the connection gate so an offline device
+      // still surfaces it on next reconnect (non-background replies are ignored).
+      fridayNotificationsStore.append({
+        deviceId,
+        ts: Date.now(),
+        sourceSessionKey: sessionKey,
+        text,
+        hasMedia: false,
+      });
+
       const conn = sseEmitter.getConnection(deviceId);
       logger.info(
         `[SEND_TEXT] to=${deviceId} runId=${runId ?? "(none)"} sessionKey=${sessionKey ?? "(none)"} textLen=${text.length} online=${!!conn}`,
@@ -273,6 +285,15 @@ export const fridayNextChannelPlugin = createChatChannelPlugin({
       const sessionKey = resolveOutboundSessionKey(deviceId, runId, rawCtx);
       const audioAsVoice = ctx.audioAsVoice === true;
       const caption = ctx.text ?? "";
+
+      // Durable notification capture (background pushes only); before any gate.
+      fridayNotificationsStore.append({
+        deviceId,
+        ts: Date.now(),
+        sourceSessionKey: sessionKey,
+        text: caption,
+        hasMedia: true,
+      });
 
       if (!mediaUrl) {
         return {

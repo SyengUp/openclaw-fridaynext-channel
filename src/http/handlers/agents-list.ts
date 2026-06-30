@@ -97,7 +97,7 @@ function readWorkspaceIdentityName(
  * models-list.ts). When no agents are configured OpenClaw runs an implicit "main"
  * agent, so we return a single default entry to match that behaviour.
  */
-function resolveConfiguredAgents(): ResolvedAgents {
+export function resolveConfiguredAgents(): ResolvedAgents {
   const rt = getFridayAgentForwardRuntime();
   if (!rt) return { agents: [], defaultAgentId: DEFAULT_AGENT_ID };
 
