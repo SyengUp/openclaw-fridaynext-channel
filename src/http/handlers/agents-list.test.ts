@@ -139,6 +139,35 @@ describe("handleAgentsList", () => {
     ]);
   });
 
+  it("inherits agents.defaults.thinkingDefault for agents that don't set their own", async () => {
+    setConfig({
+      agents: {
+        defaults: { thinkingDefault: "medium" },
+        list: [
+          { id: "main", model: "deepseek/deepseek-v4-flash" }, // no per-agent thinkingDefault
+          { id: "worker", model: "deepseek/deepseek-v4-flash", thinkingDefault: "low" },
+        ],
+      },
+    });
+    const res = new MockRes();
+    await handleAgentsList(makeReq(AUTH), res as any);
+
+    const body = JSON.parse(res.body);
+    const byId = Object.fromEntries(body.agents.map((a: any) => [a.id, a.thinkingDefault]));
+    // `main` inherits the defaults; `worker`'s explicit value wins over the inherited one.
+    expect(byId.main).toBe("medium");
+    expect(byId.worker).toBe("low");
+  });
+
+  it("inherits agents.defaults.thinkingDefault for the implicit main agent", async () => {
+    setConfig({ agents: { defaults: { thinkingDefault: "medium" } } });
+    const res = new MockRes();
+    await handleAgentsList(makeReq(AUTH), res as any);
+
+    const body = JSON.parse(res.body);
+    expect(body.agents).toEqual([{ id: "main", isDefault: true, thinkingDefault: "medium" }]);
+  });
+
   it("falls back to the IDENTITY.md name when config has none", async () => {
     const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "friday-identity-"));
     fs.writeFileSync(

@@ -105,13 +105,28 @@ export function resolveConfiguredAgents(): ResolvedAgents {
   const agents = cfg?.agents as Record<string, unknown> | undefined;
   const list = agents?.list as Array<Record<string, unknown>> | undefined;
 
+  // Agent-level default thinking level inherited by every agent that doesn't set
+  // its own `thinkingDefault` (e.g. the built-in `main`, which relies on this).
+  // Mirrors core `resolveThinkingDefault`, which returns `agents.defaults.thinkingDefault`
+  // ahead of any model-specific default. Without this, an inheriting agent is reported
+  // with no default, and the app falls back to the (volatile) per-model server default.
+  const agentDefaults = agents?.defaults as Record<string, unknown> | undefined;
+  const inheritedThinkingDefault = readString(agentDefaults?.thinkingDefault);
+
   if (!Array.isArray(list) || list.length === 0) {
     // Implicit `main` agent (no `agents.list`): config carries no name, so fall
     // back to the workspace IDENTITY.md `Name` — the same source ControlUI and
     // the list branch below use — instead of letting the app show the raw id.
     const name = readWorkspaceIdentityName(rt, cfg, DEFAULT_AGENT_ID);
     return {
-      agents: [{ id: DEFAULT_AGENT_ID, isDefault: true, ...(name ? { name } : {}) }],
+      agents: [
+        {
+          id: DEFAULT_AGENT_ID,
+          isDefault: true,
+          ...(name ? { name } : {}),
+          ...(inheritedThinkingDefault ? { thinkingDefault: inheritedThinkingDefault } : {}),
+        },
+      ],
       defaultAgentId: DEFAULT_AGENT_ID,
     };
   }
@@ -137,7 +152,7 @@ export function resolveConfiguredAgents(): ResolvedAgents {
         readWorkspaceIdentityName(rt, cfg, id),
       description: readString(agent.description),
       model: resolvePrimaryModel(agent.model),
-      thinkingDefault: readString(agent.thinkingDefault),
+      thinkingDefault: readString(agent.thinkingDefault) ?? inheritedThinkingDefault,
       isDefault: id === defaultAgentId,
       emoji: readString(identity?.emoji),
       avatar: readString(identity?.avatar) ?? readString(identity?.avatarUrl),
