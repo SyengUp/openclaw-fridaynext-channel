@@ -104,13 +104,58 @@ if (!hasOpenclaw()) {
 
 // --------------- install plugin package ---------------
 
+const PKG = "@syengup/friday-channel-next";
+
+// Resolve the EXACT latest version and install THAT — never the `@latest`
+// dist-tag. OpenClaw persists a `@latest` install as a caret range
+// (`"^1.0.5"`) in the managed project package.json, and OpenClaw's own plugin
+// auto-update later rejects that range ("unsupported npm spec: use an exact
+// version or dist-tag"), disabling the plugin. An exact version is stored as an
+// exact spec, which auto-update accepts.
+async function resolveLatestVersion() {
+  try {
+    const res = await fetch(`https://registry.npmjs.org/${PKG}/latest`, {
+      headers: { Accept: "application/json" },
+      signal: AbortSignal.timeout(8000),
+    });
+    if (res.ok) {
+      const body = await res.json();
+      if (typeof body.version === "string" && /^\d+\.\d+\.\d+/.test(body.version)) {
+        return body.version;
+      }
+    }
+  } catch {
+    /* fall through */
+  }
+  try {
+    const v = execSync(`npm view ${PKG} version`, { encoding: "utf8", timeout: 20000 }).trim();
+    if (/^\d+\.\d+\.\d+/.test(v)) return v;
+  } catch {
+    /* fall through */
+  }
+  return null;
+}
+
 log("Installing Friday Next channel plugin...");
 
+const resolvedVersion = await resolveLatestVersion();
+let installSpec;
+if (resolvedVersion) {
+  installSpec = `${PKG}@${resolvedVersion}`;
+} else {
+  // Registry lookup failed — fall back to @latest so a transient network hiccup
+  // doesn't block the install. Re-running the installer later will pin an exact
+  // spec once the registry is reachable.
+  warn("Could not resolve exact latest version — falling back to @latest.");
+  installSpec = `${PKG}@latest`;
+}
+
 try {
-  const out = execSync(
-    `${openclawCmd} plugins install @syengup/friday-channel-next@latest --force`,
-    { encoding: "utf8", stdio: "pipe", timeout: 120000 },
-  );
+  const out = execSync(`${openclawCmd} plugins install ${installSpec} --force`, {
+    encoding: "utf8",
+    stdio: "pipe",
+    timeout: 120000,
+  });
   if (out.trim()) console.log(out.trim());
   log("Plugin registered with install record — auto-upgrade enabled.");
 
