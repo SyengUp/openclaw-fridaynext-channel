@@ -1,3 +1,6 @@
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { sseEmitter } from "./sse/emitter.js";
 import { getFridayAgentForwardRuntime } from "./agent-forward-runtime.js";
 import { toSessionStoreKey } from "./session/session-manager.js";
@@ -88,6 +91,65 @@ const deviceIdToLatestHistorySessionKey = new Map<string, string>();
 /** Last device that called POST /friday-next/messages (same gateway process). Used for cron/outbound when `to` is placeholder and the app is offline (no SSE). */
 let lastRegisteredFridayDeviceId: string | undefined;
 
+/**
+ * Durable copy of `lastRegisteredFridayDeviceId`.
+ *
+ * The in-memory variable dies on gateway restart and is empty until the app POSTs again — but
+ * implicit cron delivery (`config.resolveDefaultTo`) needs the device precisely when the app is
+ * backgrounded/offline and the gateway may have restarted since. Persist the last seen device to
+ * disk (best-effort) and fall back to it on cold reads.
+ *
+ * Test guard: under Vitest the default path is DISABLED (returns null) unless a test explicitly
+ * sets an override file — unit tests run on the same machine/homedir as a live gateway, and test
+ * probes register junk deviceIds that must never poison the production fallback.
+ */
+let lastDeviceStateFileOverride: string | null | undefined;
+
+/** Vitest-only: `null` disables persistence, a path redirects it. Also resets in-memory state. */
+export function setLastDeviceStateFileForTest(p: string | null): void {
+  lastDeviceStateFileOverride = p;
+  lastRegisteredFridayDeviceId = undefined;
+}
+
+function lastDeviceStateFile(): string | null {
+  if (lastDeviceStateFileOverride !== undefined) return lastDeviceStateFileOverride;
+  if (process.env.VITEST) return null;
+  return path.join(os.homedir(), ".openclaw", "friday-next", "last-device.json");
+}
+
+function persistLastSeenFridayDeviceId(deviceId: string): void {
+  const file = lastDeviceStateFile();
+  if (!file) return;
+  try {
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(file, JSON.stringify({ deviceId, updatedAt: Date.now() }));
+  } catch {
+    // best-effort: never let state persistence break inbound/SSE paths
+  }
+}
+
+function readPersistedLastSeenFridayDeviceId(): string | undefined {
+  const file = lastDeviceStateFile();
+  if (!file) return undefined;
+  try {
+    const parsed = JSON.parse(fs.readFileSync(file, "utf8")) as { deviceId?: unknown };
+    const did = typeof parsed.deviceId === "string" ? parsed.deviceId.trim().toUpperCase() : "";
+    return did || undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/** Record a device we KNOW is the real app (POST /messages or SSE connect): memory + disk. */
+export function noteFridayDeviceSeen(deviceId: string): void {
+  const did = deviceId.trim().toUpperCase();
+  if (!did) return;
+  if (lastRegisteredFridayDeviceId !== did) {
+    lastRegisteredFridayDeviceId = did;
+    persistLastSeenFridayDeviceId(did);
+  }
+}
+
 function normalizeFridaySessionKeyCase(sk: string): string {
   return /^friday-next-|^agent:main:friday-next-/i.test(sk) ||
     /^agent:main:friday-next:direct:/i.test(sk)
@@ -110,11 +172,19 @@ export function registerFridaySessionDeviceMapping(rawSessionKey: string, device
     gatewayKeyToHistorySessionKey.set(k, sk);
   }
   deviceIdToLatestHistorySessionKey.set(did, sk);
-  lastRegisteredFridayDeviceId = did;
+  noteFridayDeviceSeen(did);
 }
 
-/** In-process fallback for tool hooks / telemetry (same idea as outbound sole-device). */
+/**
+ * In-process fallback for tool hooks / telemetry (same idea as outbound sole-device). Falls back
+ * to the persisted last-seen device whenever memory is empty — deliberately NO negative caching:
+ * an early miss (gateway just restarted, file not written yet) must not poison later reads once
+ * the app connects and the file appears. Reads are rare (delivery resolution only).
+ */
 export function getLastRegisteredFridayDeviceId(): string | undefined {
+  if (!lastRegisteredFridayDeviceId) {
+    lastRegisteredFridayDeviceId = readPersistedLastSeenFridayDeviceId();
+  }
   return lastRegisteredFridayDeviceId;
 }
 

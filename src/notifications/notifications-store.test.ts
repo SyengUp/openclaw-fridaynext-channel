@@ -54,6 +54,31 @@ describe("FridayNotificationsStore", () => {
     expect(skipped).toBeNull();
   });
 
+  it("fallbackKind captures unclassified keys (real cron deliveries carry no :cron: key)", () => {
+    // Offline device: a real cron delivery resolves to a device/history session key —
+    // classification misses it, so the caller passes fallbackKind "push".
+    const captured = store.append({
+      deviceId: DEV, ts: 1000, sourceSessionKey: "agent:main:friday-next-AAAA-BBBB",
+      text: "早上好", hasMedia: false, fallbackKind: "push",
+    });
+    expect(captured?.kind).toBe("push");
+    expect(captured?.seq).toBe(1);
+
+    // Online device (fallbackKind null): unclassified keys stay ignored.
+    const ignored = store.append({
+      deviceId: DEV, ts: 2000, sourceSessionKey: "agent:main:friday-next-AAAA-BBBB",
+      text: "普通回复", hasMedia: false, fallbackKind: null,
+    });
+    expect(ignored).toBeNull();
+
+    // Classified keys keep their real kind even when a fallback is provided.
+    const cron = store.append({
+      deviceId: DEV, ts: 3000, sourceSessionKey: "agent:main:cron:x:run:y",
+      text: "定时", hasMedia: false, fallbackKind: "push",
+    });
+    expect(cron?.kind).toBe("cron");
+  });
+
   it("readAfter returns only newer entries, oldest-first", () => {
     store.append({ deviceId: DEV, ts: 1, sourceSessionKey: "agent:main:cron:a:run:1", text: "1", hasMedia: false });
     store.append({ deviceId: DEV, ts: 2, sourceSessionKey: "agent:main:cron:a:run:2", text: "2", hasMedia: false });

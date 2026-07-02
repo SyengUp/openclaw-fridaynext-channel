@@ -25,6 +25,7 @@ import { resolveMediaMaxBytes } from "./agent/media-bridge.js";
 import {
   resolveFridayDeviceIdForOutbound,
   resolveHistorySessionKeyForFridayDevice,
+  getLastRegisteredFridayDeviceId,
 } from "./friday-session.js";
 import { getRunRoute } from "./run-metadata.js";
 import { getLastFridayInboundAt } from "./friday-inbound-stats.js";
@@ -79,6 +80,30 @@ const fridayConfigAdapter = {
   isConfigured: () => true,
   unconfiguredReason: () => null,
   describeAccount: () => ({ accountId: "default", name: "Friday Next Channel", enabled: true }),
+  // Isolated cron / background pushes reach the core's outbound target resolver with no `to`
+  // (friday-next intentionally returns null from resolveOutboundSessionRoute to avoid phantom
+  // delivery-mirror sessions, so the session bucket never stores a routable friday-next target).
+  // Without a default the core aborts with "Delivering to Friday Next requires target" before
+  // sendText's own device fallback ever runs. Surface the same device fallback here — the sole
+  // connected device, else the last device that POSTed — so target resolution passes and sendText
+  // does the precise per-device routing (and still writes fridayNotificationsStore when offline).
+  // Returns undefined only when the device is genuinely ambiguous (multiple/none known), which
+  // correctly keeps the explicit-`--to` requirement for that case. The last-seen fallback is
+  // disk-persisted (see friday-session.ts) so it survives gateway restarts with the app offline.
+  resolveDefaultTo: (): string | undefined => {
+    const sole = sseEmitter.getSoleConnectedDeviceId();
+    const resolved = sole ?? getLastRegisteredFridayDeviceId() ?? undefined;
+    if (resolved) {
+      logger.info(
+        `[DEFAULT_TO] implicit target -> ${resolved} (${sole ? "sole-connected" : "last-seen"})`,
+      );
+    } else {
+      logger.warn(
+        "[DEFAULT_TO] no implicit target: no connected device and no persisted last-seen device",
+      );
+    }
+    return resolved;
+  },
 };
 
 const fridayMeta = {
@@ -226,18 +251,22 @@ export const fridayNextChannelPlugin = createChatChannelPlugin({
       const runId = runIdFromCtx ?? sseEmitter.getLastRunIdForDevice(deviceId) ?? undefined;
       const sessionKey = resolveOutboundSessionKey(deviceId, runId, rawCtx);
 
+      const conn = sseEmitter.getConnection(deviceId);
+
       // Durable notification capture for agent-initiated background pushes
       // (cron/heartbeat). Written BEFORE the connection gate so an offline device
-      // still surfaces it on next reconnect (non-background replies are ignored).
+      // still surfaces it on next reconnect. Key classification alone misses REAL
+      // cron deliveries (the core passes no origin identity, so sessionKey resolves
+      // to a device/history key, never `:cron:`) — when the device is offline the
+      // send cannot reach it live, so capture it as a generic "push" regardless.
       fridayNotificationsStore.append({
         deviceId,
         ts: Date.now(),
         sourceSessionKey: sessionKey,
         text,
         hasMedia: false,
+        fallbackKind: conn ? null : "push",
       });
-
-      const conn = sseEmitter.getConnection(deviceId);
       logger.info(
         `[SEND_TEXT] to=${deviceId} runId=${runId ?? "(none)"} sessionKey=${sessionKey ?? "(none)"} textLen=${text.length} online=${!!conn}`,
       );
@@ -286,13 +315,15 @@ export const fridayNextChannelPlugin = createChatChannelPlugin({
       const audioAsVoice = ctx.audioAsVoice === true;
       const caption = ctx.text ?? "";
 
-      // Durable notification capture (background pushes only); before any gate.
+      // Durable notification capture; before any gate. Same offline "push" fallback
+      // as sendText — real cron deliveries never carry a `:cron:` session key.
       fridayNotificationsStore.append({
         deviceId,
         ts: Date.now(),
         sourceSessionKey: sessionKey,
         text: caption,
         hasMedia: true,
+        fallbackKind: sseEmitter.getConnection(deviceId) ? null : "push",
       });
 
       if (!mediaUrl) {

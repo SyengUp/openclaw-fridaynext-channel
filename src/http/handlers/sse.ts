@@ -3,6 +3,7 @@ import { resolveFridayNextConfig } from "../../config.js";
 import { getHostOpenClawConfigSnapshot } from "../../host-config.js";
 import { getFridayNextRuntime } from "../../runtime.js";
 import { sseEmitter } from "../../sse/emitter.js";
+import { noteFridayDeviceSeen } from "../../friday-session.js";
 import { extractBearerToken } from "../middleware/auth.js";
 import { PLUGIN_VERSION } from "../../version.js";
 
@@ -47,6 +48,9 @@ export async function handleSseStream(req: IncomingMessage, res: ServerResponse)
   res.flushHeaders();
 
   const conn = sseEmitter.addConnection(deviceId, res);
+  // Durable last-seen device: SSE connect fires on every app foreground (far more often than a
+  // POST), so implicit cron delivery survives gateway restarts + app-backgrounded windows.
+  noteFridayDeviceSeen(deviceId);
 
   const normalized = deviceId.trim().toUpperCase();
   const lastSeq = sseEmitter.latestSeqForDevice(normalized);

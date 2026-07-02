@@ -102,7 +102,12 @@ export class FridayNotificationsStore {
   }
 
   /** Append a background push. `sourceSessionKey` decides the kind; non-background
-   *  (normal reply) keys are ignored (returns null). */
+   *  (normal reply) keys are ignored (returns null) — unless `fallbackKind` is set.
+   *
+   *  `fallbackKind` exists because the core's ChannelOutboundContext carries NO origin
+   *  identity: a real cron delivery reaches sendText with the recipient/device session
+   *  key (never `agent:…:cron:…`), so key classification alone misses it. The caller
+   *  passes a fallback (e.g. "push" when the device is offline) to still capture it. */
   append(args: {
     deviceId: string;
     ts: number;
@@ -110,8 +115,9 @@ export class FridayNotificationsStore {
     text: string;
     hasMedia: boolean;
     keep?: number;
+    fallbackKind?: string | null;
   }): FridayNotification | null {
-    const kind = classifyNotificationKind(args.sourceSessionKey);
+    const kind = classifyNotificationKind(args.sourceSessionKey) ?? args.fallbackKind ?? null;
     if (!kind) return null;
     const deviceId = args.deviceId.trim().toUpperCase();
     if (!deviceId) return null;
