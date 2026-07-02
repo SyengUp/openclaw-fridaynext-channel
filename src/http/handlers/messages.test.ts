@@ -195,3 +195,118 @@ describe("handleMessages dispatch context (owner fields)", () => {
     expect(channelData?.fridayNext?.mediaKind).toBe("tts_likely");
   });
 });
+
+describe("handleMessages reply-session init-conflict retry (OpenClaw core bug workaround)", () => {
+  const CONFLICT = "Error: reply session initialization conflicted for agent:main:fridaynext:x";
+
+  afterEach(() => {
+    clearFridayNextRuntime();
+    __resetMockFridayDispatchForTests();
+    vi.restoreAllMocks();
+  });
+
+  function setRuntime(): void {
+    setFridayNextRuntime({
+      config: { loadConfig: () => ({ gateway: { auth: { token: "tok" } }, channels: {} }) },
+    } as never);
+  }
+
+  async function postMessage(): Promise<void> {
+    const req = new PassThrough() as unknown as IncomingMessage;
+    req.method = "POST";
+    req.headers = { authorization: "Bearer tok" };
+    const res = new MockRes() as unknown as ServerResponse;
+    const p = handleMessages(req, res);
+    req.end(JSON.stringify({ deviceId: "AA11", text: "hello", sessionKey: "default" }));
+    await p;
+  }
+
+  function collectDispatchErrors(): { errors: string[] } {
+    const out: { errors: string[] } = { errors: [] };
+    vi.spyOn(sseEmitter, "broadcastToRun").mockImplementation((_: string, evt: unknown) => {
+      const data = (evt as { type?: string; data?: { op?: string; error?: string } })?.data;
+      if (data?.op === "dispatch_error") out.errors.push(String(data.error));
+    });
+    return out;
+  }
+
+  it("retries once and stays silent when the conflict is thrown then resolves", async () => {
+    setRuntime();
+    const broadcasts = collectDispatchErrors();
+    let calls = 0;
+    const secondCall = new Promise<void>((resolve) => {
+      __setMockFridayDispatchForTests(() => {
+        calls += 1;
+        if (calls === 1) return Promise.reject(new Error(CONFLICT));
+        resolve();
+        return Promise.resolve();
+      });
+    });
+
+    await postMessage();
+    await secondCall;
+
+    expect(calls).toBe(2);
+    expect(broadcasts.errors).toEqual([]);
+  });
+
+  it("retries once when the conflict arrives via the onError callback", async () => {
+    setRuntime();
+    const broadcasts = collectDispatchErrors();
+    let calls = 0;
+    const secondCall = new Promise<void>((resolve) => {
+      __setMockFridayDispatchForTests((args: unknown) => {
+        const a = args as { dispatcherOptions?: { onError?: (err: unknown) => void } };
+        calls += 1;
+        if (calls === 1) {
+          a.dispatcherOptions?.onError?.(new Error(CONFLICT));
+          return Promise.resolve();
+        }
+        resolve();
+        return Promise.resolve();
+      });
+    });
+
+    await postMessage();
+    await secondCall;
+
+    expect(calls).toBe(2);
+    expect(broadcasts.errors).toEqual([]);
+  });
+
+  it("surfaces the error when the retry conflicts again, without a third attempt", async () => {
+    setRuntime();
+    const broadcasts = collectDispatchErrors();
+    let calls = 0;
+    __setMockFridayDispatchForTests(() => {
+      calls += 1;
+      return Promise.reject(new Error(CONFLICT));
+    });
+
+    await postMessage();
+    await vi.waitFor(() => {
+      expect(broadcasts.errors.length).toBe(1);
+    });
+
+    expect(calls).toBe(2);
+    expect(broadcasts.errors[0]).toContain("initialization conflicted");
+  });
+
+  it("does not retry on unrelated dispatch errors", async () => {
+    setRuntime();
+    const broadcasts = collectDispatchErrors();
+    let calls = 0;
+    __setMockFridayDispatchForTests(() => {
+      calls += 1;
+      return Promise.reject(new Error("boom"));
+    });
+
+    await postMessage();
+    await vi.waitFor(() => {
+      expect(broadcasts.errors.length).toBe(1);
+    });
+
+    expect(calls).toBe(1);
+    expect(broadcasts.errors[0]).toContain("boom");
+  });
+});
