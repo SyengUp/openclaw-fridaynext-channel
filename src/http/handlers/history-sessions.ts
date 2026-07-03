@@ -20,6 +20,14 @@ import { resolveTranscriptPath } from "../../history/read-transcript.js";
 const DEFAULT_AGENT_ID = "main";
 const SAFE_AGENT_ID = /^[a-z0-9][a-z0-9_-]*$/;
 
+/**
+ * Cron sessions are durable (`agent:<id>:cron:<jobId>`) but there can be hundreds
+ * of them. Only surface those with a run in the recent window so the app's home
+ * "recent" list isn't flooded — the Friday app renders these as scheduled-task
+ * pills that the user can open like any conversation.
+ */
+const CRON_RECENT_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
+
 export interface FridayHistorySessionSummary {
   /** Canonical app session key, e.g. "agent:main:main". */
   sessionKey: string;
@@ -80,8 +88,12 @@ function sessionRest(canonicalKey: string): string {
 
 /**
  * Internal/system sessions that aren't user-facing conversations — mirrors what
- * OpenClaw's own `sessions.list` filters (cron/global/unknown/phantom) plus
+ * OpenClaw's own `sessions.list` filters (global/unknown/phantom) plus
  * heartbeat / subagent / memory-dreaming runs.
+ *
+ * NOTE: `cron:` is deliberately NOT filtered here anymore — scheduled-task
+ * sessions are surfaced (capped to the recent window in `readAgentSessions`) so
+ * the app can list them as openable conversations. Heartbeats stay filtered (noise).
  */
 function isInternalSessionKey(canonicalKey: string, storeKey: string): boolean {
   const k = storeKey.toLowerCase();
@@ -90,11 +102,76 @@ function isInternalSessionKey(canonicalKey: string, storeKey: string): boolean {
   return (
     rest === "sessions" || // phantom agent-store entry
     rest.startsWith("subagent:") ||
-    rest.startsWith("cron:") ||
     rest.startsWith("dreaming-narrative") ||
     rest === "heartbeat" ||
     rest.endsWith(":heartbeat")
   );
+}
+
+/** True for a durable scheduled-task session key (`agent:<id>:cron:<jobId>`). */
+function isCronSessionKey(canonicalKey: string): boolean {
+  return sessionRest(canonicalKey).startsWith("cron:");
+}
+
+/**
+ * Derives a scheduled-task title from the cron session's first user message,
+ * which the core injects as `[cron:<jobId> <name>] <prompt> Current time: …`.
+ * Returns the job `<name>` (primary) or the `<prompt>` (fallback); undefined if
+ * the transcript is unreadable or doesn't match. Only the first user line is
+ * parsed, so this is a bounded read.
+ */
+function cronTitleFromTranscript(entry: Record<string, unknown>, storePath: string): string | undefined {
+  const filePath = resolveTranscriptPath(entry, storePath);
+  if (!filePath) return undefined;
+  let content: string;
+  try {
+    content = fs.readFileSync(filePath, "utf-8");
+  } catch {
+    return undefined;
+  }
+  for (const line of content.split("\n")) {
+    const trimmed = line.trim();
+    if (!trimmed) continue;
+    let rec: Record<string, unknown>;
+    try {
+      const parsed = JSON.parse(trimmed) as unknown;
+      if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) continue;
+      rec = parsed as Record<string, unknown>;
+    } catch {
+      continue;
+    }
+    const message = rec.message as Record<string, unknown> | undefined;
+    if (!message || message.role !== "user") continue;
+    const text = userMessageText(message.content);
+    if (!text) return undefined;
+    // `[cron:<jobId> <name>] <prompt> Current time: …` — jobId has no spaces; the
+    // name may. Prefer <name>, fall back to <prompt> (before "Current time:").
+    const m = text.match(/^\[cron:\S+\s+([^\]]+)\]\s*([\s\S]*?)(?:\s+Current time:|$)/);
+    if (m) {
+      const name = m[1]?.trim();
+      const prompt = m[2]?.trim();
+      return name || prompt || undefined;
+    }
+    return undefined; // first user line isn't the cron preamble — no title
+  }
+  return undefined;
+}
+
+/** Flattens a transcript message `content` (string or block array) to plain text. */
+function userMessageText(content: unknown): string | undefined {
+  if (typeof content === "string") return content.trim() || undefined;
+  if (Array.isArray(content)) {
+    const parts: string[] = [];
+    for (const block of content) {
+      if (block && typeof block === "object" && (block as Record<string, unknown>).type === "text") {
+        const t = (block as Record<string, unknown>).text;
+        if (typeof t === "string") parts.push(t);
+      }
+    }
+    const joined = parts.join(" ").trim();
+    return joined || undefined;
+  }
+  return undefined;
 }
 
 /** A session counts as archived/empty when its transcript file is gone or empty. */
@@ -135,20 +212,31 @@ function readAgentSessions(agentId: string): FridayHistorySessionSummary[] {
     // Drop archived/empty sessions (transcript moved away or never written).
     if (!hasLiveTranscript(entry, storePath)) continue;
 
+    const isCron = isCronSessionKey(canonicalKey);
+    const updatedAt = readNumber(entry.updatedAt);
+    // Cron sessions are surfaced only when they ran recently — there can be
+    // hundreds otherwise. A cron session with no `updatedAt` is treated as stale.
+    if (isCron && (updatedAt === undefined || Date.now() - updatedAt > CRON_RECENT_WINDOW_MS)) {
+      continue;
+    }
+
+    // Cron sessions have no `displayName`; derive a scheduled-task title from the
+    // injected `[cron:<id> <name>] <prompt>` preamble (name primary, prompt fallback).
+    const title = isCron
+      ? (cronTitleFromTranscript(entry, storePath) ??
+         readString(entry.displayName) ??
+         readString(entry.label))
+      : (readString(entry.displayName) ?? readString(entry.label));
+
     summaries.push({
       sessionKey: canonicalKey,
       agentId,
       ...(readString(entry.sessionId) ? { sessionId: readString(entry.sessionId) } : {}),
-      ...(readNumber(entry.updatedAt) !== undefined
-        ? { updatedAt: readNumber(entry.updatedAt) }
-        : {}),
+      ...(updatedAt !== undefined ? { updatedAt } : {}),
       ...((readString(entry.model) ?? readString(entry.modelOverride))
         ? { model: readString(entry.model) ?? readString(entry.modelOverride) }
         : {}),
-      // Server-side session display name (matches OpenClaw's resolution order).
-      ...((readString(entry.displayName) ?? readString(entry.label))
-        ? { title: readString(entry.displayName) ?? readString(entry.label) }
-        : {}),
+      ...(title ? { title } : {}),
     });
   }
   return summaries;
@@ -181,10 +269,39 @@ export async function handleHistorySessions(
   for (const agentId of agentIds) {
     sessions.push(...readAgentSessions(agentId));
   }
-  sessions.sort((a, b) => (b.updatedAt ?? 0) - (a.updatedAt ?? 0));
+  const deduped = dedupeCronSessionsByTitle(sessions);
+  deduped.sort((a, b) => (b.updatedAt ?? 0) - (a.updatedAt ?? 0));
 
   res.statusCode = 200;
   res.setHeader("Content-Type", "application/json");
-  res.end(JSON.stringify({ ok: true, sessions }));
+  res.end(JSON.stringify({ ok: true, sessions: deduped }));
   return true;
+}
+
+/**
+ * Isolated cron jobs mint a NEW per-run session each firing, so a single job
+ * (e.g. "每日天气简报") accumulates dozens of `agent:<id>:cron:<runId>` sessions —
+ * there is no stable job id in the key to group by. Collapse them to ONE entry
+ * per job, keyed by `agentId + title`, keeping the most recent run's session so
+ * the app shows a single scheduled-task pill that opens the latest run. Non-cron
+ * sessions are passed through untouched (distinct conversations may share a title).
+ */
+function dedupeCronSessionsByTitle(
+  sessions: FridayHistorySessionSummary[],
+): FridayHistorySessionSummary[] {
+  const latestCronByJob = new Map<string, FridayHistorySessionSummary>();
+  const out: FridayHistorySessionSummary[] = [];
+  for (const s of sessions) {
+    if (!isCronSessionKey(s.sessionKey)) {
+      out.push(s);
+      continue;
+    }
+    const jobKey = `${s.agentId} ${s.title ?? s.sessionKey}`;
+    const existing = latestCronByJob.get(jobKey);
+    if (!existing || (s.updatedAt ?? 0) > (existing.updatedAt ?? 0)) {
+      latestCronByJob.set(jobKey, s);
+    }
+  }
+  out.push(...latestCronByJob.values());
+  return out;
 }
