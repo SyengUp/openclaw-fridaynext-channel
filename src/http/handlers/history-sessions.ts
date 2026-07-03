@@ -28,6 +28,13 @@ const SAFE_AGENT_ID = /^[a-z0-9][a-z0-9_-]*$/;
  */
 const CRON_RECENT_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
 
+/**
+ * Placeholder cron job names — the generic default the core stamps on jobs the user
+ * never named. Treated as "no name" so the pill title falls back to the prompt (so
+ * distinct nameless jobs stay distinguishable instead of all reading "自动化").
+ */
+const PLACEHOLDER_CRON_NAMES = new Set(["自动化"]);
+
 export interface FridayHistorySessionSummary {
   /** Canonical app session key, e.g. "agent:main:main". */
   sessionKey: string;
@@ -145,12 +152,14 @@ function cronTitleFromTranscript(entry: Record<string, unknown>, storePath: stri
     const text = userMessageText(message.content);
     if (!text) return undefined;
     // `[cron:<jobId> <name>] <prompt> Current time: …` — jobId has no spaces; the
-    // name may. Prefer <name>, fall back to <prompt> (before "Current time:").
+    // name may. Prefer <name>, but a placeholder/empty name falls back to <prompt>
+    // (its first line, before "Current time:").
     const m = text.match(/^\[cron:\S+\s+([^\]]+)\]\s*([\s\S]*?)(?:\s+Current time:|$)/);
     if (m) {
       const name = m[1]?.trim();
-      const prompt = m[2]?.trim();
-      return name || prompt || undefined;
+      const prompt = m[2]?.trim().split("\n")[0]?.trim();
+      const nameUsable = name && !PLACEHOLDER_CRON_NAMES.has(name);
+      return (nameUsable ? name : prompt) || name || prompt || undefined;
     }
     return undefined; // first user line isn't the cron preamble — no title
   }

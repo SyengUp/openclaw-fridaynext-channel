@@ -196,7 +196,8 @@ describe("handleHistorySessions", () => {
               "[cron:job-1 今早科技要闻] 查询今天的科技要闻 Current time: Friday",
             ),
           },
-          // Another recent cron → title = <name> ("自动化"), not the prompt.
+          // Nameless cron → core stamps the placeholder "自动化" → title falls back
+          // to the prompt ("写首诗"), so distinct nameless jobs stay distinguishable.
           "agent:main:cron:job-2": {
             sessionId: "cr2",
             updatedAt: now - 2000,
@@ -222,7 +223,7 @@ describe("handleHistorySessions", () => {
       "agent:main:cron:job-2",
     ]);
     expect(sessions[0].title).toBe("今早科技要闻");
-    expect(sessions[1].title).toBe("自动化");
+    expect(sessions[1].title).toBe("写首诗"); // placeholder name "自动化" → prompt
   });
 
   it("collapses many per-run cron sessions of one job into the latest", async () => {
