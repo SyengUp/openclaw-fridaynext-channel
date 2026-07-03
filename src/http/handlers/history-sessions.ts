@@ -35,8 +35,14 @@ const CRON_RECENT_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
  */
 const PLACEHOLDER_CRON_NAMES = new Set(["自动化"]);
 
-/** Bytes read from the head of a cron transcript to find its `[cron:…]` preamble. */
-const CRON_TITLE_PREFIX_BYTES = 64 * 1024;
+/**
+ * Safety cap on how much of a cron transcript we read to derive its title + whether
+ * it produced a visible reply. A run's final plain-text reply is its LAST assistant
+ * record, so a head-only prefix would miss it on long runs — we read the whole file
+ * (cron transcripts are a single scheduled run, bounded in practice to a few hundred
+ * KB) but never more than this, guarding against a pathological giant transcript.
+ */
+const CRON_TRANSCRIPT_MAX_BYTES = 2 * 1024 * 1024;
 
 export interface FridayHistorySessionSummary {
   /** Canonical app session key, e.g. "agent:main:main". */
@@ -123,32 +129,78 @@ function isCronSessionKey(canonicalKey: string): boolean {
   return sessionRest(canonicalKey).startsWith("cron:");
 }
 
+interface CronTranscriptInfo {
+  /** Scheduled-task title from the `[cron:<id> <name>]` preamble (name or prompt). */
+  title?: string;
+  /**
+   * True if the run produced a VISIBLE assistant reply — an assistant message with
+   * non-empty text or an image. False ⇒ the cron session opens blank in the app:
+   * either only the injected `[cron:…]` preamble (which the app filters as machine
+   * scaffolding), or a tool-only run whose work was delivered elsewhere / never
+   * produced a plain-text reply (its answer, if any, went to the user's own chat via
+   * the message tool — the cron session itself shows just a collapsed thought trace).
+   * Such sessions must be dropped from the list.
+   */
+  hasVisibleReply: boolean;
+}
+
+/** True if an assistant record carries a user-visible reply (text or image). */
+function assistantRecordHasVisibleReply(message: Record<string, unknown>): boolean {
+  const content = message.content;
+  if (typeof content === "string") return content.trim().length > 0;
+  if (Array.isArray(content)) {
+    for (const block of content) {
+      if (!block || typeof block !== "object") continue;
+      const type = (block as Record<string, unknown>).type;
+      if (type === "text") {
+        const t = (block as Record<string, unknown>).text;
+        if (typeof t === "string" && t.trim()) return true;
+      } else if (type === "image") {
+        return true; // a produced image is visible content even without text
+      }
+      // tool_use / thinking / tool_result blocks are NOT visible replies — they only
+      // populate the (collapsed) thought trace, so a tool-only turn reads as blank.
+    }
+  }
+  return false;
+}
+
 /**
- * Derives a scheduled-task title from the cron session's first user message,
- * which the core injects as `[cron:<jobId> <name>] <prompt> Current time: …`.
- * Returns the job `<name>` (primary) or the `<prompt>` (fallback); undefined if
- * the transcript is unreadable or doesn't match. Only the first user line is
- * parsed, so this is a bounded read.
+ * Single pass over a cron transcript deriving BOTH its scheduled-task title and
+ * whether the run produced a visible reply the app renders as a bubble.
+ *
+ * Title: the core injects `[cron:<jobId> <name>] <prompt> Current time: …` as the
+ * FIRST user message; we return `<name>` (primary) or `<prompt>` (fallback).
+ *
+ * Visible reply: the app filters the `[cron:…]` preamble AND renders only assistant
+ * text/images as the bubble body (tools go to a collapsed thought trace). So a run
+ * that produced no assistant text/image — an aborted run with a contentless turn, or
+ * a tool-only run that delivered elsewhere — opens as a blank screen and is dropped.
+ * The final reply is the LAST assistant record, so we scan the whole file (bounded)
+ * with an early exit once a visible reply is confirmed.
  */
-function cronTitleFromTranscript(entry: Record<string, unknown>, storePath: string): string | undefined {
+function inspectCronTranscript(entry: Record<string, unknown>, storePath: string): CronTranscriptInfo {
   const filePath = resolveTranscriptPath(entry, storePath);
-  if (!filePath) return undefined;
-  // Bounded prefix read: the `[cron:…]` preamble is the transcript's FIRST user
-  // message, so a small head always contains it — never read the whole run (these
-  // files can be large and this fires per cron run on every session-list fetch).
+  if (!filePath) return { hasVisibleReply: false };
   let content: string;
   try {
     const fd = fs.openSync(filePath, "r");
     try {
-      const buf = Buffer.allocUnsafe(CRON_TITLE_PREFIX_BYTES);
-      const bytes = fs.readSync(fd, buf, 0, buf.length, 0);
+      const size = fs.fstatSync(fd).size;
+      const toRead = Math.min(size, CRON_TRANSCRIPT_MAX_BYTES);
+      const buf = Buffer.allocUnsafe(toRead);
+      const bytes = fs.readSync(fd, buf, 0, toRead, 0);
       content = buf.toString("utf-8", 0, bytes);
     } finally {
       fs.closeSync(fd);
     }
   } catch {
-    return undefined;
+    return { hasVisibleReply: false };
   }
+
+  let title: string | undefined;
+  let hasVisibleReply = false;
+  let sawFirstUser = false;
   for (const line of content.split("\n")) {
     const trimmed = line.trim();
     if (!trimmed) continue;
@@ -161,23 +213,33 @@ function cronTitleFromTranscript(entry: Record<string, unknown>, storePath: stri
       continue;
     }
     const message = rec.message as Record<string, unknown> | undefined;
-    if (!message || message.role !== "user") continue;
-    const text = userMessageText(message.content);
-    if (!text) return undefined;
-    // `[cron:<jobId> <name>] <prompt> Current time: …` — jobId has no spaces; the
-    // name may. Prefer <name>, but a placeholder/empty name falls back to <prompt>
-    // (its first line, before "Current time:").
-    const m = text.match(/^\[cron:\S+\s+([^\]]+)\]\s*([\s\S]*?)(?:\s+Current time:|$)/);
-    if (m) {
-      const name = m[1]?.trim();
-      const prompt = m[2]?.trim().split("\n")[0]?.trim();
-      const nameUsable = name && !PLACEHOLDER_CRON_NAMES.has(name);
-      // nameUsable implies name is truthy, so the trailing `|| prompt` is unreachable.
-      return (nameUsable ? name : prompt) || name || undefined;
+    if (!message || typeof message.role !== "string") continue;
+    const role = message.role.toLowerCase();
+
+    if (role === "user" && !sawFirstUser) {
+      sawFirstUser = true;
+      // First user record = the core-injected cron preamble → title source (the app
+      // filters it, so it never counts as a visible reply).
+      // `[cron:<jobId> <name>] <prompt> Current time: …` — jobId has no spaces; the
+      // name may. Prefer <name>; a placeholder/empty name falls back to <prompt>
+      // (its first line, before "Current time:").
+      const text = userMessageText(message.content);
+      const m = text?.match(/^\[cron:\S+\s+([^\]]+)\]\s*([\s\S]*?)(?:\s+Current time:|$)/);
+      if (m) {
+        const name = m[1]?.trim();
+        const prompt = m[2]?.trim().split("\n")[0]?.trim();
+        const nameUsable = name && !PLACEHOLDER_CRON_NAMES.has(name);
+        title = (nameUsable ? name : prompt) || name || undefined;
+      }
+      continue;
     }
-    return undefined; // first user line isn't the cron preamble — no title
+
+    if (role === "assistant" && assistantRecordHasVisibleReply(message)) {
+      hasVisibleReply = true;
+      break; // the preamble is record 0, so the title is already captured
+    }
   }
-  return undefined;
+  return { title, hasVisibleReply };
 }
 
 /** Flattens a transcript message `content` (string or block array) to plain text. */
@@ -243,13 +305,19 @@ function readAgentSessions(agentId: string): FridayHistorySessionSummary[] {
       continue;
     }
 
-    // Cron sessions have no `displayName`; derive a scheduled-task title from the
-    // injected `[cron:<id> <name>] <prompt>` preamble (name primary, prompt fallback).
-    const title = isCron
-      ? (cronTitleFromTranscript(entry, storePath) ??
-         readString(entry.displayName) ??
-         readString(entry.label))
-      : (readString(entry.displayName) ?? readString(entry.label));
+    // Cron sessions have no `displayName`; one transcript pass yields both the
+    // scheduled-task title and whether the run produced a visible reply. Drop
+    // "empty" cron runs — an aborted run with a contentless assistant turn, or a
+    // tool-only run whose answer was delivered elsewhere — they open as a blank
+    // screen in the app (only a collapsed thought trace, no bubble body).
+    let title: string | undefined;
+    if (isCron) {
+      const info = inspectCronTranscript(entry, storePath);
+      if (!info.hasVisibleReply) continue;
+      title = info.title ?? readString(entry.displayName) ?? readString(entry.label);
+    } else {
+      title = readString(entry.displayName) ?? readString(entry.label);
+    }
 
     summaries.push({
       sessionKey: canonicalKey,

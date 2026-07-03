@@ -35,12 +35,28 @@ function transcript(name: string): string {
   return transcriptWith(name, "hi");
 }
 
-/** Transcript whose first user message carries `userText` (for cron-title parsing). */
-function transcriptWith(name: string, userText: string): string {
+/**
+ * Transcript whose first user message carries `userText` (for cron-title parsing),
+ * followed by an assistant record carrying `assistantContent` (default a plain text
+ * block) so the run counts as having renderable content. Pass `""` / `[]` to
+ * simulate an EMPTY run (a contentless assistant turn from an aborted/errored run).
+ */
+function transcriptWith(name: string, userText: string, assistantContent: unknown = "ok"): string {
+  const file = path.join(tmpDir, name);
+  const lines = [
+    JSON.stringify({ type: "message", id: "u", message: { role: "user", content: userText } }),
+    JSON.stringify({ type: "message", id: "a", message: { role: "assistant", content: assistantContent } }),
+  ];
+  fs.writeFileSync(file, `${lines.join("\n")}\n`, "utf-8");
+  return file;
+}
+
+/** Cron transcript with ONLY the injected `[cron:…]` preamble — no assistant record. */
+function cronPreambleOnly(name: string, userText: string): string {
   const file = path.join(tmpDir, name);
   fs.writeFileSync(
     file,
-    `${JSON.stringify({ type: "message", id: "m", message: { role: "user", content: userText } })}\n`,
+    `${JSON.stringify({ type: "message", id: "u", message: { role: "user", content: userText } })}\n`,
     "utf-8",
   );
   return file;
@@ -259,6 +275,60 @@ describe("handleHistorySessions", () => {
       "agent:main:cron:run-c",
     ]);
     expect(sessions.map((s: any) => s.title)).toEqual(["每日天气简报", "股票狙击手"]);
+  });
+
+  it("drops cron runs with no visible reply (blank in the app)", async () => {
+    const now = Date.now();
+    setForward(
+      { agents: { list: [{ id: "main" }] } },
+      {
+        main: {
+          // Real run: preamble + an assistant text turn → kept.
+          "agent:main:cron:full": {
+            sessionId: "f",
+            updatedAt: now - 1000,
+            sessionFile: transcriptWith("full.jsonl", "[cron:full 巡检 A] p Current time: X", "结果"),
+          },
+          // Aborted run: preamble + a CONTENTLESS assistant turn → blank → dropped.
+          "agent:main:cron:empty-asst": {
+            sessionId: "e",
+            updatedAt: now - 2000,
+            sessionFile: transcriptWith("empty.jsonl", "[cron:empty-asst 巡检 B] p Current time: X", ""),
+          },
+          // Preamble only, no assistant record at all → dropped.
+          "agent:main:cron:preamble-only": {
+            sessionId: "p",
+            updatedAt: now - 3000,
+            sessionFile: cronPreambleOnly("pre.jsonl", "[cron:preamble-only 巡检 C] p Current time: X"),
+          },
+          // Tool-only run: no assistant text, only tool calls (its answer, if any, was
+          // delivered elsewhere). Renders as just a collapsed thought trace → dropped.
+          "agent:main:cron:tool-only": {
+            sessionId: "t",
+            updatedAt: now - 4000,
+            sessionFile: transcriptWith("tool.jsonl", "[cron:tool-only 巡检 D] p Current time: X", [
+              { type: "tool_use", name: "message", input: {} },
+            ]),
+          },
+          // Image-only run: no text but a produced image → visible → kept.
+          "agent:main:cron:image-only": {
+            sessionId: "i",
+            updatedAt: now - 5000,
+            sessionFile: transcriptWith("img.jsonl", "[cron:image-only 巡检 E] p Current time: X", [
+              { type: "image", source: { type: "base64", media_type: "image/png", data: "x" } },
+            ]),
+          },
+        },
+      },
+    );
+    const res = new MockRes();
+    await handleHistorySessions(makeReq(AUTH), res as any);
+    const sessions = JSON.parse(res.body).sessions;
+    // Only runs with a visible reply (text or image) survive, newest first.
+    expect(sessions.map((s: any) => s.sessionKey)).toEqual([
+      "agent:main:cron:full",
+      "agent:main:cron:image-only",
+    ]);
   });
 
   it("keeps real conversations that merely carry a parentSessionKey", async () => {
