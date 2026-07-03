@@ -35,6 +35,9 @@ const CRON_RECENT_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
  */
 const PLACEHOLDER_CRON_NAMES = new Set(["自动化"]);
 
+/** Bytes read from the head of a cron transcript to find its `[cron:…]` preamble. */
+const CRON_TITLE_PREFIX_BYTES = 64 * 1024;
+
 export interface FridayHistorySessionSummary {
   /** Canonical app session key, e.g. "agent:main:main". */
   sessionKey: string;
@@ -130,9 +133,19 @@ function isCronSessionKey(canonicalKey: string): boolean {
 function cronTitleFromTranscript(entry: Record<string, unknown>, storePath: string): string | undefined {
   const filePath = resolveTranscriptPath(entry, storePath);
   if (!filePath) return undefined;
+  // Bounded prefix read: the `[cron:…]` preamble is the transcript's FIRST user
+  // message, so a small head always contains it — never read the whole run (these
+  // files can be large and this fires per cron run on every session-list fetch).
   let content: string;
   try {
-    content = fs.readFileSync(filePath, "utf-8");
+    const fd = fs.openSync(filePath, "r");
+    try {
+      const buf = Buffer.allocUnsafe(CRON_TITLE_PREFIX_BYTES);
+      const bytes = fs.readSync(fd, buf, 0, buf.length, 0);
+      content = buf.toString("utf-8", 0, bytes);
+    } finally {
+      fs.closeSync(fd);
+    }
   } catch {
     return undefined;
   }
@@ -159,7 +172,8 @@ function cronTitleFromTranscript(entry: Record<string, unknown>, storePath: stri
       const name = m[1]?.trim();
       const prompt = m[2]?.trim().split("\n")[0]?.trim();
       const nameUsable = name && !PLACEHOLDER_CRON_NAMES.has(name);
-      return (nameUsable ? name : prompt) || name || prompt || undefined;
+      // nameUsable implies name is truthy, so the trailing `|| prompt` is unreachable.
+      return (nameUsable ? name : prompt) || name || undefined;
     }
     return undefined; // first user line isn't the cron preamble — no title
   }
