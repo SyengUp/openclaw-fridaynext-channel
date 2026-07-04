@@ -33,6 +33,11 @@ export interface FridayNotification {
   jobName?: string;
   text: string;
   hasMedia: boolean;
+  /** Soft-delete tombstone marker. A deleted entry is rewritten as a content-less
+   *  `{seq, ts, deleted:true}` line: its content is gone (permanent removal), but the seq
+   *  survives so `scanMaxSeq` still reflects the true high-water and a later append can NEVER
+   *  reuse it — even if the durable seq-counter file is lost/corrupted. `readAfter` skips these. */
+  deleted?: boolean;
 }
 
 /** Test-only override for the notifications base directory. */
@@ -100,11 +105,42 @@ export class FridayNotificationsStore {
     return max;
   }
 
+  /** Durable high-water seq map (deviceId → highest ever allocated). Kept SEPARATE from the
+   *  device log so deleting entries can NEVER lower the next seq — a reused seq would collide
+   *  with an app-side tombstone for the old notification and get silently suppressed/re-deleted. */
+  private seqCountersPath(): string {
+    return path.join(this.baseDir(), "_seq-counters.json");
+  }
+
+  private readSeqCounters(): Record<string, number> {
+    try {
+      const raw = fs.readFileSync(this.seqCountersPath(), "utf8");
+      const map = JSON.parse(raw) as Record<string, number>;
+      return map && typeof map === "object" ? map : {};
+    } catch {
+      return {};
+    }
+  }
+
   private nextSeq(deviceId: string): number {
     const key = deviceId.trim().toUpperCase();
-    const cur = this.nextSeqByDevice.get(key) ?? this.scanMaxSeq(key);
+    // Monotonic across restarts AND deletions: take the max of the in-memory cache, the durable
+    // counter, and the live file max (belt-and-suspenders if the counter file is ever lost).
+    const counters = this.readSeqCounters();
+    const cur = Math.max(
+      this.nextSeqByDevice.get(key) ?? 0,
+      typeof counters[key] === "number" ? counters[key] : 0,
+      this.scanMaxSeq(key),
+    );
     const next = cur + 1;
     this.nextSeqByDevice.set(key, next);
+    counters[key] = next;
+    try {
+      fs.mkdirSync(this.baseDir(), { recursive: true });
+      fs.writeFileSync(this.seqCountersPath(), JSON.stringify(counters), "utf8");
+    } catch {
+      /* best-effort — the in-memory cache still holds the line within this process */
+    }
     return next;
   }
 
@@ -159,7 +195,12 @@ export class FridayNotificationsStore {
       if (!line.trim()) continue;
       try {
         const o = JSON.parse(line) as FridayNotification;
-        if (typeof o.seq === "number" && o.seq > afterSeq && typeof o.text === "string") {
+        if (
+          typeof o.seq === "number" &&
+          o.seq > afterSeq &&
+          o.deleted !== true &&
+          typeof o.text === "string"
+        ) {
           out.push(o);
         }
       } catch {
@@ -170,9 +211,12 @@ export class FridayNotificationsStore {
     return out;
   }
 
-  /** Permanently remove one notification (by seq) from a device's durable log. Rewrites
-   *  the JSONL without that entry. Returns true if a record was removed. seq counters stay
-   *  monotonic — the deleted seq is simply gone, never reused. */
+  /** Permanently remove one notification (by seq) from a device's durable log. The entry's
+   *  CONTENT is dropped, but a content-less `{seq, ts, deleted:true}` tombstone is left in its
+   *  place so `scanMaxSeq` keeps reflecting the true high-water — a later append can never reuse
+   *  the seq even if the durable counter file is lost/corrupted (which would otherwise resurrect
+   *  the seq-reuse bug: a reused seq collides with the app's tombstone and gets silently eaten).
+   *  Returns true if a live entry was removed. Idempotent (re-deleting a tombstone → false). */
   delete(deviceId: string, seq: number): boolean {
     const file = this.devicePath(deviceId);
     if (!fs.existsSync(file)) return false;
@@ -182,8 +226,9 @@ export class FridayNotificationsStore {
       if (!line.trim()) continue;
       try {
         const o = JSON.parse(line) as FridayNotification;
-        if (typeof o.seq === "number" && o.seq === seq) {
+        if (typeof o.seq === "number" && o.seq === seq && o.deleted !== true) {
           removed = true;
+          kept.push({ seq: o.seq, ts: o.ts, deleted: true } as FridayNotification);
           continue;
         }
         kept.push(o);

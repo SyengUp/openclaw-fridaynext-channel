@@ -128,4 +128,57 @@ describe("FridayNotificationsStore", () => {
   it("delete returns false for an unknown device", () => {
     expect(store.delete("no-such-device", 1)).toBe(false);
   });
+
+  // Regression: deleting entries must NOT let a later append reuse a seq — even across a
+  // process restart (fresh store instance) where the in-memory counter is gone. A reused seq
+  // collides with the app's tombstone for the OLD notification and gets silently eaten.
+  it("never reuses a seq after deletion, even across a store reload (restart)", () => {
+    for (let i = 1; i <= 3; i++) {
+      store.append({ deviceId: DEV, ts: i, sourceSessionKey: "agent:main:cron:a:run:" + i, text: String(i), hasMedia: false });
+    }
+    store.delete(DEV, 3);
+    store.delete(DEV, 2); // file max is now 1
+    // Simulate a gateway restart: a fresh store reading the same dir must honor the durable counter.
+    const restarted = new FridayNotificationsStore(tmpDir);
+    const next = restarted.append({ deviceId: DEV, ts: 4, sourceSessionKey: "agent:main:cron:a:run:4", text: "4", hasMedia: false });
+    expect(next?.seq).toBe(4); // NOT 2 (the post-deletion file max + 1)
+  });
+
+  // Robustness: the durable seq-counter file is a single point of failure. The soft-delete
+  // tombstone (a content-less {seq,ts,deleted:true} line) keeps scanMaxSeq at the true high-water,
+  // so seqs stay monotonic even if that counter file is corrupted or lost entirely.
+  it("does not reuse a seq after deletion even if the counter file is corrupted", () => {
+    for (let i = 1; i <= 3; i++) {
+      store.append({ deviceId: DEV, ts: i, sourceSessionKey: "agent:main:cron:a:run:" + i, text: String(i), hasMedia: false });
+    }
+    store.delete(DEV, 3);
+    store.delete(DEV, 2);
+    fs.writeFileSync(path.join(tmpDir, "_seq-counters.json"), "{ not valid json");
+    const restarted = new FridayNotificationsStore(tmpDir);
+    const next = restarted.append({ deviceId: DEV, ts: 4, sourceSessionKey: "agent:main:cron:a:run:4", text: "4", hasMedia: false });
+    expect(next?.seq).toBe(4);
+  });
+
+  it("does not reuse a seq after deletion even if the counter file is lost", () => {
+    for (let i = 1; i <= 3; i++) {
+      store.append({ deviceId: DEV, ts: i, sourceSessionKey: "agent:main:cron:a:run:" + i, text: String(i), hasMedia: false });
+    }
+    store.delete(DEV, 3);
+    store.delete(DEV, 2);
+    fs.rmSync(path.join(tmpDir, "_seq-counters.json"), { force: true });
+    const restarted = new FridayNotificationsStore(tmpDir);
+    const next = restarted.append({ deviceId: DEV, ts: 4, sourceSessionKey: "agent:main:cron:a:run:4", text: "4", hasMedia: false });
+    expect(next?.seq).toBe(4);
+  });
+
+  it("soft-delete removes the content but keeps a tombstone (readAfter hides it)", () => {
+    store.append({ deviceId: DEV, ts: 1, sourceSessionKey: "agent:main:cron:a:run:1", text: "secret content", hasMedia: false });
+    store.delete(DEV, 1);
+    // Content is gone from the readable log …
+    expect(store.readAfter(DEV, 0)).toHaveLength(0);
+    // … and the raw file no longer contains the text (permanent removal), only a tombstone.
+    const raw = fs.readFileSync(path.join(tmpDir, `${DEV.toUpperCase()}.jsonl`), "utf8");
+    expect(raw).not.toContain("secret content");
+    expect(raw).toContain('"deleted":true');
+  });
 });
