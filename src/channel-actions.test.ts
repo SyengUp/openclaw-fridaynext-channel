@@ -15,6 +15,11 @@ import {
   removeTempHistoryDir,
   setMockRuntime,
 } from "./test-support/mock-runtime.js";
+import {
+  noteCronActivity,
+  resetCronNotificationTrackerForTest,
+} from "./notifications/cron-notification-tracker.js";
+import { resetHeartbeatNotificationTrackerForTest } from "./notifications/heartbeat-notification-tracker.js";
 
 /**
  * The `message` tool's `action=send` is handled here (NOT via outbound.sendText/sendMedia).
@@ -245,6 +250,8 @@ describe("channel-actions handleSend notification capture", () => {
 
   beforeEach(() => {
     sseEmitter.resetForTest();
+    resetCronNotificationTrackerForTest();
+    resetHeartbeatNotificationTrackerForTest();
     historyDir = createTempHistoryDir();
     setOfflineQueueBaseDirForTest(historyDir);
     setMockRuntime({ historyDir, authToken: "test-token" });
@@ -253,6 +260,8 @@ describe("channel-actions handleSend notification capture", () => {
 
   afterEach(() => {
     vi.unstubAllGlobals();
+    resetCronNotificationTrackerForTest();
+    resetHeartbeatNotificationTrackerForTest();
     setOfflineQueueBaseDirForTest(null);
     setNotificationsBaseDirForTest(null);
     removeTempHistoryDir(historyDir);
@@ -286,6 +295,30 @@ describe("channel-actions handleSend notification capture", () => {
     expect(notes[0].kind).toBe("cron");
     expect(notes[0].text).toBe("🌿 早安，周六科技要闻来了");
     expect(notes[0].hasMedia).toBe(false);
+  });
+
+  // Regression (lost 23:00 每日趣闻汇总): the agent delivered the cron via the message tool while the
+  // device was mid-reconnect (getConnection reports "online" but the app never got the live push),
+  // AND ctx.sessionKey carried no cron marker. It must STILL be captured — via the cron tracker — so
+  // the inbox holds a durable record.
+  it("captures an online message-tool send when a cron fired recently, even with an unclassified key", async () => {
+    const deviceId = "DEV-FLAP-CRON";
+    connect(deviceId); // "online" during a connection flap
+    noteCronActivity("job-趣闻", "每日趣闻汇总");
+
+    await handleMessageAction({
+      action: "send",
+      params: { to: deviceId, message: "🌙 已发送深夜趣闻" },
+      sessionKey: "agent:main:main", // marker-less origin (isolated cron ran under base session)
+    });
+
+    const notes = fridayNotificationsStore.readAfter(deviceId, 0) as Array<{
+      kind: string;
+      jobName?: string;
+    }>;
+    expect(notes).toHaveLength(1);
+    expect(notes[0].kind).toBe("cron");
+    expect(notes[0].jobName).toBe("每日趣闻汇总");
   });
 
   it("captures an offline message-tool send as a generic 'push' even without a cron key", async () => {

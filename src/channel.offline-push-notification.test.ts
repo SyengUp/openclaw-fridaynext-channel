@@ -6,6 +6,11 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { fridayNextChannelPlugin } from "./channel.js";
 import { sseEmitter } from "./sse/emitter.js";
 import { setNotificationsBaseDirForTest } from "./notifications/notifications-store.js";
+import {
+  noteCronActivity,
+  resetCronNotificationTrackerForTest,
+} from "./notifications/cron-notification-tracker.js";
+import { resetHeartbeatNotificationTrackerForTest } from "./notifications/heartbeat-notification-tracker.js";
 
 /**
  * Real cron deliveries reach sendText with a device/history session key — never `agent:…:cron:…`
@@ -43,12 +48,16 @@ describe("friday-next offline push notification capture", () => {
 
   beforeEach(() => {
     sseEmitter.resetForTest();
+    resetCronNotificationTrackerForTest();
+    resetHeartbeatNotificationTrackerForTest();
     notifDir = fs.mkdtempSync(path.join(os.tmpdir(), "friday-notif-offline-"));
     setNotificationsBaseDirForTest(notifDir);
   });
 
   afterEach(() => {
     setNotificationsBaseDirForTest(null);
+    resetCronNotificationTrackerForTest();
+    resetHeartbeatNotificationTrackerForTest();
     fs.rmSync(notifDir, { recursive: true, force: true });
   });
 
@@ -86,5 +95,26 @@ describe("friday-next offline push notification capture", () => {
     const entries = readNotifications(notifDir, deviceId);
     expect(entries).toHaveLength(1);
     expect(entries[0]?.kind).toBe("cron");
+  });
+
+  // Regression (lost 23:00 每日趣闻汇总): an ONLINE send whose session key carries NO cron marker
+  // but which correlates to a recently-fired cron (tracker) MUST still be captured durably — a
+  // connection flap can make getConnection report "online" while the app never receives the live
+  // push, and the inbox is the only durable record.
+  it("captures an online unclassified send when a cron fired recently (tracker)", async () => {
+    const deviceId = "DEV-ONLINE-FLAP-CRON";
+    sseEmitter.addConnection(deviceId, new MockRes() as never);
+    noteCronActivity("job-趣闻", "每日趣闻汇总");
+
+    await outbound.sendText({ to: deviceId, text: "🌙 深夜趣闻汇总" });
+
+    const entries = readNotifications(notifDir, deviceId) as Array<{
+      kind: string;
+      text: string;
+      jobName?: string;
+    }>;
+    expect(entries).toHaveLength(1);
+    expect(entries[0]?.kind).toBe("cron");
+    expect(entries[0]?.jobName).toBe("每日趣闻汇总");
   });
 });

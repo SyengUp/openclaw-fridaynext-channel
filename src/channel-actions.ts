@@ -10,6 +10,7 @@ import {
   getLastRegisteredFridayDeviceId,
 } from "./friday-session.js";
 import { fridayNotificationsStore } from "./notifications/notifications-store.js";
+import { resolveBackgroundPushKind } from "./notifications/background-push-kind.js";
 
 type MessageActionCtx = {
   action: string;
@@ -119,23 +120,31 @@ async function handleSend(ctx: MessageActionCtx): Promise<unknown> {
     resolveHistorySessionKeyForFridayDevice(to);
 
   // Durable notification capture for the `message`-tool path (mirrors outbound.sendText).
-  // Classify by the ORIGIN session key (`ctx.sessionKey`, which for a cron/heartbeat run is
+  // Classify by the ORIGIN session key (`ctx.sessionKey`, which for a cron/heartbeat run MAY be
   // `agent:<id>:cron:<jobId>…` / `:heartbeat`), NOT the delivery-routing `sessionKey` above —
   // that one gets overwritten by the device's last user-session run-route (attachment placement)
-  // and would mask the background-push origin. As with sendText, when the device is offline we
-  // still capture it as a generic "push" so an offline background send is never silently lost.
-  // Non-background online replies classify to null and are ignored by the store.
+  // and would mask the background-push origin.
+  //
+  // The session key alone is NOT a reliable background-push signal: an isolated cron's message-tool
+  // call can run under a marker-less key, so we ALSO consult the cron/heartbeat trackers. A
+  // cron/heartbeat push is captured REGARDLESS of connection state — its live SSE delivery can be
+  // lost to a connection flap (getConnection reports "online" while a just-reconnected/backgrounded
+  // app never receives it), and the inbox is its only durable record. A normal reply is captured
+  // only when offline; a normal online reply classifies to null and the store ignores it.
   {
     const conn = sseEmitter.getConnection(to);
     const willHaveMedia =
       pickStringArray(ctx.params, "mediaUrls").length > 0 || !!inlineBase64 || !!mediaPath;
+    const bg = resolveBackgroundPushKind();
     fridayNotificationsStore.append({
       deviceId: to,
       ts: Date.now(),
       sourceSessionKey: ctx.sessionKey ?? sessionKey,
       text: text || caption,
       hasMedia: willHaveMedia,
-      fallbackKind: conn ? null : "push",
+      fallbackKind: bg.kind ?? (conn ? null : "push"),
+      jobId: bg.cron?.jobId,
+      jobName: bg.cron?.name,
     });
   }
 
