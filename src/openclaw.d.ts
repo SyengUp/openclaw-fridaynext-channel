@@ -106,3 +106,19 @@ declare module "openclaw/plugin-sdk/plugin-runtime" {
 declare module "openclaw/plugin-sdk/status-helpers" {
   export type ChannelAccountSnapshot = any;
 }
+
+declare module "openclaw/plugin-sdk/config-runtime" {
+  /** A single scheduled (cron) job — only the fields the channel reads. */
+  interface CronJob {
+    id: string;
+    name: string;
+  }
+  interface CronStoreFile {
+    version: number;
+    jobs: CronJob[];
+  }
+  /** Resolves the default cron-jobs store path (SQLite-backed). */
+  export const resolveCronStorePath: (storePath?: string) => string;
+  /** Loads the persisted cron job store. */
+  export const loadCronStore: (storePath: string) => Promise<CronStoreFile>;
+}

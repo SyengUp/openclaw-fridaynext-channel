@@ -4,7 +4,12 @@ import { sseEmitter } from "./sse/emitter.js";
 import { guessMimeType } from "./http/handlers/files.js";
 import { decodeBase64Media, downloadRemoteMedia, isHttpUrl } from "./media-fetch.js";
 import { getRunRoute } from "./run-metadata.js";
-import { resolveHistorySessionKeyForFridayDevice } from "./friday-session.js";
+import {
+  resolveHistorySessionKeyForFridayDevice,
+  resolveFridayDeviceIdForOutbound,
+  getLastRegisteredFridayDeviceId,
+} from "./friday-session.js";
+import { fridayNotificationsStore } from "./notifications/notifications-store.js";
 
 type MessageActionCtx = {
   action: string;
@@ -77,7 +82,21 @@ async function readMediaFile(
 }
 
 async function handleSend(ctx: MessageActionCtx): Promise<unknown> {
-  const to = pickString(ctx.params, ["to", "target"]).toUpperCase();
+  // Resolve the real device the same way outbound.sendText does. Agents frequently pass the bare
+  // channel name ("friday-next") as the message-tool target rather than a device id; without
+  // resolution both the SSE broadcast AND the durable notification would land under a non-device
+  // "FRIDAY-NEXT" key that no app ever fetches (the app queries by its own deviceId). A real device
+  // id passes through unchanged; "friday-next"/empty falls back to the session's device, the sole
+  // connected device, then the disk-persisted last-seen device (survives restarts with the app
+  // offline — same durability the announce path's resolveDefaultTo relies on).
+  const rawTarget = pickString(ctx.params, ["to", "target"]);
+  let resolvedTo = resolveFridayDeviceIdForOutbound(rawTarget, {
+    sessionKey: ctx.sessionKey ?? undefined,
+  });
+  if (!resolvedTo || resolvedTo.toLowerCase() === "friday-next") {
+    resolvedTo = getLastRegisteredFridayDeviceId() ?? resolvedTo;
+  }
+  const to = (resolvedTo ?? "").trim().toUpperCase();
   const text = pickString(ctx.params, ["message", "text", "content"]);
   const mediaPath = pickString(ctx.params, ["media", "url", "path", "filePath", "fileUrl"]);
   const inlineBase64 = pickString(ctx.params, ["buffer", "base64", "data"]);
@@ -98,6 +117,27 @@ async function handleSend(ctx: MessageActionCtx): Promise<unknown> {
     (activeRunId ? getRunRoute(activeRunId)?.sessionKey : undefined) ??
     ctx.sessionKey ??
     resolveHistorySessionKeyForFridayDevice(to);
+
+  // Durable notification capture for the `message`-tool path (mirrors outbound.sendText).
+  // Classify by the ORIGIN session key (`ctx.sessionKey`, which for a cron/heartbeat run is
+  // `agent:<id>:cron:<jobId>…` / `:heartbeat`), NOT the delivery-routing `sessionKey` above —
+  // that one gets overwritten by the device's last user-session run-route (attachment placement)
+  // and would mask the background-push origin. As with sendText, when the device is offline we
+  // still capture it as a generic "push" so an offline background send is never silently lost.
+  // Non-background online replies classify to null and are ignored by the store.
+  {
+    const conn = sseEmitter.getConnection(to);
+    const willHaveMedia =
+      pickStringArray(ctx.params, "mediaUrls").length > 0 || !!inlineBase64 || !!mediaPath;
+    fridayNotificationsStore.append({
+      deviceId: to,
+      ts: Date.now(),
+      sourceSessionKey: ctx.sessionKey ?? sessionKey,
+      text: text || caption,
+      hasMedia: willHaveMedia,
+      fallbackKind: conn ? null : "push",
+    });
+  }
 
   // Send text via SSE outbound
   if (text) {

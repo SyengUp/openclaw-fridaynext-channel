@@ -24,6 +24,13 @@ export interface FridayNotification {
   kind: string;
   /** Originating (internal) session key, for traceability. */
   sourceSessionKey: string;
+  /** The originating scheduled-task's jobId, captured for real announce deliveries whose
+   *  session key omits it (see cron-notification-tracker). The endpoint resolves the job's
+   *  CURRENT name from this LIVE at read time, so renaming a cron updates past records. */
+  jobId?: string;
+  /** Last-known job name at capture — a fallback for when the job is later deleted (live
+   *  resolution by jobId returns nothing). Live resolution wins while the job exists. */
+  jobName?: string;
   text: string;
   hasMedia: boolean;
 }
@@ -116,18 +123,24 @@ export class FridayNotificationsStore {
     hasMedia: boolean;
     keep?: number;
     fallbackKind?: string | null;
+    jobId?: string;
+    jobName?: string;
   }): FridayNotification | null {
     const kind = classifyNotificationKind(args.sourceSessionKey) ?? args.fallbackKind ?? null;
     if (!kind) return null;
     const deviceId = args.deviceId.trim().toUpperCase();
     if (!deviceId) return null;
 
+    const jobId = args.jobId?.trim();
+    const jobName = args.jobName?.trim();
     const entry: FridayNotification = {
       seq: this.nextSeq(deviceId),
       ts: args.ts,
       agentId: agentIdFromKey(args.sourceSessionKey ?? ""),
       kind,
       sourceSessionKey: args.sourceSessionKey ?? "",
+      ...(jobId ? { jobId } : {}),
+      ...(jobName ? { jobName } : {}),
       text: args.text,
       hasMedia: args.hasMedia,
     };

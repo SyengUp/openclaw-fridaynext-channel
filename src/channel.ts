@@ -18,6 +18,8 @@ import type { ChannelAccountSnapshot } from "openclaw/plugin-sdk/status-helpers"
 import { saveMediaBuffer } from "openclaw/plugin-sdk/media-store";
 import { sseEmitter } from "./sse/emitter.js";
 import { fridayNotificationsStore } from "./notifications/notifications-store.js";
+import { recentCron, recentCronAtMs } from "./notifications/cron-notification-tracker.js";
+import { recentHeartbeatAtMs } from "./notifications/heartbeat-notification-tracker.js";
 import { describeMessageActions, handleMessageAction } from "./channel-actions.js";
 import { guessMimeType, resolveMediaAttachment } from "./http/handlers/files.js";
 import { downloadRemoteMedia, isHttpUrl } from "./media-fetch.js";
@@ -40,6 +42,27 @@ function pickFirstString(source: Record<string, unknown>, keys: string[]): strin
     if (typeof val === "string" && val.trim()) return val.trim();
   }
   return undefined;
+}
+
+/**
+ * Classify an OFFLINE agent-initiated background push for the notifications inbox.
+ *
+ * A real cron/heartbeat `announce` delivery reaches the channel outbound with NO origin marker
+ * (the core resolves the session key to the friday delivery/history key, never `:cron:` /
+ * `:heartbeat`). We attribute it to whichever background trigger fired most recently within its
+ * correlation window: cron wins ties because it carries a durable job identity (jobId/name),
+ * heartbeat is a generic recurring self-check, and a bare "push" is the last resort.
+ */
+function resolveOfflineBackgroundPush(): {
+  kind: string;
+  cron: { jobId: string; name: string } | null;
+} {
+  const cron = recentCron();
+  const cronAt = recentCronAtMs();
+  const hbAt = recentHeartbeatAtMs();
+  if (cron && (hbAt == null || (cronAt ?? 0) >= hbAt)) return { kind: "cron", cron };
+  if (hbAt != null) return { kind: "heartbeat", cron: null };
+  return { kind: "push", cron: null };
 }
 
 /**
@@ -258,14 +281,18 @@ export const fridayNextChannelPlugin = createChatChannelPlugin({
       // still surfaces it on next reconnect. Key classification alone misses REAL
       // cron deliveries (the core passes no origin identity, so sessionKey resolves
       // to a device/history key, never `:cron:`) — when the device is offline the
-      // send cannot reach it live, so capture it as a generic "push" regardless.
+      // send cannot reach it live, so capture it as a "push". If a scheduled task
+      // fired within the correlation window we attribute it to that cron by name.
+      const bg = conn ? null : resolveOfflineBackgroundPush();
       fridayNotificationsStore.append({
         deviceId,
         ts: Date.now(),
         sourceSessionKey: sessionKey,
         text,
         hasMedia: false,
-        fallbackKind: conn ? null : "push",
+        fallbackKind: bg?.kind ?? null,
+        jobId: bg?.cron?.jobId,
+        jobName: bg?.cron?.name,
       });
       logger.info(
         `[SEND_TEXT] to=${deviceId} runId=${runId ?? "(none)"} sessionKey=${sessionKey ?? "(none)"} textLen=${text.length} online=${!!conn}`,
@@ -316,14 +343,18 @@ export const fridayNextChannelPlugin = createChatChannelPlugin({
       const caption = ctx.text ?? "";
 
       // Durable notification capture; before any gate. Same offline "push" fallback
-      // as sendText — real cron deliveries never carry a `:cron:` session key.
+      // as sendText — real cron deliveries never carry a `:cron:` session key, so a
+      // recently-fired scheduled task lends the push its name.
+      const bgForMedia = sseEmitter.getConnection(deviceId) ? null : resolveOfflineBackgroundPush();
       fridayNotificationsStore.append({
         deviceId,
         ts: Date.now(),
         sourceSessionKey: sessionKey,
         text: caption,
         hasMedia: true,
-        fallbackKind: sseEmitter.getConnection(deviceId) ? null : "push",
+        fallbackKind: bgForMedia?.kind ?? null,
+        jobId: bgForMedia?.cron?.jobId,
+        jobName: bgForMedia?.cron?.name,
       });
 
       if (!mediaUrl) {

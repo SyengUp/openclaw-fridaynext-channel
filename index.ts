@@ -20,6 +20,8 @@ import {
 } from "./src/friday-session.js";
 import { setFridayAgentForwardRuntime } from "./src/agent-forward-runtime.js";
 import { setUpgradeRuntime } from "./src/upgrade-runtime.js";
+import { noteCronActivity } from "./src/notifications/cron-notification-tracker.js";
+import { noteHeartbeatActivity } from "./src/notifications/heartbeat-notification-tracker.js";
 import { getOpenClawAgentRunContext } from "./src/agent-run-context-bridge.js";
 import { accumulateRunUsage } from "./src/agent/run-usage-accumulator.js";
 import { createFridayNextLogger } from "./src/logging.js";
@@ -176,6 +178,32 @@ export default defineChannelPluginEntry({
     // Make Codex (ChatGPT/OAuth) models emit reasoning summary text so the app can stream
     // "thinking". OpenClaw never sets this; we assert it on the plugin side. Best-effort.
     ensureCodexReasoningSummary((msg) => hookLogger.info(msg));
+
+    // Track scheduled-task (cron) activity so the notifications inbox can subtitle an
+    // offline background push with its originating cron job's NAME. A real `announce`
+    // cron delivery reaches the channel outbound with no cron origin (see channel.ts
+    // sendText), so we anchor on this first-party lifecycle hook instead.
+    api.on("cron_changed", (event: any) => {
+      if (event?.action !== "started" && event?.action !== "finished") return;
+      noteCronActivity(event.jobId, event.job?.name);
+      hookLogger.info(
+        `[CRON_CHANGED] action=${event.action} jobId=${event.jobId ?? "(none)"} name=${event.job?.name ?? "(none)"}`,
+      );
+    });
+
+    // Track heartbeat-run starts so the notifications inbox can label an offline background
+    // push as a "heartbeat" (not a generic "push"). Like cron, a real heartbeat `announce`
+    // delivery reaches the channel outbound with no origin marker; unlike cron, the only
+    // ordering-safe first-party signal is this run-start gate (the `onHeartbeatEvent` runtime
+    // event carries terminal statuses emitted after delivery). Conversation hook — fires
+    // because friday-next has `hooks.allowConversationAccess` enabled.
+    api.on("before_agent_run", (_event: any, ctx: any) => {
+      if (ctx?.trigger !== "heartbeat") return;
+      noteHeartbeatActivity();
+      hookLogger.info(
+        `[HEARTBEAT_RUN] runId=${ctx?.runId ?? "(none)"} sessionKey=${ctx?.sessionKey ?? "(none)"}`,
+      );
+    });
 
     api.on("subagent_delivery_target", (event: any) => {
       if (!event.expectsCompletionMessage) return;
