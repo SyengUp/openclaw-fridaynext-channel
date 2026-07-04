@@ -98,3 +98,40 @@ export async function handleNotifications(
   res.end(JSON.stringify({ ok: true, notifications, maxSeq }));
   return true;
 }
+
+/**
+ * DELETE /friday-next/notifications/:seq?deviceId=
+ *
+ * Permanently removes one notification from the device's durable server log so it can't
+ * reappear on this or any other device. Idempotent: deleting a seq that is already gone
+ * returns ok with deleted:false.
+ */
+export async function handleNotificationDelete(
+  req: IncomingMessage,
+  res: ServerResponse,
+  seqRaw: string,
+): Promise<boolean> {
+  const respond = (code: number, body: Record<string, unknown>) => {
+    res.statusCode = code;
+    res.setHeader("Content-Type", "application/json");
+    res.end(JSON.stringify(body));
+    return true;
+  };
+
+  if (req.method !== "DELETE") return respond(405, { error: "Method Not Allowed" });
+  if (!extractBearerToken(req)) {
+    return respond(401, { error: "Unauthorized: bearer token mismatch" });
+  }
+
+  const url = new URL(req.url ?? "", "http://localhost");
+  const deviceId = (url.searchParams.get("deviceId") ?? "").trim();
+  if (!deviceId) return respond(400, { error: "Missing deviceId" });
+
+  const seq = Number(seqRaw);
+  if (!Number.isFinite(seq) || !Number.isInteger(seq)) {
+    return respond(400, { error: "Invalid seq" });
+  }
+
+  const deleted = fridayNotificationsStore.delete(deviceId, seq);
+  return respond(200, { ok: true, deleted });
+}

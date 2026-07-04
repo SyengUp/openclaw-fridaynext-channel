@@ -111,4 +111,21 @@ describe("FridayNotificationsStore", () => {
     expect(all).toHaveLength(5);
     expect(all.map((n) => n.text)).toEqual(["5", "6", "7", "8", "9"]);
   });
+
+  it("delete removes one entry by seq and is idempotent", () => {
+    for (let i = 1; i <= 3; i++) {
+      store.append({ deviceId: DEV, ts: i, sourceSessionKey: "agent:main:cron:a:run:" + i, text: String(i), hasMedia: false });
+    }
+    expect(store.delete(DEV, 2)).toBe(true);
+    expect(store.readAfter(DEV, 0).map((n) => n.seq)).toEqual([1, 3]);
+    // Deleting the same seq again is a no-op (already gone).
+    expect(store.delete(DEV, 2)).toBe(false);
+    // Seq counter stays monotonic — the next append does NOT reuse 2.
+    const next = store.append({ deviceId: DEV, ts: 4, sourceSessionKey: "agent:main:cron:a:run:4", text: "4", hasMedia: false });
+    expect(next?.seq).toBe(4);
+  });
+
+  it("delete returns false for an unknown device", () => {
+    expect(store.delete("no-such-device", 1)).toBe(false);
+  });
 });

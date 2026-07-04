@@ -170,6 +170,32 @@ export class FridayNotificationsStore {
     return out;
   }
 
+  /** Permanently remove one notification (by seq) from a device's durable log. Rewrites
+   *  the JSONL without that entry. Returns true if a record was removed. seq counters stay
+   *  monotonic — the deleted seq is simply gone, never reused. */
+  delete(deviceId: string, seq: number): boolean {
+    const file = this.devicePath(deviceId);
+    if (!fs.existsSync(file)) return false;
+    const kept: FridayNotification[] = [];
+    let removed = false;
+    for (const line of fs.readFileSync(file, "utf8").split(/\r?\n/)) {
+      if (!line.trim()) continue;
+      try {
+        const o = JSON.parse(line) as FridayNotification;
+        if (typeof o.seq === "number" && o.seq === seq) {
+          removed = true;
+          continue;
+        }
+        kept.push(o);
+      } catch {
+        /* skip malformed lines */
+      }
+    }
+    if (!removed) return false;
+    fs.writeFileSync(file, kept.map((e) => JSON.stringify(e) + "\n").join(""), "utf8");
+    return true;
+  }
+
   private truncateKeepLastN(deviceId: string, keep: number): void {
     if (keep <= 0) return;
     const file = this.devicePath(deviceId);
