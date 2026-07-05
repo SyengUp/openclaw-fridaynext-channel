@@ -16,7 +16,7 @@ describe("resolveBackgroundPushKind", () => {
   });
 
   it("returns null when no background trigger fired", () => {
-    expect(resolveBackgroundPushKind()).toEqual({ kind: null, cron: null });
+    expect(resolveBackgroundPushKind()).toEqual({ kind: null, cron: null, agentId: null });
   });
 
   it("returns cron (with identity) when a cron fired recently", () => {
@@ -24,12 +24,25 @@ describe("resolveBackgroundPushKind", () => {
     expect(resolveBackgroundPushKind()).toEqual({
       kind: "cron",
       cron: { jobId: "job-1", name: "每日趣闻汇总" },
+      agentId: null,
     });
   });
 
   it("returns heartbeat when only a heartbeat fired recently", () => {
     noteHeartbeatActivity();
-    expect(resolveBackgroundPushKind()).toEqual({ kind: "heartbeat", cron: null });
+    expect(resolveBackgroundPushKind()).toEqual({ kind: "heartbeat", cron: null, agentId: null });
+  });
+
+  it("surfaces the origin agent id of the winning trigger", () => {
+    noteHeartbeatActivity(Date.now(), "hamaestro");
+    const hb = resolveBackgroundPushKind();
+    expect(hb.kind).toBe("heartbeat");
+    expect(hb.agentId).toBe("hamaestro");
+
+    noteCronActivity("job-1", "任务", "ops-bot"); // cron fresher → wins, carries its own agent
+    const cron = resolveBackgroundPushKind();
+    expect(cron.kind).toBe("cron");
+    expect(cron.agentId).toBe("ops-bot");
   });
 
   it("cron wins over heartbeat when it fired more recently", () => {

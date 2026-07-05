@@ -54,6 +54,33 @@ describe("FridayNotificationsStore", () => {
     expect(skipped).toBeNull();
   });
 
+  it("originAgentId overrides the delivery-key agent (heartbeat mis-attribution fix)", () => {
+    // A heartbeat from `hamaestro` is delivered under the app's CURRENT session key (main), so the
+    // delivery key alone would mislabel it as `main` (→ "F.R.I.D.A.Y" subtitle). The run-start
+    // tracker supplies the true origin agent, which must win.
+    const captured = store.append({
+      deviceId: DEV, ts: 1000, sourceSessionKey: "agent:main:friday-next-AAAA-BBBB",
+      text: "巡检完毕，状态正常，无需打扰。", hasMedia: false, fallbackKind: "heartbeat",
+      originAgentId: "hamaestro",
+    });
+    expect(captured?.agentId).toBe("hamaestro");
+    expect(captured?.kind).toBe("heartbeat");
+  });
+
+  it("originAgentId is normalized (trim/lowercase) and blank falls back to the key", () => {
+    const upper = store.append({
+      deviceId: DEV, ts: 1000, sourceSessionKey: "agent:main:main:heartbeat",
+      text: "hb", hasMedia: false, originAgentId: "  HaMaestro  ",
+    });
+    expect(upper?.agentId).toBe("hamaestro");
+
+    const blank = store.append({
+      deviceId: DEV, ts: 2000, sourceSessionKey: "agent:ha-maestro:main:heartbeat",
+      text: "hb2", hasMedia: false, originAgentId: "   ",
+    });
+    expect(blank?.agentId).toBe("ha-maestro"); // blank override → derive from the key
+  });
+
   it("fallbackKind captures unclassified keys (real cron deliveries carry no :cron: key)", () => {
     // Offline device: a real cron delivery resolves to a device/history session key —
     // classification misses it, so the caller passes fallbackKind "push".

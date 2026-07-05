@@ -13,17 +13,22 @@
  * notifications inbox is their durable record. Returns `kind: null` for a normal reply.
  */
 
-import { recentCron, recentCronAtMs } from "./cron-notification-tracker.js";
-import { recentHeartbeatAtMs } from "./heartbeat-notification-tracker.js";
+import { recentCron, recentCronAtMs, recentCronAgentId } from "./cron-notification-tracker.js";
+import { recentHeartbeatAtMs, recentHeartbeatAgentId } from "./heartbeat-notification-tracker.js";
 
 export function resolveBackgroundPushKind(): {
   kind: "cron" | "heartbeat" | null;
   cron: { jobId: string; name: string } | null;
+  // The originating agent's id when the winning trigger carries it (else null). Lets the caller
+  // attribute the push to the agent that actually ran it, not the delivery-routing session's agent.
+  agentId: string | null;
 } {
   const cron = recentCron();
   const cronAt = recentCronAtMs();
   const hbAt = recentHeartbeatAtMs();
-  if (cron && (hbAt == null || (cronAt ?? 0) >= hbAt)) return { kind: "cron", cron };
-  if (hbAt != null) return { kind: "heartbeat", cron: null };
-  return { kind: null, cron: null };
+  if (cron && (hbAt == null || (cronAt ?? 0) >= hbAt)) {
+    return { kind: "cron", cron, agentId: recentCronAgentId() };
+  }
+  if (hbAt != null) return { kind: "heartbeat", cron: null, agentId: recentHeartbeatAgentId() };
+  return { kind: null, cron: null, agentId: null };
 }

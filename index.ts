@@ -185,9 +185,13 @@ export default defineChannelPluginEntry({
     // sendText), so we anchor on this first-party lifecycle hook instead.
     api.on("cron_changed", (event: any) => {
       if (event?.action !== "started" && event?.action !== "finished") return;
-      noteCronActivity(event.jobId, event.job?.name);
+      // Best-effort origin agent so the notifications inbox attributes the push to the job's
+      // owning agent, not the delivery session's (usually the app's current `main`). Falls back
+      // to the session-key derivation when the event doesn't carry it — no regression.
+      const cronAgentId = event.job?.agentId ?? event.agentId ?? undefined;
+      noteCronActivity(event.jobId, event.job?.name, cronAgentId);
       hookLogger.info(
-        `[CRON_CHANGED] action=${event.action} jobId=${event.jobId ?? "(none)"} name=${event.job?.name ?? "(none)"}`,
+        `[CRON_CHANGED] action=${event.action} jobId=${event.jobId ?? "(none)"} name=${event.job?.name ?? "(none)"} agent=${cronAgentId ?? "(none)"}`,
       );
     });
 
@@ -199,9 +203,16 @@ export default defineChannelPluginEntry({
     // because friday-next has `hooks.allowConversationAccess` enabled.
     api.on("before_agent_run", (_event: any, ctx: any) => {
       if (ctx?.trigger !== "heartbeat") return;
-      noteHeartbeatActivity();
+      // The heartbeat run's `agent:<id>:…:heartbeat` origin key is the ONLY reliable carrier of the
+      // agent that ran it — the later outbound delivery resolves to the app's current session agent
+      // (usually `main`). Extract it here so the inbox subtitle reads the true origin. undefined on
+      // no-match → the store falls back to the delivery-key derivation (no regression).
+      const originAgentId = String(ctx?.sessionKey ?? "")
+        .match(/^agent:([^:]+):/i)?.[1]
+        ?.toLowerCase();
+      noteHeartbeatActivity(Date.now(), originAgentId);
       hookLogger.info(
-        `[HEARTBEAT_RUN] runId=${ctx?.runId ?? "(none)"} sessionKey=${ctx?.sessionKey ?? "(none)"}`,
+        `[HEARTBEAT_RUN] runId=${ctx?.runId ?? "(none)"} sessionKey=${ctx?.sessionKey ?? "(none)"} agent=${originAgentId ?? "(none)"}`,
       );
     });
 

@@ -161,6 +161,11 @@ export class FridayNotificationsStore {
     fallbackKind?: string | null;
     jobId?: string;
     jobName?: string;
+    // Origin agent id for a background push (cron/heartbeat). The delivery `sourceSessionKey`
+    // resolves to the app's CURRENT session agent, not the agent that ran the background job, so
+    // deriving the agent from it mislabels every non-main agent's push as `main`. When the caller
+    // knows the true origin (from the run-start trackers) it passes it here to override.
+    originAgentId?: string | null;
   }): FridayNotification | null {
     const kind = classifyNotificationKind(args.sourceSessionKey) ?? args.fallbackKind ?? null;
     if (!kind) return null;
@@ -169,10 +174,11 @@ export class FridayNotificationsStore {
 
     const jobId = args.jobId?.trim();
     const jobName = args.jobName?.trim();
+    const originAgentId = args.originAgentId?.trim().toLowerCase();
     const entry: FridayNotification = {
       seq: this.nextSeq(deviceId),
       ts: args.ts,
-      agentId: agentIdFromKey(args.sourceSessionKey ?? ""),
+      agentId: originAgentId || agentIdFromKey(args.sourceSessionKey ?? ""),
       kind,
       sourceSessionKey: args.sourceSessionKey ?? "",
       ...(jobId ? { jobId } : {}),

@@ -22,10 +22,22 @@
 const WINDOW_MS = 10 * 60_000;
 
 let atMs: number | null = null;
+// The originating agent's id (from the heartbeat run's `agent:<id>:…:heartbeat` session key).
+// A heartbeat's outbound delivery reaches the channel with a device/history session key that
+// resolves to the app's CURRENT session agent (usually `main`), NOT the agent that actually ran
+// the heartbeat — so without this the notifications inbox mis-attributes every non-main agent's
+// heartbeat to `main`. Captured here at run start (the only carrier of the true origin identity).
+let originAgentId: string | null = null;
 
-/** Record a heartbeat run starting (from `before_agent_run` with `trigger === "heartbeat"`). */
-export function noteHeartbeatActivity(nowMs: number = Date.now()): void {
+/** Record a heartbeat run starting (from `before_agent_run` with `trigger === "heartbeat"`).
+ *  `agentId` is the run's origin agent (extracted from `ctx.sessionKey`) so the outbound capture
+ *  can attribute the push to it instead of the delivery-routing session's agent. */
+export function noteHeartbeatActivity(
+  nowMs: number = Date.now(),
+  agentId?: string | null,
+): void {
   atMs = nowMs;
+  originAgentId = agentId?.trim() || null;
 }
 
 /** The start timestamp of a heartbeat run that fired within the window, else null. Returning
@@ -37,7 +49,14 @@ export function recentHeartbeatAtMs(nowMs: number = Date.now()): number | null {
   return atMs;
 }
 
+/** The origin agent id of a heartbeat run that fired within the window, else null. */
+export function recentHeartbeatAgentId(nowMs: number = Date.now()): string | null {
+  if (atMs == null || nowMs - atMs > WINDOW_MS) return null;
+  return originAgentId;
+}
+
 /** Test-only reset. */
 export function resetHeartbeatNotificationTrackerForTest(): void {
   atMs = null;
+  originAgentId = null;
 }

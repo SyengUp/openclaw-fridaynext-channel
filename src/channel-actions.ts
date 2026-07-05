@@ -145,6 +145,7 @@ async function handleSend(ctx: MessageActionCtx): Promise<unknown> {
       fallbackKind: bg.kind ?? (conn ? null : "push"),
       jobId: bg.cron?.jobId,
       jobName: bg.cron?.name,
+      originAgentId: bg.agentId,
     });
   }
 

@@ -12,7 +12,7 @@
  * same moment the delivery happens. We anchor on it and tag pushes within the window.
  */
 
-type ActiveCron = { jobId: string; name: string; atMs: number };
+type ActiveCron = { jobId: string; name: string; atMs: number; agentId: string | null };
 
 // A cron run's `started` fires when the agent turn begins and `finished` when it completes
 // and delivers; the announce delivery lands right around `finished`. Keep the window wide
@@ -21,11 +21,17 @@ const WINDOW_MS = 15 * 60_000;
 
 let active: ActiveCron | null = null;
 
-/** Record cron activity from a `cron_changed` started/finished event. */
-export function noteCronActivity(jobId: string | undefined, name: string | undefined | null): void {
+/** Record cron activity from a `cron_changed` started/finished event. `agentId` (when the event
+ *  carries it) is the job's owning agent, so the outbound capture can attribute the push to it
+ *  rather than to the delivery-routing session's agent (which is usually the app's current one). */
+export function noteCronActivity(
+  jobId: string | undefined,
+  name: string | undefined | null,
+  agentId?: string | null,
+): void {
   const id = (jobId ?? "").trim();
   if (!id) return;
-  active = { jobId: id, name: (name ?? "").trim(), atMs: Date.now() };
+  active = { jobId: id, name: (name ?? "").trim(), atMs: Date.now(), agentId: agentId?.trim() || null };
 }
 
 /** The active cron's { jobId, name } if one fired within the window, else null. The
@@ -48,6 +54,12 @@ export function recentCronAtMs(nowMs: number = Date.now()): number | null {
   if (!active) return null;
   if (nowMs - active.atMs > WINDOW_MS) return null;
   return active.atMs;
+}
+
+/** The owning agent id of a cron job that fired within the window, else null. */
+export function recentCronAgentId(nowMs: number = Date.now()): string | null {
+  if (!active || nowMs - active.atMs > WINDOW_MS) return null;
+  return active.agentId;
 }
 
 /** Test-only reset. */

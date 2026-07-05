@@ -3,6 +3,7 @@ import {
   noteCronActivity,
   recentCron,
   recentCronJobName,
+  recentCronAgentId,
   resetCronNotificationTrackerForTest,
 } from "./cron-notification-tracker.js";
 
@@ -50,5 +51,12 @@ describe("cron-notification-tracker", () => {
     noteCronActivity("job-1", "自动化");
     noteCronActivity("job-2", "每日简报");
     expect(recentCronJobName()).toBe("每日简报");
+  });
+
+  it("records the owning agent id when the event carries it, null otherwise", () => {
+    noteCronActivity("job-1", "自动化", "ops-bot");
+    expect(recentCronAgentId()).toBe("ops-bot");
+    noteCronActivity("job-2", "简报"); // no agent → null
+    expect(recentCronAgentId()).toBeNull();
   });
 });

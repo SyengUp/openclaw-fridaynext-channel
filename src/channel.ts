@@ -274,6 +274,7 @@ export const fridayNextChannelPlugin = createChatChannelPlugin({
         fallbackKind: bg.kind ?? (conn ? null : "push"),
         jobId: bg.cron?.jobId,
         jobName: bg.cron?.name,
+        originAgentId: bg.agentId,
       });
       logger.info(
         `[SEND_TEXT] to=${deviceId} runId=${runId ?? "(none)"} sessionKey=${sessionKey ?? "(none)"} textLen=${text.length} online=${!!conn}`,
@@ -336,6 +337,7 @@ export const fridayNextChannelPlugin = createChatChannelPlugin({
         fallbackKind: bgForMedia.kind ?? (sseEmitter.getConnection(deviceId) ? null : "push"),
         jobId: bgForMedia.cron?.jobId,
         jobName: bgForMedia.cron?.name,
+        originAgentId: bgForMedia.agentId,
       });
 
       if (!mediaUrl) {
