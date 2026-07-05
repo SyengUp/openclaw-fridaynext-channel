@@ -1,6 +1,9 @@
 {
   "id": "friday-next",
   "channels": ["friday-next"],
+  "contracts": {
+    "gatewayMethodDispatch": ["authenticated-request"]
+  },
   "configSchema": {
     "type": "object",
     "additionalProperties": false,

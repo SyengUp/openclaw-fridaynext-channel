@@ -29,6 +29,7 @@ import { handleLinkPreview } from "./handlers/link-preview.js";
 import { handleHealth } from "./handlers/health.js";
 import { handlePluginInfo } from "./handlers/plugin-info.js";
 import { handlePluginUpgrade } from "./handlers/plugin-upgrade.js";
+import { handleSessionDelete } from "./handlers/session-delete.js";
 import { applyCorsHeaders } from "./middleware/cors.js";
 import { resolveFridayNextConfig } from "../config.js";
 import { getHostOpenClawConfigSnapshot } from "../host-config.js";
@@ -184,6 +185,8 @@ export function registerFridayNextHttpRoutes(api: {
     handler: (req: IncomingMessage, res: ServerResponse) => Promise<boolean>;
     auth: string;
     match: string;
+    /** Operator-scope surface for `auth: "gateway"` routes (e.g. "trusted-operator"). */
+    gatewayRuntimeScopeSurface?: string;
   }) => void;
 }): void {
   const cfg = resolveFridayNextConfig(getHostOpenClawConfigSnapshot(getFridayNextRuntime().config));
@@ -198,6 +201,20 @@ export function registerFridayNextHttpRoutes(api: {
     handler: handleFridayNextRoute,
     auth: "plugin",
     match: "prefix",
+  });
+
+  // Permanent server-side session deletion. Registered under a SIBLING prefix
+  // (`/friday-next-admin`, not `/friday-next`) because a gateway-authed route
+  // cannot overlap the `/friday-next` `auth: "plugin"` prefix (core rejects
+  // overlapping routes with mismatched auth). `auth: "gateway"` +
+  // "trusted-operator" grants the `operator.admin` scope that `sessions.delete`
+  // requires; the shared-secret bearer the app already sends satisfies it.
+  api.registerHttpRoute({
+    path: "/friday-next-admin/sessions",
+    handler: handleSessionDelete,
+    auth: "gateway",
+    match: "exact",
+    gatewayRuntimeScopeSurface: "trusted-operator",
   });
 
   api.logger.info("Friday Next channel HTTP routes registered at /friday-next/*");
