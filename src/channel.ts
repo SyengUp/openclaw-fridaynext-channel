@@ -29,6 +29,7 @@ import {
   getLastRegisteredFridayDeviceId,
 } from "./friday-session.js";
 import { getRunRoute } from "./run-metadata.js";
+import { isOperatorToolResultEnvelope } from "./operator-tool-result.js";
 import { getLastFridayInboundAt } from "./friday-inbound-stats.js";
 import { fridayApprovalCapability } from "./approval/friday-approval-capability.js";
 
@@ -243,6 +244,24 @@ export const fridayNextChannelPlugin = createChatChannelPlugin({
       const text = ctx.text ?? "";
       const rawCtx = ctx as unknown as Record<string, unknown>;
       const deviceId = resolveFridayDeviceIdForOutbound(ctx.to, rawCtx);
+
+      // Silence core operator/admin tool-result receipts (gateway.restart, config
+      // mutations, …). They deliver on the user's normal main session and are
+      // indistinguishable by session key / kind / agentId from a real reply, so the
+      // text envelope is the only discriminator (see operator-tool-result.ts). These
+      // infra confirmations carry no reading value: skip BOTH the durable notification
+      // AND the live SSE broadcast — full silence.
+      if (isOperatorToolResultEnvelope(text)) {
+        logger.info(
+          `[SEND_TEXT] suppressed operator tool-result receipt to=${deviceId} textLen=${text.length}`,
+        );
+        return {
+          channel: CHANNEL_ID,
+          messageId: crypto.randomUUID(),
+          timestamp: Date.now(),
+        };
+      }
+
       const runIdFromCtx = pickFirstString(rawCtx, [
         "parentRunId",
         "requesterRunId",
