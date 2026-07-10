@@ -118,3 +118,40 @@ describe("inbound user attachments (core media-store renames to a bare uuid)", (
     fs.rmSync(path.dirname(inboundPath), { recursive: true, force: true });
   });
 });
+
+describe("duplicate media dedup (same source resolved twice)", () => {
+  let srcDir: string;
+
+  beforeEach(() => {
+    srcDir = fs.mkdtempSync(path.join(os.tmpdir(), "fn-src-"));
+  });
+  afterEach(() => {
+    fs.rmSync(srcDir, { recursive: true, force: true });
+  });
+
+  it("resolving the same generated image twice reuses one attachment url", () => {
+    // Repro: core hands the same generated image in as both `mediaUrl` and `mediaUrls[0]`,
+    // so `resolveMediaAttachment` ran twice on the same path and minted two uuids → the app
+    // rendered a duplicate primary + extra image.
+    const src = path.join(srcDir, "ig_generated.png");
+    fs.writeFileSync(src, Buffer.from("PNG-bytes-one-generated-image"));
+
+    const first = resolveMediaAttachment(src);
+    const second = resolveMediaAttachment(src);
+
+    expect(first).not.toBeNull();
+    expect(second).not.toBeNull();
+    expect(second!.url).toBe(first!.url);
+  });
+
+  it("re-copies when a reused path holds genuinely different bytes", () => {
+    const src = path.join(srcDir, "reused.png");
+    fs.writeFileSync(src, Buffer.from("v1"));
+    const first = resolveMediaAttachment(src);
+
+    fs.writeFileSync(src, Buffer.from("v2-different-size"));
+    const second = resolveMediaAttachment(src);
+
+    expect(second!.url).not.toBe(first!.url);
+  });
+});

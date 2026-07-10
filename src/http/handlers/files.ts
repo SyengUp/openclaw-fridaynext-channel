@@ -60,6 +60,17 @@ export interface StoredFile {
 const fileIndex = new Map<string, StoredFile>();
 const fileTokenIndex = new Map<string, StoredFile>();
 const externalFileSourceIndex = new Map<string, string>();
+/**
+ * Dedup repeated copies of the SAME unchanged source file, keyed by resolved path + mtime + size.
+ *
+ * A single generated image reaches us as BOTH `params.mediaUrl` (the back-compat single, = the
+ * first entry) AND `params.mediaUrls[0]` — see `messages.ts` reply media resolution. Each was
+ * copied independently by `copyLocalFileToAttachments`, minting a fresh uuid, so the app received
+ * the same picture twice (primary + one extra attachment). Memoizing the copy by source identity
+ * makes both resolves return one stored file → one url → the app's url-dedup collapses them.
+ * Keyed on mtime+size so a genuinely different file at a reused path still gets a fresh copy.
+ */
+const copiedSourceIndex = new Map<string, StoredFile>();
 
 const logger = createFridayNextLogger("files");
 
@@ -79,6 +90,7 @@ export function clearFileIndexForTest(): void {
   fileIndex.clear();
   fileTokenIndex.clear();
   externalFileSourceIndex.clear();
+  copiedSourceIndex.clear();
 }
 
 /**
@@ -209,6 +221,12 @@ function copyLocalFileToAttachments(
   if (!filename) return null;
   try {
     if (!fs.existsSync(resolvedPath) || !fs.statSync(resolvedPath).isFile()) return null;
+    // Reuse an earlier copy of this exact source (same path, mtime, size) instead of minting a
+    // second attachment for the same bytes — see `copiedSourceIndex`.
+    const st = fs.statSync(resolvedPath);
+    const sourceKey = `${resolvedPath}:${st.mtimeMs}:${st.size}`;
+    const cached = copiedSourceIndex.get(sourceKey);
+    if (cached && fs.existsSync(cached.path)) return cached;
     const id = crypto.randomUUID();
     const ext = path.extname(filename) || path.extname(diskBasename);
     const urlToken = ext ? `${id}${ext}` : id;
@@ -237,6 +255,7 @@ function copyLocalFileToAttachments(
     };
     registerStoredFile(file);
     writeAttachmentMetaSidecar(urlToken, filename, mimeType);
+    copiedSourceIndex.set(sourceKey, file);
     return file;
   } catch (err) {
     logger.error(`copyLocalFileToAttachments failed for "${resolvedPath}": ${String(err)}`);
