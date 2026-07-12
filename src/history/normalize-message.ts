@@ -316,10 +316,25 @@ export function normalizeHistoryMessage(raw: unknown, index: number): FridayHist
   return message;
 }
 
-/** Normalize a batch of raw transcript messages, dropping unparseable entries. */
+/**
+ * Normalize a batch of raw transcript messages, dropping unparseable entries.
+ *
+ * Also collapses records sharing an `idempotencyKey` (first record wins).
+ * Codex-backed sessions can persist the same user prompt twice — once at run
+ * start and once inside the run-end mirror batch — with distinct transcript
+ * entry ids but the identical key (an upstream session-cache bug the key was
+ * meant to prevent); without this the app renders duplicate user bubbles on
+ * every history rebuild. Records without a key are never collapsed.
+ */
 export function normalizeHistoryMessages(rawMessages: unknown[]): FridayHistoryMessage[] {
   const out: FridayHistoryMessage[] = [];
+  const seenIdempotencyKeys = new Set<string>();
   for (let i = 0; i < rawMessages.length; i += 1) {
+    const idempotencyKey = readString(asRecord(rawMessages[i])?.idempotencyKey);
+    if (idempotencyKey) {
+      if (seenIdempotencyKeys.has(idempotencyKey)) continue;
+      seenIdempotencyKeys.add(idempotencyKey);
+    }
     const normalized = normalizeHistoryMessage(rawMessages[i], i);
     if (normalized) out.push(normalized);
   }

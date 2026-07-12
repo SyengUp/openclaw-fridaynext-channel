@@ -235,4 +235,42 @@ describe("normalizeHistoryMessages", () => {
     ]);
     expect(result.map((m) => m.id)).toEqual(["a", "b"]);
   });
+
+  // Codex-backed sessions can persist the SAME user prompt twice — once at run
+  // start and once inside the run-end mirror batch — with distinct transcript
+  // entry ids but an identical `idempotencyKey` (a core session-cache bug the
+  // key was meant to prevent). Collapse those here so history rebuild doesn't
+  // render duplicate user bubbles; the first (send-time) record wins.
+  it("collapses entries sharing an idempotencyKey, keeping the first", () => {
+    const key = "codex-app-server:019f56de…1cc3:prompt";
+    const result = normalizeHistoryMessages([
+      {
+        role: "user",
+        content: "hello",
+        idempotencyKey: key,
+        __openclaw: { id: "first", seq: 1 },
+      },
+      {
+        role: "user",
+        content: "hello",
+        idempotencyKey: key,
+        __openclaw: { id: "mirror-dup", seq: 2 },
+      },
+      {
+        role: "assistant",
+        content: "hi",
+        idempotencyKey: "codex-app-server:019f56de…1cc3:assistant",
+        __openclaw: { id: "reply", seq: 3 },
+      },
+    ]);
+    expect(result.map((m) => m.id)).toEqual(["first", "reply"]);
+  });
+
+  it("does not collapse distinct messages lacking an idempotencyKey", () => {
+    const result = normalizeHistoryMessages([
+      { role: "user", content: "same text", __openclaw: { id: "u1", seq: 1 } },
+      { role: "user", content: "same text", __openclaw: { id: "u2", seq: 2 } },
+    ]);
+    expect(result.map((m) => m.id)).toEqual(["u1", "u2"]);
+  });
 });
