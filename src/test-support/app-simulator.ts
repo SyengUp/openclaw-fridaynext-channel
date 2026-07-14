@@ -67,19 +67,42 @@ class MockRes extends Writable {
   }
 }
 
-function createRouteHarness() {
-  let routeHandler:
-    | ((req: Readable & { method?: string; url?: string }, res: Writable) => Promise<boolean>)
-    | null = null;
+type HarnessHandler = (
+  req: Readable & { method?: string; url?: string },
+  res: Writable,
+) => Promise<boolean>;
+
+function createRouteHarness(): HarnessHandler {
+  // Mirror the gateway's route table: registerFridayNextHttpRoutes registers
+  // MULTIPLE routes (the /friday-next prefix + siblings like /friday-next-admin/*),
+  // so the harness must dispatch by path like the real server — keeping only the
+  // last-registered handler silently routes every request to the wrong endpoint.
+  const routes: Array<{ path: string; match: string; handler: HarnessHandler }> = [];
   const fakeApi = {
     logger: { info: () => {}, warn: () => {}, error: () => {}, debug: () => {} },
-    registerHttpRoute(route: { handler: (req: never, res: never) => Promise<boolean> }) {
-      routeHandler = route.handler as never;
+    registerHttpRoute(route: {
+      path: string;
+      match: string;
+      handler: (req: never, res: never) => Promise<boolean>;
+    }) {
+      routes.push({ path: route.path, match: route.match, handler: route.handler as never });
     },
   };
   registerFridayNextHttpRoutes(fakeApi as never);
-  if (!routeHandler) throw new Error("route handler not registered");
-  return routeHandler;
+  if (routes.length === 0) throw new Error("route handler not registered");
+  return async (req, res) => {
+    const pathname = new URL(req.url ?? "/", "http://localhost").pathname;
+    // Longest-path match first so /friday-next-admin/* wins over the /friday-next prefix.
+    const sorted = [...routes].sort((a, b) => b.path.length - a.path.length);
+    for (const route of sorted) {
+      const matched =
+        route.match === "exact"
+          ? pathname === route.path
+          : pathname === route.path || pathname.startsWith(`${route.path}/`);
+      if (matched) return route.handler(req, res);
+    }
+    throw new Error(`no registered route matches ${pathname}`);
+  };
 }
 
 function parseSseFrames(rawChunks: string[]): SseFrame[] {

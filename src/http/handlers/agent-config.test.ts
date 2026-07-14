@@ -58,8 +58,22 @@ function setRuntimes(config: Record<string, unknown>, workspace?: string): void 
 }
 
 describe("handleAgentConfig", () => {
-  beforeEach(() => setMockRuntime());
+  // Skill discovery scans the personal `~/.agents/skills` dir (an "extra" source),
+  // so real skills on the dev machine leak into availableSkills assertions unless
+  // HOME points at an isolated temp dir (os.homedir() honors $HOME on POSIX).
+  let savedHome: string | undefined;
+  let isolatedHome = "";
+
+  beforeEach(() => {
+    setMockRuntime();
+    savedHome = process.env.HOME;
+    isolatedHome = fs.mkdtempSync(path.join(os.tmpdir(), "agent-config-home-"));
+    process.env.HOME = isolatedHome;
+  });
   afterEach(() => {
+    if (savedHome === undefined) delete process.env.HOME;
+    else process.env.HOME = savedHome;
+    fs.rmSync(isolatedHome, { recursive: true, force: true });
     resetFridayAgentForwardRuntimeForTest();
     resetUpgradeRuntimeForTest();
   });
