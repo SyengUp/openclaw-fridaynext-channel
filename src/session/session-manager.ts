@@ -1,6 +1,6 @@
 import { join } from "node:path";
 import os from "node:os";
-import { readFileSync, utimesSync, writeFileSync } from "node:fs";
+import { readFileSync, writeFileSync } from "node:fs";
 import { getFridayAgentForwardRuntime } from "../agent-forward-runtime.js";
 
 const FRIDAY_AGENT_ID = "main";
@@ -193,33 +193,6 @@ export function setSessionSettings(
     return readSettingsFromEntry(data[fileKey]);
   } catch {
     return {};
-  }
-}
-
-/**
- * WORKAROUND for an OpenClaw core bug (present through v2026.6.11) — remove once fixed upstream.
- *
- * Core's reply-session init CAS compares a revision loaded fresh from disk against one taken
- * from its in-memory session-store cache (45s TTL). After a new/rolled-over session's first run
- * rebuilds `skillsSnapshot`, the cached entry and its disk round-trip form stringify differently
- * (prompt key first in memory vs last after blob projection + rehydration), so every dispatch
- * within the cache TTL fails with "reply session initialization conflicted" — and the failure
- * path re-arms the poisoned cache. Bumping the store file's mtime invalidates that cache, so a
- * single dispatch retry reads consistent state from disk and succeeds.
- *
- * TODO(openclaw-upgrade): after each OpenClaw core update, re-test (new session → first run →
- * second message within 45s) and delete this workaround + its call site once upstream compares
- * canonical forms. See memory `reply-session-init-conflicted-rootcause`.
- */
-export function bumpSessionStoreMtime(sessionKey: string, historyDir?: string): boolean {
-  try {
-    const fileKey = toSessionStoreKey(sessionKey);
-    const sessionsFile = resolveSessionsFilePath(historyDir, agentIdFromSessionKey(fileKey));
-    const now = new Date();
-    utimesSync(sessionsFile, now, now);
-    return true;
-  } catch {
-    return false;
   }
 }
 

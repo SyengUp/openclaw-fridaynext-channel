@@ -1,18 +1,9 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import {
-  mkdtempSync,
-  mkdirSync,
-  writeFileSync,
-  readFileSync,
-  rmSync,
-  statSync,
-  utimesSync,
-} from "node:fs";
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import {
   agentIdFromSessionKey,
-  bumpSessionStoreMtime,
   toSessionStoreKey,
   setSessionSettings,
   getSessionSettings,
@@ -139,20 +130,4 @@ describe("per-agent session settings file routing", () => {
     expect(entry.providerOverride).toBe("openai");
   });
 
-  it("bumpSessionStoreMtime advances the store file mtime without touching content", () => {
-    const file = seedSessionsFile("main");
-    const before = JSON.parse(readFileSync(file, "utf-8")) as Record<string, unknown>;
-    const past = new Date(Date.now() - 60_000);
-    utimesSync(file, past, past);
-    const mtimeBefore = statSync(file).mtimeMs;
-
-    expect(bumpSessionStoreMtime("agent:main:fridaynext:abc", historyDir)).toBe(true);
-
-    expect(statSync(file).mtimeMs).toBeGreaterThan(mtimeBefore);
-    expect(JSON.parse(readFileSync(file, "utf-8"))).toEqual(before);
-  });
-
-  it("bumpSessionStoreMtime returns false when the store file is missing", () => {
-    expect(bumpSessionStoreMtime("agent:ghost:fridaynext:abc", historyDir)).toBe(false);
-  });
 });

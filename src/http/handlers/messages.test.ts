@@ -196,9 +196,7 @@ describe("handleMessages dispatch context (owner fields)", () => {
   });
 });
 
-describe("handleMessages reply-session init-conflict retry (OpenClaw core bug workaround)", () => {
-  const CONFLICT = "Error: reply session initialization conflicted for agent:main:fridaynext:x";
-
+describe("handleMessages dispatch error path", () => {
   afterEach(() => {
     clearFridayNextRuntime();
     __resetMockFridayDispatchForTests();
@@ -230,69 +228,7 @@ describe("handleMessages reply-session init-conflict retry (OpenClaw core bug wo
     return out;
   }
 
-  it("retries once and stays silent when the conflict is thrown then resolves", async () => {
-    setRuntime();
-    const broadcasts = collectDispatchErrors();
-    let calls = 0;
-    const secondCall = new Promise<void>((resolve) => {
-      __setMockFridayDispatchForTests(() => {
-        calls += 1;
-        if (calls === 1) return Promise.reject(new Error(CONFLICT));
-        resolve();
-        return Promise.resolve();
-      });
-    });
-
-    await postMessage();
-    await secondCall;
-
-    expect(calls).toBe(2);
-    expect(broadcasts.errors).toEqual([]);
-  });
-
-  it("retries once when the conflict arrives via the onError callback", async () => {
-    setRuntime();
-    const broadcasts = collectDispatchErrors();
-    let calls = 0;
-    const secondCall = new Promise<void>((resolve) => {
-      __setMockFridayDispatchForTests((args: unknown) => {
-        const a = args as { dispatcherOptions?: { onError?: (err: unknown) => void } };
-        calls += 1;
-        if (calls === 1) {
-          a.dispatcherOptions?.onError?.(new Error(CONFLICT));
-          return Promise.resolve();
-        }
-        resolve();
-        return Promise.resolve();
-      });
-    });
-
-    await postMessage();
-    await secondCall;
-
-    expect(calls).toBe(2);
-    expect(broadcasts.errors).toEqual([]);
-  });
-
-  it("surfaces the error when the retry conflicts again, without a third attempt", async () => {
-    setRuntime();
-    const broadcasts = collectDispatchErrors();
-    let calls = 0;
-    __setMockFridayDispatchForTests(() => {
-      calls += 1;
-      return Promise.reject(new Error(CONFLICT));
-    });
-
-    await postMessage();
-    await vi.waitFor(() => {
-      expect(broadcasts.errors.length).toBe(1);
-    });
-
-    expect(calls).toBe(2);
-    expect(broadcasts.errors[0]).toContain("initialization conflicted");
-  });
-
-  it("does not retry on unrelated dispatch errors", async () => {
+  it("broadcasts a dispatch_error once when the dispatch rejects", async () => {
     setRuntime();
     const broadcasts = collectDispatchErrors();
     let calls = 0;

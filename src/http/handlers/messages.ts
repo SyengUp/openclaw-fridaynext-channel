@@ -29,7 +29,6 @@ import { wasRecentlyUserAborted } from "../../agent/recent-aborts.js";
 import { getHostOpenClawConfigSnapshot } from "../../host-config.js";
 import { getFridayNextRuntime } from "../../runtime.js";
 import {
-  bumpSessionStoreMtime,
   resolveAgentDefaults,
   setSessionSettings,
   splitModelRef,
@@ -572,46 +571,18 @@ export async function handleMessages(req: IncomingMessage, res: ServerResponse):
     CommandSource: isSlashCommand ? ("native" as const) : undefined,
   };
 
-  // OpenClaw core bug workaround (see bumpSessionStoreMtime): a session's first run can leave
-  // core's 45s session-store cache stringify-divergent from disk, making every dispatch fail
-  // with this exact error until the cache expires. Detect it, invalidate the cache via an mtime
-  // bump, and retry the dispatch once. Any other error keeps the original single-attempt flow.
-  const isReplySessionInitConflict = (err: unknown): boolean =>
-    String(err).includes("reply session initialization conflicted");
-
   const runAgent = async () => {
     try {
-      for (let attempt = 0; attempt < 2; attempt += 1) {
-        let retriableConflict = false;
-        const takeConflictForRetry = (err: unknown): boolean => {
-          if (attempt > 0 || !isReplySessionInitConflict(err)) return false;
-          retriableConflict = true;
-          return true;
-        };
-        const completed = await runAgentAttempt(takeConflictForRetry);
-        if (!retriableConflict) {
-          if (completed) log("RUN_COMPLETE", normalizedDeviceId, runId);
-          return;
-        }
-        const bumped = bumpSessionStoreMtime(baseSessionKey, cfg.historyDir);
-        log(
-          "INIT_CONFLICT_RETRY",
-          normalizedDeviceId,
-          runId,
-          `sessionKey=${baseSessionKey} storeMtimeBumped=${bumped}`,
-          "warn",
-        );
-      }
+      const completed = await runAgentAttempt();
+      if (completed) log("RUN_COMPLETE", normalizedDeviceId, runId);
     } finally {
       sseEmitter.untrackRun(runId);
     }
   };
 
-  // Runs one dispatch attempt. Returns true when the dispatch resolved without a
-  // conflict taken for retry; false when the error path already handled the outcome.
-  const runAgentAttempt = async (
-    takeConflictForRetry: (err: unknown) => boolean,
-  ): Promise<boolean> => {
+  // Runs the dispatch. Returns true when it resolved cleanly; false when the
+  // error path already handled the outcome.
+  const runAgentAttempt = async (): Promise<boolean> => {
     try {
       await runFridayDispatch({
         ctx: msgContext,
@@ -662,9 +633,6 @@ export async function handleMessages(req: IncomingMessage, res: ServerResponse):
             }
           },
           onError: (err: unknown) => {
-            if (takeConflictForRetry(err)) {
-              return;
-            }
             if (wasRecentlyUserAborted(baseSessionKey)) {
               return;
             }
@@ -741,9 +709,6 @@ export async function handleMessages(req: IncomingMessage, res: ServerResponse):
       });
       return true;
     } catch (err) {
-      if (takeConflictForRetry(err)) {
-        return false;
-      }
       log("RUN_ERROR", normalizedDeviceId, runId, String(err), "error");
       sseEmitter.broadcastToRun(
         runId,
