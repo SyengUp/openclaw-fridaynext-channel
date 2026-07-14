@@ -110,6 +110,41 @@ async function locateChannelRegistryFns(): Promise<ChannelRegistryFns | null> {
   return null;
 }
 
+/**
+ * OpenClaw ≥2026.7.1 stopped re-exporting `buildToolsCatalogResult` from the
+ * tools-catalog chunk — it now exports only `toolsCatalogHandlers`, the gateway
+ * method-handler map (`{"tools.catalog": ({params, respond, context}) => …}`).
+ * The handler is synchronous and only reads `context.getRuntimeConfig()`, so we can
+ * drive it with our own cfg and capture the respond() payload to recover the exact
+ * same catalog the old direct export produced.
+ * Exported for tests.
+ */
+export function adaptToolsCatalogHandler(handler: unknown): BuildFn | null {
+  if (typeof handler !== "function") return null;
+  return ({ cfg, agentId, includePlugins }) => {
+    let result: CoreCatalogResult | undefined;
+    let failure: unknown;
+    (
+      handler as (args: {
+        params: unknown;
+        respond: (ok: boolean, payload?: unknown, error?: unknown) => void;
+        context: { getRuntimeConfig: () => unknown };
+      }) => void
+    )({
+      params: { agentId, includePlugins },
+      respond: (ok, payload, error) => {
+        if (ok) result = payload as CoreCatalogResult;
+        else failure = error;
+      },
+      context: { getRuntimeConfig: () => cfg },
+    });
+    if (!result) {
+      throw new Error(`tools.catalog handler failed: ${JSON.stringify(failure ?? null)}`);
+    }
+    return result;
+  };
+}
+
 async function locateBuildFn(): Promise<BuildFn | null> {
   const root = resolveOpenClawRoot();
   if (!root) return null;
@@ -132,6 +167,10 @@ async function locateBuildFn(): Promise<BuildFn | null> {
       const mod = (await import(path.join(distDir, file))) as Record<string, unknown>;
       if (typeof mod.buildToolsCatalogResult === "function")
         return mod.buildToolsCatalogResult as BuildFn;
+      // ≥2026.7.1: the builder is module-private; adapt the gateway-method handler map.
+      const handlers = mod.toolsCatalogHandlers as Record<string, unknown> | undefined;
+      const adapted = adaptToolsCatalogHandler(handlers?.["tools.catalog"]);
+      if (adapted) return adapted;
     } catch {
       // unreadable/non-importable candidate → keep scanning
     }
