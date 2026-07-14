@@ -1,3 +1,5 @@
+import { toSessionStoreKey } from "../session/session-manager.js";
+
 export type AbortRunResult = { aborted: boolean };
 
 export type AbortRunDeps = {
@@ -44,10 +46,18 @@ export async function abortRunForSessionKey(
   const resolved = deps ?? (await loadAbortRunDeps());
   if (!resolved) return NO_OP;
   try {
-    const sessionId = resolved.resolveActiveEmbeddedRunSessionId(key);
-    if (!sessionId) return NO_OP;
-    const aborted = resolved.abortAgentHarnessRun(sessionId);
-    return { aborted };
+    // OpenClaw ≥2026.7.1 keys the active-run registry by the agent-qualified store key
+    // (`agent:<id>:<sessionKey>`); older cores keyed the raw channel sessionKey. Try both —
+    // a raw-key miss on a new core otherwise turns every app stop into a silent no-op.
+    const candidates = [...new Set([key, toSessionStoreKey(key)])];
+    for (const candidate of candidates) {
+      const sessionId = resolved.resolveActiveEmbeddedRunSessionId(candidate);
+      if (sessionId) {
+        const aborted = resolved.abortAgentHarnessRun(sessionId);
+        return { aborted };
+      }
+    }
+    return NO_OP;
   } catch {
     // optional at runtime
     return NO_OP;
