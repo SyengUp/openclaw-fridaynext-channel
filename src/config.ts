@@ -15,6 +15,18 @@ export type FridayNextConfig = {
   sseKeepaliveSec: number;
   sseBacklogPerDevice: number;
   publicAccess: PublicAccessConfigResolved;
+  appAttest: AppAttestConfigResolved;
+};
+
+/** App Attest gate — "only the genuine FridayNext app can connect" (App Store/TestFlight
+ * app on a real Apple device). Off by default so non-attest clients keep working until
+ * explicitly enabled. */
+export type AppAttestConfigResolved = {
+  required: boolean;
+  teamId: string;
+  bundleId: string;
+  /** Accept development-environment attestations (ad-hoc / TestFlight dev builds). */
+  allowDevelopment: boolean;
 };
 
 /** Public access (FridayNext 云) — resolved from `channels.friday-next.publicAccess`. */
@@ -55,6 +67,7 @@ export function resolveFridayNextConfig(cfg: unknown): FridayNextConfig {
   const sse = asObject(section.sse);
   const cors = asObject(section.cors);
   const pa = asObject(section.publicAccess);
+  const aa = asObject(section.appAttest);
 
   const authToken =
     asString(asObject(root.gateway).auth && asObject(asObject(root.gateway).auth).token, "") ||
@@ -84,6 +97,14 @@ export function resolveFridayNextConfig(cfg: unknown): FridayNextConfig {
       allocatorUrl: asString(pa.allocatorUrl, "https://friday.syengup.host/gw-alloc/allocate"),
       certSignUrl: asString(pa.certSignUrl, "https://friday.syengup.host/gw-alloc/sign-cert"),
       corePort: asNumber(pa.corePort, 18789, 1, 65535),
+    },
+    appAttest: {
+      // Default OFF so enabling public access never accidentally locks out a client
+      // that can't attest (e.g. simulator). The bare-test gateway flips it on.
+      required: asBool(aa.required, false),
+      teamId: asString(aa.teamId, "LQF97XWK5A"),
+      bundleId: asString(aa.bundleId, "SyengUp.FridayNext"),
+      allowDevelopment: asBool(aa.allowDevelopment, true),
     },
   };
 }

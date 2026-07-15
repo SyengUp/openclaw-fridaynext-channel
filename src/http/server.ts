@@ -30,12 +30,31 @@ import { handleHealth } from "./handlers/health.js";
 import { handlePluginInfo } from "./handlers/plugin-info.js";
 import { handlePluginUpgrade } from "./handlers/plugin-upgrade.js";
 import { handlePublicAccessPairing } from "./handlers/plugin-pairing.js";
+import {
+  handleAttestChallenge,
+  handleAttestVerify,
+  handleAttestRefresh,
+} from "./handlers/attest.js";
+import { verifySession } from "../attest/attest-store.js";
 import { handleSessionDelete } from "./handlers/session-delete.js";
 import { applyCorsHeaders } from "./middleware/cors.js";
 import { resolveFridayNextConfig } from "../config.js";
 import { getHostOpenClawConfigSnapshot } from "../host-config.js";
 import { getFridayNextRuntime } from "../runtime.js";
 import { sseEmitter } from "../sse/emitter.js";
+
+/** Paths exempt from the App Attest gate: the attest bootstrap itself, health, and
+ * owner-side plugin/pairing management (Bearer-authed, used before/without an app
+ * session). Everything else requires a valid session token when attest is on. */
+function isAttestExempt(pathname: string): boolean {
+  return (
+    pathname.startsWith("/friday-next/attest/") ||
+    pathname === "/friday-next/health" ||
+    pathname === "/friday-next/plugin/info" ||
+    pathname === "/friday-next/plugin/upgrade" ||
+    pathname === "/friday-next/public-access/pairing"
+  );
+}
 
 /** Route matcher - returns the matched handler or null. */
 async function handleFridayNextRoute(req: IncomingMessage, res: ServerResponse): Promise<boolean> {
@@ -46,6 +65,36 @@ async function handleFridayNextRoute(req: IncomingMessage, res: ServerResponse):
     res.statusCode = 204;
     res.end();
     return true;
+  }
+
+  // App Attest gate: when required, every route except the bootstrap/owner-side
+  // allowlist must carry a valid session token (proof the caller is the genuine
+  // FridayNext app). Enforced before any protected handler runs.
+  const attestCfg = resolveFridayNextConfig(
+    getHostOpenClawConfigSnapshot(getFridayNextRuntime().config),
+  );
+  if (attestCfg.appAttest.required && !isAttestExempt(pathname)) {
+    const sess = req.headers["x-fridaynext-attest"];
+    const token = Array.isArray(sess) ? sess[0] : sess;
+    if (!token || !verifySession(token, attestCfg.authToken, Date.now())) {
+      res.statusCode = 403;
+      res.setHeader("Content-Type", "application/json");
+      res.end(JSON.stringify({ error: "app attestation required", code: "attest_required" }));
+      return true;
+    }
+  }
+
+  // Route: GET /friday-next/attest/challenge
+  if (req.method === "GET" && pathname === "/friday-next/attest/challenge") {
+    return handleAttestChallenge(req, res);
+  }
+  // Route: POST /friday-next/attest/verify
+  if (req.method === "POST" && pathname === "/friday-next/attest/verify") {
+    return await handleAttestVerify(req, res);
+  }
+  // Route: POST /friday-next/attest/refresh
+  if (req.method === "POST" && pathname === "/friday-next/attest/refresh") {
+    return await handleAttestRefresh(req, res);
   }
 
   // Route: GET /friday-next/events?deviceId=...
