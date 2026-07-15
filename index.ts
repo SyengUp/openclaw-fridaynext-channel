@@ -26,6 +26,7 @@ import { getOpenClawAgentRunContext } from "./src/agent-run-context-bridge.js";
 import { accumulateRunUsage } from "./src/agent/run-usage-accumulator.js";
 import { createFridayNextLogger } from "./src/logging.js";
 import { ensureCodexReasoningSummary } from "./src/codex-reasoning-config.js";
+import { startPublicAccess } from "./src/public-access/frpc-manager.js";
 
 const hookLogger = createFridayNextLogger("hook");
 
@@ -129,6 +130,31 @@ export default defineChannelPluginEntry({
     if (!sameApi) {
       lastApiRoutesRegistered = new WeakRef(api);
       registerFridayNextHttpRoutes(api);
+
+      // Public access (FridayNext 云): bring up the frpc tunnel if enabled. Idempotent — a stale
+      // frpc from a prior plugin reload is killed before respawn. Inert when disabled.
+      try {
+        const paCfg = resolveFridayNextConfig(
+          getHostOpenClawConfigSnapshot(getFridayNextRuntime().config),
+        );
+        const paLog = createFridayNextLogger("public-access");
+        startPublicAccess(
+          {
+            enabled: paCfg.publicAccess.enabled,
+            relayAddr: paCfg.publicAccess.relayAddr,
+            relayToken: paCfg.publicAccess.relayToken,
+            subDomainHost: paCfg.publicAccess.subDomainHost,
+            subdomain: paCfg.publicAccess.subdomain || undefined,
+            corePort: paCfg.publicAccess.corePort,
+            authToken: paCfg.authToken,
+          },
+          (m) => paLog.info(m),
+        );
+      } catch (e) {
+        createFridayNextLogger("public-access").warn(
+          `startPublicAccess failed: ${e instanceof Error ? e.message : String(e)}`,
+        );
+      }
     } else {
       const cfg = resolveFridayNextConfig(
         getHostOpenClawConfigSnapshot(getFridayNextRuntime().config),

@@ -14,6 +14,17 @@ export type FridayNextConfig = {
   corsAllowOrigin: string;
   sseKeepaliveSec: number;
   sseBacklogPerDevice: number;
+  publicAccess: PublicAccessConfigResolved;
+};
+
+/** Public access (FridayNext 云) — resolved from `channels.friday-next.publicAccess`. */
+export type PublicAccessConfigResolved = {
+  enabled: boolean;
+  relayAddr: string;
+  relayToken: string;
+  subDomainHost: string;
+  subdomain: string;
+  corePort: number;
 };
 
 function asObject(value: unknown): Record<string, unknown> {
@@ -41,6 +52,7 @@ export function resolveFridayNextConfig(cfg: unknown): FridayNextConfig {
   const section = asObject(channels["friday-next"]);
   const sse = asObject(section.sse);
   const cors = asObject(section.cors);
+  const pa = asObject(section.publicAccess);
 
   const authToken =
     asString(asObject(root.gateway).auth && asObject(asObject(root.gateway).auth).token, "") ||
@@ -59,5 +71,15 @@ export function resolveFridayNextConfig(cfg: unknown): FridayNextConfig {
     corsAllowOrigin: asString(cors.allowOrigin, "*"),
     sseKeepaliveSec: asNumber(sse.keepaliveSec, 30, 5, 120),
     sseBacklogPerDevice: asNumber(sse.backlogPerDevice, 200, 0, 1000),
+    publicAccess: {
+      // Default OFF: only tunnels when explicitly enabled in config, so a published plugin never
+      // auto-routes a stranger's gateway to our relay. The bare-test gateway sets enabled=true.
+      enabled: asBool(pa.enabled, false),
+      relayAddr: asString(pa.relayAddr, "47.95.195.236:7000"),
+      relayToken: asString(pa.relayToken, ""),
+      subDomainHost: asString(pa.subDomainHost, "bj.gw.syengup.host"),
+      subdomain: asString(pa.subdomain, ""),
+      corePort: asNumber(pa.corePort, 18789, 1, 65535),
+    },
   };
 }

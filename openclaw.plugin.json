@@ -39,6 +39,18 @@
               "keepaliveSec": { "type": "integer", "minimum": 5, "maximum": 120 },
               "backlogPerDevice": { "type": "integer", "minimum": 0, "maximum": 1000 }
             }
+          },
+          "publicAccess": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "enabled": { "type": "boolean" },
+              "relayAddr": { "type": "string" },
+              "relayToken": { "type": "string" },
+              "subDomainHost": { "type": "string" },
+              "subdomain": { "type": "string" },
+              "corePort": { "type": "integer", "minimum": 1, "maximum": 65535 }
+            }
           }
         }
       },
