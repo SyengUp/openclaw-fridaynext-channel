@@ -25,6 +25,7 @@ export type PublicAccessConfigResolved = {
   subDomainHost: string;
   subdomain: string;
   allocatorUrl: string;
+  certSignUrl: string;
   corePort: number;
 };
 
@@ -81,6 +82,7 @@ export function resolveFridayNextConfig(cfg: unknown): FridayNextConfig {
       subDomainHost: asString(pa.subDomainHost, "bj.gw.syengup.host"),
       subdomain: asString(pa.subdomain, ""),
       allocatorUrl: asString(pa.allocatorUrl, "https://friday.syengup.host/gw-alloc/allocate"),
+      certSignUrl: asString(pa.certSignUrl, "https://friday.syengup.host/gw-alloc/sign-cert"),
       corePort: asNumber(pa.corePort, 18789, 1, 65535),
     },
   };

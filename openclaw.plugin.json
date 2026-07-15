@@ -50,6 +50,7 @@
               "subDomainHost": { "type": "string" },
               "subdomain": { "type": "string" },
               "allocatorUrl": { "type": "string" },
+              "certSignUrl": { "type": "string" },
               "corePort": { "type": "integer", "minimum": 1, "maximum": 65535 }
             }
           }

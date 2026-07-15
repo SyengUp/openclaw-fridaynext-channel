@@ -146,6 +146,7 @@ export default defineChannelPluginEntry({
             subDomainHost: paCfg.publicAccess.subDomainHost,
             subdomain: paCfg.publicAccess.subdomain || undefined,
             allocatorUrl: paCfg.publicAccess.allocatorUrl,
+            certSignUrl: paCfg.publicAccess.certSignUrl,
             corePort: paCfg.publicAccess.corePort,
             authToken: paCfg.authToken,
           },

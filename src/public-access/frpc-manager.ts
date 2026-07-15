@@ -40,6 +40,9 @@ export type PublicAccessConfig = {
   /** Relay subdomain-allocator endpoint. The single authority that guarantees unique
    * subdomains: same gateway key → same subdomain, distinct keys → distinct, never a dup. */
   allocatorUrl: string;
+  /** Relay cert-signing endpoint. Signs this gateway's CSR into a real Let's Encrypt
+   * cert (browser-trusted) without the relay ever seeing the private key. */
+  certSignUrl: string;
   /** Core gateway HTTP port to expose. */
   corePort: number;
   /** Bearer token the app uses (from the channel config). */
@@ -137,6 +140,87 @@ function ensureCert(cn: string): { crt: string; key: string; fingerprint: string
     .trim()
     .toLowerCase();
   return { crt, key, fingerprint };
+}
+
+/** Leaf SHA-256 fingerprint of a PEM cert/fullchain (lowercase hex, no colons). */
+function leafFingerprint(crtPath: string): string {
+  return execFileSync("openssl", ["x509", "-in", crtPath, "-noout", "-fingerprint", "-sha256"])
+    .toString()
+    .split("=")[1]
+    .replace(/:/g, "")
+    .trim()
+    .toLowerCase();
+}
+
+/** True when the cert is missing or expires within 30 days (needs (re)issue). */
+function certNeedsRenewal(crtPath: string): boolean {
+  if (!existsSync(crtPath)) return true;
+  try {
+    const out = execFileSync("openssl", ["x509", "-in", crtPath, "-noout", "-enddate"]).toString();
+    const m = out.match(/notAfter=(.+)/);
+    if (!m) return true;
+    return new Date(m[1].trim()).getTime() - Date.now() < 30 * 24 * 3600 * 1000;
+  } catch {
+    return true;
+  }
+}
+
+/** POST the CSR to the relay cert-signer; returns the LE fullchain PEM or throws. */
+async function requestSignedCert(
+  url: string,
+  token: string,
+  keyHash: string,
+  csrPem: string,
+): Promise<string> {
+  const res = await fetch(url, {
+    method: "POST",
+    headers: { "content-type": "application/json", authorization: `Bearer ${token}` },
+    body: JSON.stringify({ key: keyHash, csr: csrPem }),
+    signal: AbortSignal.timeout(130_000),
+  });
+  if (!res.ok) throw new Error(`cert-sign HTTP ${res.status}`);
+  const data = (await res.json()) as { fullchain?: unknown };
+  const fc = typeof data.fullchain === "string" ? data.fullchain : "";
+  if (!fc.includes("BEGIN CERTIFICATE")) throw new Error("cert-sign returned no fullchain");
+  return fc;
+}
+
+/**
+ * Ensure a browser-trusted cert for `cn`: the gateway generates its own keypair,
+ * sends only a CSR to the relay signer, and receives a real Let's Encrypt fullchain
+ * (private key never leaves this host → relay still can't decrypt). Reuses a valid
+ * cert; falls back to a self-signed cert if signing fails, so public access still
+ * works (the app pins the leaf either way; only browsers see the self-signed warning).
+ */
+async function ensureRealCert(
+  cfg: PublicAccessConfig,
+  cn: string,
+  log: Logger,
+): Promise<{ crt: string; key: string; fingerprint: string }> {
+  ensureDir();
+  const key = join(DATA_DIR, "gateway-key.pem");
+  const crt = join(DATA_DIR, "gateway-fullchain.pem");
+  if (existsSync(key) && !certNeedsRenewal(crt)) {
+    return { crt, key, fingerprint: leafFingerprint(crt) };
+  }
+  try {
+    if (!existsSync(key)) execFileSync("openssl", ["genrsa", "-out", key, "2048"]);
+    const csrPath = join(DATA_DIR, "gateway.csr");
+    execFileSync("openssl", ["req", "-new", "-key", key, "-out", csrPath, "-subj", `/CN=${cn}`]);
+    const keyHash = createHash("sha256").update(cfg.authToken || "").digest("hex");
+    const fullchain = await requestSignedCert(
+      cfg.certSignUrl,
+      cfg.relayToken,
+      keyHash,
+      readFileSync(csrPath, "utf8"),
+    );
+    writeFileSync(crt, fullchain);
+    log(`obtained Let's Encrypt cert for ${cn}`);
+    return { crt, key, fingerprint: leafFingerprint(crt) };
+  } catch (e) {
+    log(`real cert failed (${e instanceof Error ? e.message : String(e)}); using self-signed`);
+    return ensureCert(cn); // app still works via leaf pinning; browsers warn
+  }
 }
 
 /** POST the gateway key to the relay allocator; returns the assigned subdomain or throws. */
@@ -259,7 +343,7 @@ export async function startPublicAccess(
     return null;
   }
   const cn = `${subdomain}.${cfg.subDomainHost}`;
-  const { crt, key, fingerprint } = ensureCert(cn);
+  const { crt, key, fingerprint } = await ensureRealCert(cfg, cn, log);
   const confPath = writeFrpcConfig(cfg, subdomain, crt, key);
 
   // Idempotent: a duplicate registerFull must NOT respawn a live tunnel (that caused flapping).
