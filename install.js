@@ -106,15 +106,25 @@ if (!hasOpenclaw()) {
 
 const PKG = "@syengup/friday-channel-next";
 
-// Resolve the EXACT latest version and install THAT — never the `@latest`
-// dist-tag. OpenClaw persists a `@latest` install as a caret range
-// (`"^1.0.5"`) in the managed project package.json, and OpenClaw's own plugin
-// auto-update later rejects that range ("unsupported npm spec: use an exact
-// version or dist-tag"), disabling the plugin. An exact version is stored as an
-// exact spec, which auto-update accepts.
-async function resolveLatestVersion() {
+// Which npm dist-tag to install from. `latest` (default) is the stable line real
+// users get. `beta` is the opt-in public-access preview line — friends invited to
+// test pass `--beta` (or set FRIDAY_CHANNEL_NEXT_CHANNEL=beta). Real users never
+// touch beta because they never pass the flag, and beta versions are published
+// under a separate dist-tag that never moves `latest`.
+const DIST_TAG =
+  process.argv.includes("--beta") || process.env.FRIDAY_CHANNEL_NEXT_CHANNEL === "beta"
+    ? "beta"
+    : "latest";
+
+// Resolve the EXACT version behind DIST_TAG and install THAT — never the bare
+// `@latest`/`@beta` dist-tag. OpenClaw persists a dist-tag install as a caret
+// range (`"^1.0.5"`) in the managed project package.json, and OpenClaw's own
+// plugin auto-update later rejects that range ("unsupported npm spec: use an
+// exact version or dist-tag"), disabling the plugin. An exact version is stored
+// as an exact spec, which auto-update accepts.
+async function resolveTaggedVersion(distTag) {
   try {
-    const res = await fetch(`https://registry.npmjs.org/${PKG}/latest`, {
+    const res = await fetch(`https://registry.npmjs.org/${PKG}/${distTag}`, {
       headers: { Accept: "application/json" },
       signal: AbortSignal.timeout(8000),
     });
@@ -128,7 +138,10 @@ async function resolveLatestVersion() {
     /* fall through */
   }
   try {
-    const v = execSync(`npm view ${PKG} version`, { encoding: "utf8", timeout: 20000 }).trim();
+    const v = execSync(`npm view ${PKG}@${distTag} version`, {
+      encoding: "utf8",
+      timeout: 20000,
+    }).trim();
     if (/^\d+\.\d+\.\d+/.test(v)) return v;
   } catch {
     /* fall through */
@@ -136,18 +149,22 @@ async function resolveLatestVersion() {
   return null;
 }
 
-log("Installing Friday Next channel plugin...");
+log(
+  DIST_TAG === "beta"
+    ? "Installing Friday Next channel plugin (beta / public-access preview)..."
+    : "Installing Friday Next channel plugin...",
+);
 
-const resolvedVersion = await resolveLatestVersion();
+const resolvedVersion = await resolveTaggedVersion(DIST_TAG);
 let installSpec;
 if (resolvedVersion) {
   installSpec = `${PKG}@${resolvedVersion}`;
 } else {
-  // Registry lookup failed — fall back to @latest so a transient network hiccup
-  // doesn't block the install. Re-running the installer later will pin an exact
-  // spec once the registry is reachable.
-  warn("Could not resolve exact latest version — falling back to @latest.");
-  installSpec = `${PKG}@latest`;
+  // Registry lookup failed — fall back to the bare dist-tag so a transient
+  // network hiccup doesn't block the install. Re-running the installer later
+  // will pin an exact spec once the registry is reachable.
+  warn(`Could not resolve exact ${DIST_TAG} version — falling back to @${DIST_TAG}.`);
+  installSpec = `${PKG}@${DIST_TAG}`;
 }
 
 try {

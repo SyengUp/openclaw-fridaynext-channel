@@ -1,7 +1,12 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { extractBearerToken } from "../middleware/auth.js";
 import { PLUGIN_VERSION } from "../../version.js";
-import { fetchLatestVersion, getInstallSource, semverGreater } from "../../plugin-install-info.js";
+import {
+  fetchLatestVersion,
+  getInstallSource,
+  resolveUpgradeDistTag,
+  semverGreaterConsideringPrerelease,
+} from "../../plugin-install-info.js";
 
 export interface PluginInfoResult {
   currentVersion: string;
@@ -32,8 +37,13 @@ export async function handlePluginInfo(
 
   const installSource = getInstallSource();
   const canAutoUpgrade = installSource === "npm";
-  const latestVersion = await fetchLatestVersion(Date.now());
-  const upgradable = canAutoUpgrade && semverGreater(latestVersion, PLUGIN_VERSION);
+  // A prerelease build tracks the `beta` dist-tag so testers get newer betas;
+  // a stable build tracks `latest`. Prerelease-aware compare so beta.0 → beta.1
+  // registers as upgradable (plain major.minor.patch would read them as equal).
+  const distTag = resolveUpgradeDistTag(PLUGIN_VERSION);
+  const latestVersion = await fetchLatestVersion(Date.now(), distTag);
+  const upgradable =
+    canAutoUpgrade && semverGreaterConsideringPrerelease(latestVersion, PLUGIN_VERSION);
 
   const result: PluginInfoResult = {
     currentVersion: PLUGIN_VERSION,

@@ -92,20 +92,105 @@ function parseSemver(v: string): [number, number, number] {
   return [parts[0] || 0, parts[1] || 0, parts[2] || 0];
 }
 
-let cachedLatest: { version: string | null; fetchedAt: number } | null = null;
+/** True when a version carries a prerelease suffix, e.g. "1.0.15-beta.0". */
+export function isPrereleaseVersion(v: string | null | undefined): boolean {
+  if (!v) return false;
+  return v.trim().replace(/^v/i, "").includes("-");
+}
+
+/**
+ * Which npm dist-tag this install tracks for upgrades. A prerelease build
+ * (installed via `install.js --beta`) tracks the `beta` line so testers receive
+ * newer betas from the in-app upgrade button; a stable build tracks `latest`.
+ * Graduation back to stable = re-run the installer without `--beta`.
+ */
+export function resolveUpgradeDistTag(
+  currentVersion: string | null | undefined,
+): "latest" | "beta" {
+  return isPrereleaseVersion(currentVersion) ? "beta" : "latest";
+}
+
+/**
+ * Strict-greater semver compare INCLUDING prerelease ordering:
+ *   1.0.15-beta.0 < 1.0.15-beta.1 < 1.0.15 < 1.0.16
+ * Unlike `semverGreater` (which ignores the suffix so stable-line comparisons
+ * don't churn on prerelease noise), this powers the beta channel so beta.0 →
+ * beta.1 lights up the upgrade button. A stable version outranks any prerelease
+ * of the same core version (semver §11).
+ */
+export function semverGreaterConsideringPrerelease(
+  a: string | null | undefined,
+  b: string | null | undefined,
+): boolean {
+  if (!a || !b) return false;
+  const pa = parseSemver(a);
+  const pb = parseSemver(b);
+  for (let i = 0; i < 3; i++) {
+    if (pa[i] > pb[i]) return true;
+    if (pa[i] < pb[i]) return false;
+  }
+  const ra = prereleaseIdentifiers(a);
+  const rb = prereleaseIdentifiers(b);
+  if (ra.length === 0 && rb.length === 0) return false;
+  if (ra.length === 0) return true; // a stable, b prerelease → a > b
+  if (rb.length === 0) return false; // a prerelease, b stable → a < b
+  const n = Math.max(ra.length, rb.length);
+  for (let i = 0; i < n; i++) {
+    if (i >= ra.length) return false; // a's identifiers ran out first → a < b
+    if (i >= rb.length) return true; // b's identifiers ran out first → a > b
+    const cmp = comparePrereleaseIdentifier(ra[i], rb[i]);
+    if (cmp !== 0) return cmp > 0;
+  }
+  return false;
+}
+
+/** The dot-separated prerelease identifiers of a version, or [] if none. */
+function prereleaseIdentifiers(v: string): string[] {
+  const core = v.trim().replace(/^v/i, "").split("+")[0]; // drop build metadata
+  const dash = core.indexOf("-");
+  if (dash < 0) return [];
+  return core.slice(dash + 1).split(".");
+}
+
+/**
+ * Compare two prerelease identifiers per semver §11: numeric identifiers have
+ * lower precedence than alphanumeric, numerics compare numerically, others by
+ * ASCII. Returns -1 / 0 / 1.
+ */
+function comparePrereleaseIdentifier(a: string, b: string): number {
+  const na = /^\d+$/.test(a);
+  const nb = /^\d+$/.test(b);
+  if (na && nb) {
+    const da = Number.parseInt(a, 10);
+    const db = Number.parseInt(b, 10);
+    return da === db ? 0 : da > db ? 1 : -1;
+  }
+  if (na) return -1;
+  if (nb) return 1;
+  return a === b ? 0 : a > b ? 1 : -1;
+}
+
+const versionCacheByTag = new Map<string, { version: string | null; fetchedAt: number }>();
 const LATEST_TTL_MS = 10 * 60 * 1000;
 
-/** Fetch the latest published version from the npm registry (cached ~10min). Null on failure. */
-export async function fetchLatestVersion(nowMs: number): Promise<string | null> {
-  if (cachedLatest && nowMs - cachedLatest.fetchedAt < LATEST_TTL_MS) {
-    return cachedLatest.version;
+/**
+ * Fetch the newest published version on a dist-tag (`latest` default, or `beta`
+ * for the public-access preview line), cached ~10min per tag. Null on failure.
+ */
+export async function fetchLatestVersion(
+  nowMs: number,
+  distTag: "latest" | "beta" = "latest",
+): Promise<string | null> {
+  const cached = versionCacheByTag.get(distTag);
+  if (cached && nowMs - cached.fetchedAt < LATEST_TTL_MS) {
+    return cached.version;
   }
   let version: string | null = null;
   try {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), 5000);
     try {
-      const res = await fetch(`https://registry.npmjs.org/${PLUGIN_PACKAGE_NAME}/latest`, {
+      const res = await fetch(`https://registry.npmjs.org/${PLUGIN_PACKAGE_NAME}/${distTag}`, {
         signal: controller.signal,
         headers: { Accept: "application/json" },
       });
@@ -119,11 +204,11 @@ export async function fetchLatestVersion(nowMs: number): Promise<string | null> 
   } catch {
     version = null;
   }
-  cachedLatest = { version, fetchedAt: nowMs };
+  versionCacheByTag.set(distTag, { version, fetchedAt: nowMs });
   return version;
 }
 
 /** Vitest-only */
 export function resetLatestVersionCacheForTest(): void {
-  cachedLatest = null;
+  versionCacheByTag.clear();
 }

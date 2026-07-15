@@ -2,7 +2,11 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import { extractBearerToken } from "../middleware/auth.js";
 import { createFridayNextLogger } from "../../logging.js";
 import { PLUGIN_PACKAGE_NAME, PLUGIN_VERSION } from "../../version.js";
-import { fetchLatestVersion, getInstallSource } from "../../plugin-install-info.js";
+import {
+  fetchLatestVersion,
+  getInstallSource,
+  resolveUpgradeDistTag,
+} from "../../plugin-install-info.js";
 import { getUpgradeRuntime } from "../../upgrade-runtime.js";
 
 const UPGRADE_TIMEOUT_MS = 120_000;
@@ -65,9 +69,13 @@ export async function handlePluginUpgrade(
     return true;
   }
 
-  const latest = await fetchLatestVersion(Date.now());
+  // Track the same dist-tag the running build is on: a beta tester upgrades along
+  // the `beta` line, a stable install along `latest`. Graduation off beta = re-run
+  // the installer without `--beta`.
+  const distTag = resolveUpgradeDistTag(PLUGIN_VERSION);
+  const latest = await fetchLatestVersion(Date.now(), distTag);
   if (!latest) {
-    log.error("plugin upgrade aborted: could not resolve latest version from npm registry");
+    log.error(`plugin upgrade aborted: could not resolve ${distTag} version from npm registry`);
     res.statusCode = 502;
     res.setHeader("Content-Type", "application/json");
     res.end(

@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { classifyInstallSourceFromLoadedPath, semverGreater } from "./plugin-install-info.js";
+import {
+  classifyInstallSourceFromLoadedPath,
+  isPrereleaseVersion,
+  resolveUpgradeDistTag,
+  semverGreater,
+  semverGreaterConsideringPrerelease,
+} from "./plugin-install-info.js";
 
 describe("classifyInstallSourceFromLoadedPath", () => {
   it("treats paths under the managed npm projects dir as npm", () => {
@@ -54,5 +60,48 @@ describe("semverGreater", () => {
     expect(semverGreater(null, "0.1.0")).toBe(false);
     expect(semverGreater("0.1.0", null)).toBe(false);
     expect(semverGreater(undefined, undefined)).toBe(false);
+  });
+});
+
+describe("isPrereleaseVersion", () => {
+  it("detects a prerelease suffix", () => {
+    expect(isPrereleaseVersion("1.0.15-beta.0")).toBe(true);
+    expect(isPrereleaseVersion("v1.0.15-rc.2")).toBe(true);
+  });
+  it("treats a plain release as stable", () => {
+    expect(isPrereleaseVersion("1.0.15")).toBe(false);
+    expect(isPrereleaseVersion("v1.0.15")).toBe(false);
+    expect(isPrereleaseVersion(null)).toBe(false);
+    expect(isPrereleaseVersion(undefined)).toBe(false);
+  });
+});
+
+describe("resolveUpgradeDistTag", () => {
+  it("tracks beta for a prerelease build, latest for a stable build", () => {
+    expect(resolveUpgradeDistTag("1.0.15-beta.0")).toBe("beta");
+    expect(resolveUpgradeDistTag("1.0.15")).toBe("latest");
+    expect(resolveUpgradeDistTag(null)).toBe("latest");
+  });
+});
+
+describe("semverGreaterConsideringPrerelease", () => {
+  it("orders successive betas on the same core (beta.0 < beta.1)", () => {
+    expect(semverGreaterConsideringPrerelease("1.0.15-beta.1", "1.0.15-beta.0")).toBe(true);
+    expect(semverGreaterConsideringPrerelease("1.0.15-beta.0", "1.0.15-beta.1")).toBe(false);
+    expect(semverGreaterConsideringPrerelease("1.0.15-beta.2", "1.0.15-beta.2")).toBe(false);
+    // 10 > 9 numerically, not lexically
+    expect(semverGreaterConsideringPrerelease("1.0.15-beta.10", "1.0.15-beta.9")).toBe(true);
+  });
+  it("ranks a stable release above any prerelease of the same core", () => {
+    expect(semverGreaterConsideringPrerelease("1.0.15", "1.0.15-beta.3")).toBe(true);
+    expect(semverGreaterConsideringPrerelease("1.0.15-beta.3", "1.0.15")).toBe(false);
+  });
+  it("still compares core major.minor.patch first", () => {
+    expect(semverGreaterConsideringPrerelease("1.0.16-beta.0", "1.0.15")).toBe(true);
+    expect(semverGreaterConsideringPrerelease("1.0.15-beta.0", "1.0.16")).toBe(false);
+  });
+  it("returns false for null/undefined inputs", () => {
+    expect(semverGreaterConsideringPrerelease(null, "1.0.0")).toBe(false);
+    expect(semverGreaterConsideringPrerelease("1.0.0", undefined)).toBe(false);
   });
 });
