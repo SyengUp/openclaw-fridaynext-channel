@@ -475,7 +475,69 @@ log("");
 
 // --------------- QR code ---------------
 
-const qrPayload = JSON.stringify({ url: gatewayUrl, token: gatewayToken });
+// GET the public-access pairing superset from the just-verified gateway. Returns
+// the parsed object (`{v, lanUrl, publicUrl, fingerprint, token, ...}`) or null
+// when public access is off / the tunnel isn't up (503) / any error.
+async function fetchPairingSuperset(url, token) {
+  const http = await import("node:http");
+  const { hostname, port } = new URL(url);
+  try {
+    return await new Promise((resolve) => {
+      const req = http.request(
+        {
+          hostname,
+          port,
+          path: "/friday-next/public-access/pairing",
+          method: "GET",
+          headers: { authorization: `Bearer ${token}` },
+          timeout: 5000,
+        },
+        (res) => {
+          let body = "";
+          res.on("data", (c) => (body += c));
+          res.on("end", () => {
+            if (res.statusCode !== 200) return resolve(null);
+            try {
+              resolve(JSON.parse(body));
+            } catch {
+              resolve(null);
+            }
+          });
+        },
+      );
+      req.on("error", () => resolve(null));
+      req.on("timeout", () => {
+        req.destroy();
+        resolve(null);
+      });
+      req.end();
+    });
+  } catch {
+    return null;
+  }
+}
+
+// Default QR: legacy `{url, token}` — what stable installs emit. The beta channel
+// upgrades it to the public-access superset so a scan also arms remote access.
+let qrPayload = JSON.stringify({ url: gatewayUrl, token: gatewayToken });
+if (DIST_TAG === "beta") {
+  const pairing = await fetchPairingSuperset(verifyUrl, gatewayToken);
+  if (pairing && pairing.publicUrl) {
+    qrPayload = JSON.stringify({
+      v: pairing.v ?? 1,
+      lanUrl: pairing.lanUrl || gatewayUrl,
+      publicUrl: pairing.publicUrl,
+      fingerprint: pairing.fingerprint,
+      token: pairing.token || gatewayToken,
+    });
+    log("Public access is on — QR includes the relay address (二维码含公网地址).");
+  } else {
+    warn(
+      "Public access not active — QR carries LAN URL + token only. Enable " +
+        "channels.friday-next.publicAccess to include the relay address.",
+    );
+  }
+}
 let qrShown = false;
 
 try {
