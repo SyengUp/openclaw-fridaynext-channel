@@ -50,6 +50,7 @@ function isAttestExempt(pathname: string): boolean {
   return (
     pathname.startsWith("/friday-next/attest/") ||
     pathname === "/friday-next/health" ||
+    pathname === "/friday-next/status" || // server-side install-script connectivity probe
     pathname === "/friday-next/plugin/info" ||
     pathname === "/friday-next/plugin/upgrade" ||
     pathname === "/friday-next/public-access/pairing"
