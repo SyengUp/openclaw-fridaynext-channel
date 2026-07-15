@@ -23,6 +23,8 @@ import {
 import { createHash } from "node:crypto";
 import { homedir, platform, arch, networkInterfaces } from "node:os";
 import { join } from "node:path";
+import type { Server } from "node:http";
+import { startFilterProxy } from "./filter-proxy.js";
 
 const FRP_VERSION = "0.69.1";
 const DATA_DIR = join(homedir(), ".openclaw", "friday-next", "public-access");
@@ -61,7 +63,13 @@ export type PairingInfo = {
 type Logger = (msg: string) => void;
 
 let child: ChildProcess | null = null;
+let filterServer: Server | null = null;
 let stopped = false;
+
+/** Local port of the public-surface filter proxy that frpc forwards into (core + 1). */
+function filterPort(corePort: number): number {
+  return corePort + 1;
+}
 let keepaliveTimer: ReturnType<typeof setTimeout> | null = null;
 let allocRetryTimer: ReturnType<typeof setTimeout> | null = null;
 let cachedPairing: PairingInfo | null = null;
@@ -282,7 +290,7 @@ type = "https"
 subdomain = "${subdomain}"
 [proxies.plugin]
 type = "https2http"
-localAddr = "127.0.0.1:${cfg.corePort}"
+localAddr = "127.0.0.1:${filterPort(cfg.corePort)}"
 crtPath = "${crt}"
 keyPath = "${key}"
 `;
@@ -327,6 +335,12 @@ export async function startPublicAccess(
   stopped = false;
   ensureDir();
   ensureBinary(log);
+
+  // Public-surface allowlist: frpc forwards into this filter (not core directly), so the
+  // tunnel exposes only the app's paths — never core's /chat, /control, or / web UI.
+  if (!filterServer) {
+    filterServer = startFilterProxy(filterPort(cfg.corePort), cfg.corePort, log);
+  }
 
   // Block (don't tunnel) until the relay hands us a collision-proof subdomain; retry
   // so a transient relay outage self-heals without minting a risky local subdomain.
@@ -383,6 +397,14 @@ export function stopPublicAccess(): void {
       /* ignore */
     }
     child = null;
+  }
+  if (filterServer) {
+    try {
+      filterServer.close();
+    } catch {
+      /* ignore */
+    }
+    filterServer = null;
   }
 }
 
