@@ -17,10 +17,12 @@ import { connect as netConnect } from "node:net";
 //   /friday-next/*        REST + SSE (attest-gated by the plugin)
 //   /friday-next-admin/*  session delete (gateway-authed)
 //   /gateway              node WebSocket (device-authed handshake)
+//   /canvas               canvas overlay pages loaded by the in-app WKWebView
 const ALLOW = [
   /^\/friday-next(\/|$|\?)/,
   /^\/friday-next-admin(\/|$|\?)/,
   /^\/gateway(\/|$|\?)/,
+  /^\/canvas(\/|$|\?)/,
 ];
 function allowed(url: string): boolean {
   return ALLOW.some((re) => re.test(url));
