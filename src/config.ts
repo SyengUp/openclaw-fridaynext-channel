@@ -24,6 +24,7 @@ export type PublicAccessConfigResolved = {
   relayToken: string;
   subDomainHost: string;
   subdomain: string;
+  allocatorUrl: string;
   corePort: number;
 };
 
@@ -79,6 +80,7 @@ export function resolveFridayNextConfig(cfg: unknown): FridayNextConfig {
       relayToken: asString(pa.relayToken, ""),
       subDomainHost: asString(pa.subDomainHost, "bj.gw.syengup.host"),
       subdomain: asString(pa.subdomain, ""),
+      allocatorUrl: asString(pa.allocatorUrl, "https://friday.syengup.host/gw-alloc/allocate"),
       corePort: asNumber(pa.corePort, 18789, 1, 65535),
     },
   };

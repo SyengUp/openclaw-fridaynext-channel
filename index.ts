@@ -138,17 +138,20 @@ export default defineChannelPluginEntry({
           getHostOpenClawConfigSnapshot(getFridayNextRuntime().config),
         );
         const paLog = createFridayNextLogger("public-access");
-        startPublicAccess(
+        void startPublicAccess(
           {
             enabled: paCfg.publicAccess.enabled,
             relayAddr: paCfg.publicAccess.relayAddr,
             relayToken: paCfg.publicAccess.relayToken,
             subDomainHost: paCfg.publicAccess.subDomainHost,
             subdomain: paCfg.publicAccess.subdomain || undefined,
+            allocatorUrl: paCfg.publicAccess.allocatorUrl,
             corePort: paCfg.publicAccess.corePort,
             authToken: paCfg.authToken,
           },
           (m) => paLog.info(m),
+        ).catch((e: unknown) =>
+          paLog.warn(`startPublicAccess failed: ${e instanceof Error ? e.message : String(e)}`),
         );
       } catch (e) {
         createFridayNextLogger("public-access").warn(

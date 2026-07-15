@@ -20,7 +20,7 @@ import {
   readFileSync,
   chmodSync,
 } from "node:fs";
-import { createHash, randomBytes } from "node:crypto";
+import { createHash } from "node:crypto";
 import { homedir, platform, arch, networkInterfaces } from "node:os";
 import { join } from "node:path";
 
@@ -35,8 +35,11 @@ export type PublicAccessConfig = {
   relayToken: string;
   /** Wildcard base — frps `subDomainHost`. Public URL = `<subdomain>.<subDomainHost>`. */
   subDomainHost: string;
-  /** Fixed subdomain; derived + persisted when absent. */
+  /** Fixed subdomain; when absent, allocated from the relay registry (collision-proof). */
   subdomain?: string;
+  /** Relay subdomain-allocator endpoint. The single authority that guarantees unique
+   * subdomains: same gateway key → same subdomain, distinct keys → distinct, never a dup. */
+  allocatorUrl: string;
   /** Core gateway HTTP port to expose. */
   corePort: number;
   /** Bearer token the app uses (from the channel config). */
@@ -57,6 +60,7 @@ type Logger = (msg: string) => void;
 let child: ChildProcess | null = null;
 let stopped = false;
 let keepaliveTimer: ReturnType<typeof setTimeout> | null = null;
+let allocRetryTimer: ReturnType<typeof setTimeout> | null = null;
 let cachedPairing: PairingInfo | null = null;
 
 function ensureDir(): void {
@@ -135,7 +139,30 @@ function ensureCert(cn: string): { crt: string; key: string; fingerprint: string
   return { crt, key, fingerprint };
 }
 
-function resolveSubdomain(cfg: PublicAccessConfig): string {
+/** POST the gateway key to the relay allocator; returns the assigned subdomain or throws. */
+async function requestAllocation(url: string, token: string, key: string): Promise<string> {
+  const res = await fetch(url, {
+    method: "POST",
+    headers: { "content-type": "application/json", authorization: `Bearer ${token}` },
+    body: JSON.stringify({ key }),
+    signal: AbortSignal.timeout(10_000),
+  });
+  if (!res.ok) throw new Error(`allocator HTTP ${res.status}`);
+  const data = (await res.json()) as { subdomain?: unknown };
+  const sub = typeof data.subdomain === "string" ? data.subdomain.trim() : "";
+  if (!sub) throw new Error("allocator returned no subdomain");
+  return sub;
+}
+
+/**
+ * Resolve this gateway's subdomain, collision-proof by construction:
+ *   1. explicit `cfg.subdomain` override, else
+ *   2. the locally-persisted allocation (`subdomain.txt`), else
+ *   3. a fresh allocation from the relay registry keyed by sha256(authToken).
+ * Returns null when step 3 can't reach the relay — the caller then BLOCKS public
+ * access rather than minting a locally-random subdomain (which could collide).
+ */
+async function resolveSubdomain(cfg: PublicAccessConfig, log: Logger): Promise<string | null> {
   if (cfg.subdomain && cfg.subdomain.trim()) return cfg.subdomain.trim();
   const f = join(DATA_DIR, "subdomain.txt");
   if (existsSync(f)) {
@@ -143,9 +170,16 @@ function resolveSubdomain(cfg: PublicAccessConfig): string {
     if (s) return s;
   }
   ensureDir();
-  const sub = `fn${randomBytes(5).toString("hex")}`;
-  writeFileSync(f, sub);
-  return sub;
+  const key = createHash("sha256").update(cfg.authToken || "").digest("hex");
+  try {
+    const sub = await requestAllocation(cfg.allocatorUrl, cfg.relayToken, key);
+    writeFileSync(f, sub);
+    log(`allocated subdomain "${sub}" from relay registry`);
+    return sub;
+  } catch (e) {
+    log(`subdomain allocation failed: ${e instanceof Error ? e.message : String(e)}`);
+    return null;
+  }
 }
 
 function writeFrpcConfig(cfg: PublicAccessConfig, subdomain: string, crt: string, key: string): string {
@@ -198,7 +232,10 @@ function spawnFrpc(confPath: string, log: Logger): void {
 }
 
 /** Bring public access up. Returns the pairing info (also cached for the HTTP endpoint). */
-export function startPublicAccess(cfg: PublicAccessConfig, log: Logger): PairingInfo | null {
+export async function startPublicAccess(
+  cfg: PublicAccessConfig,
+  log: Logger,
+): Promise<PairingInfo | null> {
   if (!cfg.enabled) {
     log("public access disabled (channels.friday-next.publicAccess.enabled=false)");
     return null;
@@ -206,7 +243,21 @@ export function startPublicAccess(cfg: PublicAccessConfig, log: Logger): Pairing
   stopped = false;
   ensureDir();
   ensureBinary(log);
-  const subdomain = resolveSubdomain(cfg);
+
+  // Block (don't tunnel) until the relay hands us a collision-proof subdomain; retry
+  // so a transient relay outage self-heals without minting a risky local subdomain.
+  const subdomain = await resolveSubdomain(cfg, log);
+  if (!subdomain) {
+    log("public access blocked: no subdomain allocated (relay unreachable?) — retrying in 30s");
+    if (allocRetryTimer) clearTimeout(allocRetryTimer);
+    if (!stopped) {
+      allocRetryTimer = setTimeout(() => {
+        allocRetryTimer = null;
+        if (!stopped && !child) void startPublicAccess(cfg, log);
+      }, 30_000);
+    }
+    return null;
+  }
   const cn = `${subdomain}.${cfg.subDomainHost}`;
   const { crt, key, fingerprint } = ensureCert(cn);
   const confPath = writeFrpcConfig(cfg, subdomain, crt, key);
@@ -236,6 +287,10 @@ export function stopPublicAccess(): void {
   if (keepaliveTimer) {
     clearTimeout(keepaliveTimer);
     keepaliveTimer = null;
+  }
+  if (allocRetryTimer) {
+    clearTimeout(allocRetryTimer);
+    allocRetryTimer = null;
   }
   if (child) {
     try {
