@@ -2,7 +2,6 @@ import { describe, expect, it } from "vitest";
 import {
   classifyInstallSourceFromLoadedPath,
   isPrereleaseVersion,
-  resolveUpgradeDistTag,
   semverGreater,
   semverGreaterConsideringPrerelease,
 } from "./plugin-install-info.js";
@@ -73,14 +72,6 @@ describe("isPrereleaseVersion", () => {
     expect(isPrereleaseVersion("v1.0.15")).toBe(false);
     expect(isPrereleaseVersion(null)).toBe(false);
     expect(isPrereleaseVersion(undefined)).toBe(false);
-  });
-});
-
-describe("resolveUpgradeDistTag", () => {
-  it("tracks beta for a prerelease build, latest for a stable build", () => {
-    expect(resolveUpgradeDistTag("1.0.15-beta.0")).toBe("beta");
-    expect(resolveUpgradeDistTag("1.0.15")).toBe("latest");
-    expect(resolveUpgradeDistTag(null)).toBe("latest");
   });
 });
 

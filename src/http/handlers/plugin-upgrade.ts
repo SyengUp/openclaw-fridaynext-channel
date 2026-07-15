@@ -2,11 +2,7 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import { extractBearerToken } from "../middleware/auth.js";
 import { createFridayNextLogger } from "../../logging.js";
 import { PLUGIN_PACKAGE_NAME, PLUGIN_VERSION } from "../../version.js";
-import {
-  fetchLatestVersion,
-  getInstallSource,
-  resolveUpgradeDistTag,
-} from "../../plugin-install-info.js";
+import { fetchLatestVersion, getInstallSource } from "../../plugin-install-info.js";
 import { getUpgradeRuntime } from "../../upgrade-runtime.js";
 
 const UPGRADE_TIMEOUT_MS = 120_000;
@@ -69,13 +65,13 @@ export async function handlePluginUpgrade(
     return true;
   }
 
-  // Track the same dist-tag the running build is on: a beta tester upgrades along
-  // the `beta` line, a stable install along `latest`. Graduation off beta = re-run
-  // the installer without `--beta`.
-  const distTag = resolveUpgradeDistTag(PLUGIN_VERSION);
-  const latest = await fetchLatestVersion(Date.now(), distTag);
+  // In-app upgrade tracks the STABLE `latest` line ONLY. Beta is an opt-in testing
+  // channel installed out-of-band via `install.js --beta`; it must never be pushed
+  // through the in-app upgrade button. A prerelease install therefore upgrades only
+  // once a stable release surpasses it (graduation onto the stable line).
+  const latest = await fetchLatestVersion(Date.now(), "latest");
   if (!latest) {
-    log.error(`plugin upgrade aborted: could not resolve ${distTag} version from npm registry`);
+    log.error(`plugin upgrade aborted: could not resolve latest version from npm registry`);
     res.statusCode = 502;
     res.setHeader("Content-Type", "application/json");
     res.end(

@@ -99,18 +99,6 @@ export function isPrereleaseVersion(v: string | null | undefined): boolean {
 }
 
 /**
- * Which npm dist-tag this install tracks for upgrades. A prerelease build
- * (installed via `install.js --beta`) tracks the `beta` line so testers receive
- * newer betas from the in-app upgrade button; a stable build tracks `latest`.
- * Graduation back to stable = re-run the installer without `--beta`.
- */
-export function resolveUpgradeDistTag(
-  currentVersion: string | null | undefined,
-): "latest" | "beta" {
-  return isPrereleaseVersion(currentVersion) ? "beta" : "latest";
-}
-
-/**
  * Strict-greater semver compare INCLUDING prerelease ordering:
  *   1.0.15-beta.0 < 1.0.15-beta.1 < 1.0.15 < 1.0.16
  * Unlike `semverGreater` (which ignores the suffix so stable-line comparisons

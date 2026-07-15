@@ -4,7 +4,6 @@ import { PLUGIN_VERSION } from "../../version.js";
 import {
   fetchLatestVersion,
   getInstallSource,
-  resolveUpgradeDistTag,
   semverGreaterConsideringPrerelease,
 } from "../../plugin-install-info.js";
 
@@ -37,11 +36,13 @@ export async function handlePluginInfo(
 
   const installSource = getInstallSource();
   const canAutoUpgrade = installSource === "npm";
-  // A prerelease build tracks the `beta` dist-tag so testers get newer betas;
-  // a stable build tracks `latest`. Prerelease-aware compare so beta.0 → beta.1
-  // registers as upgradable (plain major.minor.patch would read them as equal).
-  const distTag = resolveUpgradeDistTag(PLUGIN_VERSION);
-  const latestVersion = await fetchLatestVersion(Date.now(), distTag);
+  // The in-app version check tracks the STABLE `latest` line ONLY — beta is an
+  // opt-in testing channel (installed out-of-band via `install.js --beta`) and must
+  // never surface through the in-app upgrade prompt. The prerelease-aware compare
+  // means a beta install sees no upgrade until a stable release outranks it
+  // (1.0.15 > 1.0.15-beta.8), so graduation onto stable still lights the button up,
+  // while beta→newer-beta is never offered here.
+  const latestVersion = await fetchLatestVersion(Date.now(), "latest");
   const upgradable =
     canAutoUpgrade && semverGreaterConsideringPrerelease(latestVersion, PLUGIN_VERSION);
 
