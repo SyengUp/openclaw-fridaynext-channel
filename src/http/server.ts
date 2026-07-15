@@ -29,6 +29,7 @@ import { handleLinkPreview } from "./handlers/link-preview.js";
 import { handleHealth } from "./handlers/health.js";
 import { handlePluginInfo } from "./handlers/plugin-info.js";
 import { handlePluginUpgrade } from "./handlers/plugin-upgrade.js";
+import { handlePublicAccessPairing } from "./handlers/plugin-pairing.js";
 import { handleSessionDelete } from "./handlers/session-delete.js";
 import { applyCorsHeaders } from "./middleware/cors.js";
 import { resolveFridayNextConfig } from "../config.js";
@@ -172,6 +173,11 @@ async function handleFridayNextRoute(req: IncomingMessage, res: ServerResponse):
   // Route: POST /friday-next/plugin/upgrade (npm install @latest + safe gateway restart)
   if (req.method === "POST" && pathname === "/friday-next/plugin/upgrade") {
     return await handlePluginUpgrade(req, res);
+  }
+
+  // Route: GET /friday-next/public-access/pairing (superset QR payload for guest sharing)
+  if (req.method === "GET" && pathname === "/friday-next/public-access/pairing") {
+    return await handlePublicAccessPairing(req, res);
   }
 
   // Not found
