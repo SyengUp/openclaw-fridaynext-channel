@@ -99,9 +99,12 @@ export function resolveFridayNextConfig(cfg: unknown): FridayNextConfig {
       corePort: asNumber(pa.corePort, 18789, 1, 65535),
     },
     appAttest: {
-      // Default OFF so enabling public access never accidentally locks out a client
-      // that can't attest (e.g. simulator). The bare-test gateway flips it on.
-      required: asBool(aa.required, false),
+      // Default ON, but the gate is PUBLIC-SCOPED (only enforced on requests the
+      // filter proxy marks as arriving via the relay — see server.ts isPublicRequest).
+      // So this default is safe: with public access off there's no marker and the gate
+      // never fires (LAN untouched); with public access on, the public URL is
+      // automatically app-only. Set false to opt out even on the public surface.
+      required: asBool(aa.required, true),
       teamId: asString(aa.teamId, "LQF97XWK5A"),
       bundleId: asString(aa.bundleId, "SyengUp.FridayNext"),
       allowDevelopment: asBool(aa.allowDevelopment, true),

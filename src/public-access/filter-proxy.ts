@@ -13,6 +13,13 @@
 import { createServer, request as httpRequest, type Server } from "node:http";
 import { connect as netConnect } from "node:net";
 
+// Trusted "this request arrived via the public relay" marker. EVERY public request
+// must traverse this proxy (frpc forwards only here), so stamping it here — after
+// stripping any client-supplied value — makes it unforgeable from the outside. The
+// plugin's App Attest gate enforces ONLY when this marker is present, so the gate
+// scopes to the public surface and never touches LAN clients hitting core directly.
+const PUBLIC_MARKER = "x-fridaynext-public";
+
 // Everything the app needs over the public relay; nothing else reaches core.
 //   /friday-next/*        REST + SSE (attest-gated by the plugin)
 //   /friday-next-admin/*  session delete (gateway-authed)
@@ -71,6 +78,9 @@ export function startFilterProxy(listenPort: number, corePort: number, log: (m: 
       res.end("not found");
       return;
     }
+    // Overwrite any client-supplied marker with our trusted one (Node lowercases
+    // header keys, so this covers every casing the client could have sent).
+    req.headers[PUBLIC_MARKER] = "1";
     const upstream = httpRequest(
       { host: "127.0.0.1", port: corePort, method: req.method, path: url, headers: req.headers },
       (up) => {
@@ -96,8 +106,11 @@ export function startFilterProxy(listenPort: number, corePort: number, log: (m: 
     const up = netConnect(corePort, "127.0.0.1", () => {
       up.write(`${req.method} ${url} HTTP/1.1\r\n`);
       for (let i = 0; i < req.rawHeaders.length; i += 2) {
+        // Drop any client-supplied marker; we append our own trusted one below.
+        if (req.rawHeaders[i].toLowerCase() === PUBLIC_MARKER) continue;
         up.write(`${req.rawHeaders[i]}: ${req.rawHeaders[i + 1]}\r\n`);
       }
+      up.write(`X-FridayNext-Public: 1\r\n`);
       up.write("\r\n");
       if (head && head.length) up.write(head);
       socket.pipe(up);

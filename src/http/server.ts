@@ -57,6 +57,17 @@ function isAttestExempt(pathname: string): boolean {
   );
 }
 
+/** True when the request arrived over the public relay tunnel. The public-surface
+ * filter proxy — which EVERY public request must traverse — stamps this marker and
+ * strips any client-supplied value, so it can't be forged from outside. LAN clients
+ * hit core directly and never carry it. The App Attest gate keys off this so it
+ * enforces "only the genuine app" on the PUBLIC surface only, leaving LAN untouched
+ * (old apps keep working at home; a browser that finds the public URL is refused). */
+function isPublicRequest(req: IncomingMessage): boolean {
+  const v = req.headers["x-fridaynext-public"];
+  return (Array.isArray(v) ? v[0] : v) === "1";
+}
+
 /** Route matcher - returns the matched handler or null. */
 async function handleFridayNextRoute(req: IncomingMessage, res: ServerResponse): Promise<boolean> {
   const url = new URL(req.url ?? "/", "http://localhost");
@@ -68,13 +79,15 @@ async function handleFridayNextRoute(req: IncomingMessage, res: ServerResponse):
     return true;
   }
 
-  // App Attest gate: when required, every route except the bootstrap/owner-side
-  // allowlist must carry a valid session token (proof the caller is the genuine
-  // FridayNext app). Enforced before any protected handler runs.
+  // App Attest gate: on the PUBLIC surface only (isPublicRequest), when required,
+  // every route except the bootstrap/owner-side allowlist must carry a valid session
+  // token (proof the caller is the genuine FridayNext app). LAN requests never carry
+  // the public marker, so they're never gated — old apps keep working at home, while
+  // a browser/script that finds the public URL is refused.
   const attestCfg = resolveFridayNextConfig(
     getHostOpenClawConfigSnapshot(getFridayNextRuntime().config),
   );
-  if (attestCfg.appAttest.required && !isAttestExempt(pathname)) {
+  if (attestCfg.appAttest.required && isPublicRequest(req) && !isAttestExempt(pathname)) {
     const sess = req.headers["x-fridaynext-attest"];
     const token = Array.isArray(sess) ? sess[0] : sess;
     if (!token || !verifySession(token, attestCfg.authToken, Date.now())) {
