@@ -130,12 +130,17 @@ function ensureCert(cn: string): { crt: string; key: string; fingerprint: string
   ensureDir();
   const crt = join(DATA_DIR, "gateway-cert.pem");
   const key = join(DATA_DIR, "gateway-key.pem");
-  if (!existsSync(crt) || !existsSync(key)) {
+  // REUSE the existing keypair — the app pins the public KEY, so a real→self-signed
+  // fallback (relay signer down) must never change the key, or the pinned app rejects.
+  // Generate the key only when absent; then self-sign a cert FROM that key (never -newkey).
+  if (!existsSync(key)) {
+    execFileSync("openssl", ["genrsa", "-out", key, "2048"], { timeout: 30_000 });
+  }
+  if (!existsSync(crt)) {
     execFileSync(
       "openssl",
       [
-        "req", "-x509", "-newkey", "rsa:2048",
-        "-keyout", key, "-out", crt,
+        "req", "-x509", "-key", key, "-out", crt,
         "-days", "3650", "-nodes", "-subj", `/CN=${cn}`,
       ],
       { timeout: 30_000 },
