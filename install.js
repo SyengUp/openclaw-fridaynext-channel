@@ -538,6 +538,36 @@ if (DIST_TAG === "beta") {
     );
   }
 }
+// Encrypt the QR payload into the `FNQR1:` envelope so a generic QR reader shows
+// only ciphertext — the public relay domain never appears in plaintext, and the
+// pairing code is only useful inside the FridayNext app (which holds the key and
+// decodes it in PairingQRCrypto.swift). OBFUSCATION-GRADE: this repo is open source,
+// so the key below is discoverable; the real access control is App Attest + the
+// relay's server-side authorization gate, NOT this. Its sole job is keeping the
+// domain out of casual/plaintext view. AES-256-GCM, random 12-byte IV, layout
+// iv(12) ‖ ciphertext ‖ tag(16), base64url. Must stay in lockstep with the app.
+const QR_OBFUSCATION_KEY = Buffer.from(
+  "+ZxgpPIzbKu75GRrb1sjlS2Snoo0TSwePXDzQ2N75PY=",
+  "base64",
+);
+async function encryptQRPayload(plaintext) {
+  const { createCipheriv, randomBytes } = await import("node:crypto");
+  const iv = randomBytes(12);
+  const cipher = createCipheriv("aes-256-gcm", QR_OBFUSCATION_KEY, iv);
+  const ct = Buffer.concat([cipher.update(plaintext, "utf8"), cipher.final()]);
+  const tag = cipher.getAuthTag();
+  return "FNQR1:" + Buffer.concat([iv, ct, tag]).toString("base64url");
+}
+
+// Fall back to the plaintext payload only if crypto is somehow unavailable (very
+// old Node); the app parser still accepts plaintext for backward compatibility.
+let qrData = qrPayload;
+try {
+  qrData = await encryptQRPayload(qrPayload);
+} catch {
+  qrData = qrPayload;
+}
+
 let qrShown = false;
 
 try {
@@ -546,7 +576,7 @@ try {
   log(BOLD_YELLOW("Scan below to auto-fill URL & Token in FridayNext app:"));
   log(BOLD_YELLOW("扫描下方二维码自动填入 URL 和 Token："));
   log("");
-  qrcode.generate(qrPayload, { small: true });
+  qrcode.generate(qrData, { small: true });
   log("");
   log("If QR scan doesn't work, enter manually:");
   log("若二维码无法使用，请手动输入：");
