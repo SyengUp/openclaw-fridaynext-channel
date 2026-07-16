@@ -95,7 +95,7 @@ export async function handleAttestVerify(
       allowDevelopmentEnvironment: cfg.appAttest.allowDevelopment,
     });
     saveKey(keyId, { publicKey: result.publicKey, signCount: 0, environment: result.environment });
-    const { token, exp } = issueSession(keyId, cfg.authToken, Date.now());
+    const { token, exp } = issueSession(keyId, Date.now());
     return json(res, 200, { sessionToken: token, exp });
   } catch (e) {
     createFridayNextLogger("attest").warn(
@@ -134,7 +134,7 @@ export async function handleAttestRefresh(
       signCount: stored.signCount,
     });
     updateSignCount(keyId, signCount);
-    const { token, exp } = issueSession(keyId, cfg.authToken, Date.now());
+    const { token, exp } = issueSession(keyId, Date.now());
     return json(res, 200, { sessionToken: token, exp });
   } catch (e) {
     createFridayNextLogger("attest").warn(

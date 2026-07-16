@@ -90,7 +90,7 @@ async function handleFridayNextRoute(req: IncomingMessage, res: ServerResponse):
   if (attestCfg.appAttest.required && isPublicRequest(req) && !isAttestExempt(pathname)) {
     const sess = req.headers["x-fridaynext-attest"];
     const token = Array.isArray(sess) ? sess[0] : sess;
-    if (!token || !verifySession(token, attestCfg.authToken, Date.now())) {
+    if (!token || !verifySession(token, Date.now())) {
       res.statusCode = 403;
       res.setHeader("Content-Type", "application/json");
       res.end(JSON.stringify({ error: "app attestation required", code: "attest_required" }));
