@@ -90,6 +90,25 @@ const TUNNEL_CAP = Number(process.env.CP_TUNNEL_CAP || 3); // D31 per Apple ID
 const NODES = (process.env.CP_NODES || "bj").split(",");
 const APP_ATTEST_TEAM_ID = process.env.CP_ATTEST_TEAM_ID || "LQF97XWK5A";
 const APP_ATTEST_BUNDLE_ID = process.env.CP_ATTEST_BUNDLE_ID || "SyengUp.FridayNext";
+
+// ——— OSS attachment side-channel (Phase E) ———
+// Presigned-URL model: the control plane holds the long-term OSS key and signs
+// short-lived scoped PUT/GET URLs; clients do plain HTTP (progress/Range resume
+// for free, no OSS SDK anywhere). Absent config → 503 oss_not_configured and the
+// app falls back to the tunnel path — the side-channel is an optimization, never
+// a dependency. Bucket lifecycle (1–7d auto-delete) is provisioned bucket-side (E6).
+const OSS_BUCKET = process.env.OSS_BUCKET || ""; // e.g. "fridaynext-attach"
+const OSS_ENDPOINT = process.env.OSS_ENDPOINT || ""; // e.g. "oss-cn-beijing.aliyuncs.com"
+const OSS_ACCESS_KEY_ID = process.env.OSS_ACCESS_KEY_ID || "";
+const OSS_ACCESS_KEY_SECRET = process.env.OSS_ACCESS_KEY_SECRET || "";
+// Testnet/mock override: when set, signed URLs point at the mock OSS instead of Aliyun.
+const OSS_MOCK_BASE = process.env.OSS_MOCK_BASE || "";
+const OSS_URL_TTL_SEC = Number(process.env.OSS_URL_TTL_SEC || 900); // 15 min
+const OSS_MAX_OBJECT_BYTES = Number(process.env.OSS_MAX_OBJECT_BYTES || 100 * 1024 * 1024);
+// Monthly per-tunnel traffic caps (PRD §10: trial well below paid; paid 3GB).
+const OSS_CAP_TRIAL = Number(process.env.OSS_CAP_TRIAL || 300 * 1024 * 1024);
+const OSS_CAP_PAID = Number(process.env.OSS_CAP_PAID || 3 * 1024 * 1024 * 1024);
+
 const DAY = 86_400_000;
 const now = () => Date.now();
 const rid = (n = 8) => crypto.randomBytes(n).toString("hex");
@@ -126,9 +145,11 @@ const cp = Object.assign(
     attestKeys: {}, // keyId → {publicKey, signCount, environment, deviceId, createdAt}
     revoked: [], // [subdomain] — rejected at the frps gate on next registration
     killswitch: false, // emergency: reject ALL FridayNext-namespace registrations
+    ossUsage: {}, // subdomain → { month: "2026-07", bytes } — sign-time traffic accounting
   },
   loadJson(CP_STATE, {}),
 );
+if (!cp.ossUsage) cp.ossUsage = {}; // state files written before Phase E
 function saveCp() {
   saveJson(CP_STATE, cp);
 }
@@ -278,6 +299,88 @@ function subdomainHasActiveGrant(sub) {
     if (t && t.subdomain === sub && g.expiresAt > now()) return true;
   }
   return false;
+}
+
+// ---------------------------------------------------------------------------
+// OSS side-channel signing (Phase E).
+// ---------------------------------------------------------------------------
+function ossConfigured() {
+  return Boolean(OSS_MOCK_BASE || (OSS_BUCKET && OSS_ENDPOINT && OSS_ACCESS_KEY_ID && OSS_ACCESS_KEY_SECRET));
+}
+
+/** Monthly cap for a tunnel: paid tier if ANY entitled non-trial sub owns a grant on it. */
+function ossCapFor(sub) {
+  for (const g of Object.values(cp.grants)) {
+    const t = cp.tunnels[g.tunnelId];
+    if (!t || t.subdomain !== sub || g.expiresAt <= now()) continue;
+    const s = cp.subs[g.appAccountToken];
+    if (s && s.state === "active" && (!s.expiresAt || s.expiresAt > now())) return OSS_CAP_PAID;
+  }
+  return OSS_CAP_TRIAL;
+}
+
+/** Sign-time traffic accounting (both directions count against the tunnel's month). */
+function ossCharge(sub, bytes) {
+  const month = new Date().toISOString().slice(0, 7);
+  const u = cp.ossUsage[sub];
+  if (!u || u.month !== month) cp.ossUsage[sub] = { month, bytes: 0 };
+  cp.ossUsage[sub].bytes += bytes;
+  saveCp();
+  return cp.ossUsage[sub].bytes;
+}
+
+function ossUsedBytes(sub) {
+  const month = new Date().toISOString().slice(0, 7);
+  const u = cp.ossUsage[sub];
+  return u && u.month === month ? u.bytes : 0;
+}
+
+/**
+ * Presign an Aliyun OSS V1 URL (HMAC-SHA1 query auth) — hand-rolled, zero deps.
+ * StringToSign = VERB\nContent-MD5\nContent-Type\nExpires\nCanonicalizedResource.
+ * In mock mode the URL targets the testnet mock OSS with the same query shape
+ * (the mock does not verify signatures — contract-shape parity only).
+ */
+function ossPresign(method, objectKey, contentType) {
+  const expires = Math.floor(now() / 1000) + OSS_URL_TTL_SEC;
+  if (OSS_MOCK_BASE) {
+    return {
+      url: `${OSS_MOCK_BASE.replace(/\/$/, "")}/${objectKey}?Expires=${expires}&Signature=mock`,
+      headers: contentType ? { "content-type": contentType } : {},
+      expiresAt: expires * 1000,
+    };
+  }
+  const resource = `/${OSS_BUCKET}/${objectKey}`;
+  const stringToSign = `${method}\n\n${contentType || ""}\n${expires}\n${resource}`;
+  const signature = crypto.createHmac("sha1", OSS_ACCESS_KEY_SECRET).update(stringToSign).digest("base64");
+  const q = new URLSearchParams({
+    OSSAccessKeyId: OSS_ACCESS_KEY_ID,
+    Expires: String(expires),
+    Signature: signature,
+  });
+  return {
+    url: `https://${OSS_BUCKET}.${OSS_ENDPOINT}/${encodeURI(objectKey)}?${q}`,
+    headers: contentType ? { "content-type": contentType } : {},
+    expiresAt: expires * 1000,
+  };
+}
+
+/** Resolve + authorize the tunnel a /v1/oss/sign request acts on. Two caller legs:
+ *  app: { appAccountToken, grantId } — grant must be live and owned by the token;
+ *  gateway plugin: { gatewayKey } — sha256 hex present in the allocation registry.
+ *  Returns { sub } or { error: [status, code] }. */
+function ossResolveTunnel(b) {
+  if (typeof b.gatewayKey === "string" && /^[a-f0-9]{16,128}$/i.test(b.gatewayKey)) {
+    const sub = registry[b.gatewayKey.toLowerCase()];
+    return sub ? { sub } : { error: [404, "gateway_not_allocated"] };
+  }
+  const g = cp.grants[b.grantId];
+  if (!g || g.appAccountToken !== b.appAccountToken) return { error: [404, "grant_not_found"] };
+  if (g.expiresAt <= now()) return { error: [403, "grant_expired"] };
+  ensureFreeTestEntitlement(b.appAccountToken);
+  if (!entitled(b.appAccountToken)) return { error: [402, "no_entitlement"] };
+  const t = cp.tunnels[g.tunnelId];
+  return t ? { sub: t.subdomain } : { error: [404, "grant_not_found"] };
 }
 
 // Serialize certbot runs — one ACME order at a time (shared account + webroot).
@@ -676,6 +779,46 @@ const cpServer = http.createServer(async (req, res) => {
     const s = cp.subs[b.appAccountToken];
     if (!s) return j(200, { state: "none", entitled: false });
     return j(200, { state: s.state, entitled: entitled(b.appAccountToken), expiresAt: s.expiresAt });
+  }
+
+  // Phase E — OSS attachment side-channel: presign a scoped PUT/GET URL.
+  // Two caller legs (see ossResolveTunnel): the app (grant) and the gateway plugin
+  // (gatewayKey). The blob is client-encrypted before upload — the control plane only
+  // signs a storage URL and meters bytes; it never sees a content key or plaintext.
+  // 503 when OSS isn't provisioned → the app falls back to the tunnel path.
+  if (p === "/v1/oss/sign") {
+    if (!ossConfigured()) return j(503, { error: "oss_not_configured" });
+    const op = b.op === "get" ? "get" : b.op === "put" ? "put" : null;
+    if (!op) return j(400, { error: "bad_op", hint: 'op must be "put" or "get"' });
+    const resolved = ossResolveTunnel(b);
+    if (resolved.error) return j(resolved.error[0], { error: resolved.error[1] });
+    const sub = resolved.sub;
+
+    // objectKey is always scoped under the tunnel's subdomain prefix so one tunnel can
+    // never read/overwrite another's blobs (enforced again by the RAM policy in prod).
+    const objId = String(b.objectId || "").replace(/[^a-zA-Z0-9._-]/g, "");
+    if (!objId) return j(400, { error: "bad_object_id" });
+    const objectKey = `att/${sub}/${objId}`;
+
+    if (op === "put") {
+      const size = Number(b.size || 0);
+      if (!Number.isFinite(size) || size <= 0) return j(400, { error: "bad_size" });
+      if (size > OSS_MAX_OBJECT_BYTES) return j(413, { error: "object_too_large", maxBytes: OSS_MAX_OBJECT_BYTES });
+      const cap = ossCapFor(sub);
+      if (ossUsedBytes(sub) + size > cap) {
+        return j(429, { error: "oss_quota_exceeded", cap, used: ossUsedBytes(sub) });
+      }
+      const signed = ossPresign("PUT", objectKey, b.contentType || "application/octet-stream");
+      const total = ossCharge(sub, size); // meter at sign time (upload commit is fire-and-forget)
+      audit("oss.sign", { sub, op, objId, size, monthBytes: total });
+      return j(200, { objectKey, ...signed, quota: { cap, used: total } });
+    }
+    // get: metered too (egress), but never blocked — a paid blob must stay retrievable.
+    const size = Math.max(0, Number(b.size || 0));
+    if (size) ossCharge(sub, size);
+    const signed = ossPresign("GET", objectKey, "");
+    audit("oss.sign", { sub, op, objId });
+    return j(200, { objectKey, ...signed });
   }
 
   // D32 issue (admin — gated above)

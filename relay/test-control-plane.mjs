@@ -26,6 +26,8 @@ function startServer() {
       CP_PORT: String(CP),
       GW_ALLOC_TOKEN: TOKEN,
       CP_FREE_TEST: "1",
+      OSS_MOCK_BASE: "http://127.0.0.1:17999",
+      OSS_CAP_TRIAL: String(1024), // 1KB trial cap → easy quota test
     },
     stdio: ["ignore", "pipe", "pipe"],
   });
@@ -189,6 +191,25 @@ try {
   await req(CP, "/v1/admin/killswitch", { body: { on: false }, bearer: TOKEN });
   r = await gateReq({ proxy_name: "p1", proxy_type: "https", subdomain: SUB });
   check("killswitch 关闭恢复放行", r.json.reject === false);
+
+  console.log("— OSS 附件旁路签名(Phase E)—");
+  // 用前面 U1 的 grant 与网关 key 两条腿
+  r = await req(CP, "/v1/oss/sign", { body: { op: "put", grantId: GRANT, appAccountToken: U1, objectId: "blob1", size: 500, contentType: "application/octet-stream" } });
+  check("app 腿 PUT 签名 ok", r.status === 200 && /att\/.+\/blob1/.test(r.json.objectKey) && r.json.url.includes("Signature="), JSON.stringify(r.json));
+  check("对象键按 subdomain 隔离", r.json.objectKey.startsWith(`att/${SUB}/`));
+  check("配额记账回传", r.json.quota && r.json.quota.used === 500 && r.json.quota.cap === 1024);
+  r = await req(CP, "/v1/oss/sign", { body: { op: "get", grantId: GRANT, appAccountToken: U1, objectId: "blob1" } });
+  check("app 腿 GET 签名 ok", r.status === 200 && r.json.url.includes("att/"));
+  r = await req(CP, "/v1/oss/sign", { body: { op: "put", gatewayKey: "a".repeat(64), objectId: "out1", size: 300 } });
+  check("网关腿(gatewayKey)PUT 签名 ok", r.status === 200 && r.json.objectKey === `att/${SUB}/out1`);
+  r = await req(CP, "/v1/oss/sign", { body: { op: "put", gatewayKey: "9".repeat(64), objectId: "x", size: 1 } });
+  check("未分配 gatewayKey → 404", r.status === 404 && r.json.error === "gateway_not_allocated", JSON.stringify(r.json));
+  r = await req(CP, "/v1/oss/sign", { body: { op: "put", grantId: "nope", appAccountToken: U1, objectId: "x", size: 1 } });
+  check("坏 grant → 404", r.status === 404 && r.json.error === "grant_not_found");
+  r = await req(CP, "/v1/oss/sign", { body: { op: "put", grantId: GRANT, appAccountToken: U1, objectId: "big", size: 2000 } });
+  check("超月配额 → 429 oss_quota_exceeded", r.status === 429 && r.json.error === "oss_quota_exceeded" && r.json.cap === 1024);
+  r = await req(CP, "/v1/oss/sign", { body: { op: "bad", grantId: GRANT, appAccountToken: U1, objectId: "x" } });
+  check("坏 op → 400", r.status === 400 && r.json.error === "bad_op");
 
   console.log("— 持久化(重启存活)—");
   await stopServer();
