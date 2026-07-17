@@ -1,6 +1,8 @@
 import crypto from "node:crypto";
 import fs from "node:fs";
+import path from "node:path";
 import { sseEmitter } from "./sse/emitter.js";
+import { encryptOutboundBufferToFnoss } from "./public-access/outbound-media-oss.js";
 import { guessMimeType } from "./http/handlers/files.js";
 import { decodeBase64Media, downloadRemoteMedia, isHttpUrl } from "./media-fetch.js";
 import { getRunRoute } from "./run-metadata.js";
@@ -197,7 +199,15 @@ async function handleSend(ctx: MessageActionCtx): Promise<unknown> {
     for (const source of mediaSources) {
       const saved = await saveMediaBuffer(source.buffer, source.mimeType, "inbound");
       if (!saved.id) continue;
-      const publicUrl = `/friday-next/files/${encodeURIComponent(saved.id)}`;
+      const tunnelUrl = `/friday-next/files/${encodeURIComponent(saved.id)}`;
+      // Phase E (E-wire ③): divert the `message`-tool media send off the relay tunnel — encrypt +
+      // upload to OSS, hand the app a `fnoss:v1:…` ref. Graceful fallback to the tunnel URL when
+      // public access is off or the upload fails.
+      const fnoss = await encryptOutboundBufferToFnoss(source.buffer, {
+        name: filename || path.basename(source.originalMediaUrl) || "attachment",
+        mime: source.mimeType,
+      });
+      const publicUrl = fnoss ?? tunnelUrl;
       sseEmitter.broadcast(
         {
           type: "outbound",

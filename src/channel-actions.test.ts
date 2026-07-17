@@ -20,6 +20,14 @@ import {
   resetCronNotificationTrackerForTest,
 } from "./notifications/cron-notification-tracker.js";
 import { resetHeartbeatNotificationTrackerForTest } from "./notifications/heartbeat-notification-tracker.js";
+import { encryptOutboundBufferToFnoss } from "./public-access/outbound-media-oss.js";
+
+// The OSS rewrite hits the control plane + Aliyun; stub it. Default null = public access off, so the
+// existing `/friday-next/files/…` tunnel-URL assertions hold; one test opts in via mockResolvedValueOnce.
+vi.mock("./public-access/outbound-media-oss.js", () => ({
+  resolveOssOutboundConfig: vi.fn(() => null),
+  encryptOutboundBufferToFnoss: vi.fn(async () => null),
+}));
 
 /**
  * The `message` tool's `action=send` is handled here (NOT via outbound.sendText/sendMedia).
@@ -174,6 +182,43 @@ describe("channel-actions handleSend sessionKey routing", () => {
       "test-small.jpg",
     );
     expect(media?.data.sessionKey).toBe(appSession);
+  });
+
+  it("send media diverts to an OSS fnoss:v1 ref when public access is on (E-wire ③)", async () => {
+    const deviceId = "DEV-ACT-OSS";
+    const runId = "run-act-oss";
+    const appSession = "agent:operator:friday:direct:dev-act-oss:1780561609";
+    registerRunRoute({ runId, deviceId, sessionKey: appSession });
+    sseEmitter.trackDeviceForRun(deviceId, runId);
+    const res = connect(deviceId);
+
+    // Public access on → the OSS rewrite returns a fnoss ref; the tunnel URL must be replaced by it.
+    const fnossURI = "fnoss:v1:VEVTVFJFRg";
+    vi.mocked(encryptOutboundBufferToFnoss).mockResolvedValueOnce(fnossURI);
+
+    const jpegBytes = Buffer.from([0xff, 0xd8, 0xff, 0xe0, 0x00, 0x10]);
+    const result = await handleMessageAction({
+      action: "send",
+      params: {
+        to: deviceId,
+        message: "OSS 图来了",
+        buffer: jpegBytes.toString("base64"),
+        mimeType: "image/jpeg",
+        filename: "oss.jpg",
+      },
+      sessionKey: "agent:operator:main",
+    });
+
+    expect((result as { ok?: boolean }).ok).toBe(true);
+    const frames = parseOutboundFrames(res);
+    const media = frames.find((f) => f.type === "outbound" && f.data.op === "media");
+    expect(media).toBeTruthy();
+    expect(media?.data.mediaUrl).toBe(fnossURI);
+    expect(String(media?.data.mediaUrl)).not.toMatch(/^\/friday-next\/files\//);
+    expect(vi.mocked(encryptOutboundBufferToFnoss)).toHaveBeenCalledWith(
+      expect.any(Buffer),
+      expect.objectContaining({ mime: "image/jpeg" }),
+    );
   });
 
   it("send with a multi-file mediaUrls[] emits one op:media per file (same runId)", async () => {

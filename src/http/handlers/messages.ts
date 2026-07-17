@@ -60,8 +60,8 @@ import {
   encodeRefURI,
   downloadInboundMedia,
   uploadOutboundMedia,
-  type OSSTransferConfig,
 } from "../../public-access/oss-transfer.js";
+import { resolveOssOutboundConfig } from "../../public-access/outbound-media-oss.js";
 import {
   contextTokensFromUsageRecord,
   getRunMetadata,
@@ -417,12 +417,9 @@ export function composeBodyWithMediaRefs(text: string, mediaRefs: string[]): str
   return trimmed ? `${trimmed}\n\n${mediaRefs.join("\n")}` : mediaRefs.join("\n");
 }
 
-/** OSS transfer config from the resolved plugin config, or null when public access is off. */
-function ossTransferConfig(): OSSTransferConfig | null {
-  const cfg = resolveFridayNextConfig(getHostOpenClawConfigSnapshot(getFridayNextRuntime().config));
-  if (!cfg.publicAccess.enabled) return null;
-  return { controlPlaneUrl: cfg.publicAccess.controlPlaneUrl, authToken: cfg.authToken };
-}
+/** OSS transfer config from the resolved plugin config, or null when public access is off.
+ * Shared with the message-tool outbound path (`outbound-media-oss.ts`) so both stay in lockstep. */
+const ossTransferConfig = resolveOssOutboundConfig;
 
 /** Rewrite outbound deliver-payload media (`/friday-next/files/<token>` URLs the translate step
  * produced) into `fnoss:v1:…` references: read the local bytes, encrypt + upload to OSS, swap the

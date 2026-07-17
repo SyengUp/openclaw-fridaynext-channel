@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { EventEmitter } from "node:events";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { fridayNextChannelPlugin } from "./channel.js";
 import { sseEmitter } from "./sse/emitter.js";
 import { setOfflineQueueBaseDirForTest } from "./sse/offline-queue.js";
@@ -11,6 +11,14 @@ import {
   removeTempHistoryDir,
   setMockRuntime,
 } from "./test-support/mock-runtime.js";
+import { encryptOutboundBufferToFnoss } from "./public-access/outbound-media-oss.js";
+
+// The OSS rewrite hits the control plane + Aliyun; stub it. Default null = public access off, so the
+// existing tunnel-URL behavior holds; one test opts in via mockResolvedValueOnce.
+vi.mock("./public-access/outbound-media-oss.js", () => ({
+  resolveOssOutboundConfig: vi.fn(() => null),
+  encryptOutboundBufferToFnoss: vi.fn(async () => null),
+}));
 
 /**
  * Outbound (message-tool send) must route to the session that started the run.
@@ -147,5 +155,32 @@ describe("friday-next channel outbound sessionKey routing", () => {
     expect(evt).toBeDefined();
     expect(evt?.data.sessionKey).toBe(sessionKey);
     expect(evt?.data.deviceId).toBe(deviceId);
+  });
+
+  it("sendMedia diverts to an OSS fnoss:v1 ref when public access is on (E-wire ③)", async () => {
+    const deviceId = "DEV-MEDIA-OSS";
+    const runId = "run-media-oss";
+    const sessionKey = "agent:operator:friday-next:direct:abc-media-oss";
+    const mediaFile = path.join(historyDir, "shot.png");
+    fs.writeFileSync(mediaFile, "png-bytes");
+    registerRunRoute({ runId, deviceId, sessionKey });
+    sseEmitter.trackDeviceForRun(deviceId, runId);
+    const res = connect(deviceId);
+
+    const fnossURI = "fnoss:v1:VEVTVFJFRg";
+    vi.mocked(encryptOutboundBufferToFnoss).mockResolvedValueOnce(fnossURI);
+
+    await outbound.sendMedia({ to: deviceId, text: "caption", mediaUrl: mediaFile });
+
+    const evt = parseOutboundFrames(res).find(
+      (f) => f.type === "outbound" && f.data.op === "media",
+    );
+    expect(evt).toBeDefined();
+    expect(evt?.data.mediaUrl).toBe(fnossURI);
+    expect(String(evt?.data.mediaUrl)).not.toMatch(/^\/friday-next\/files\//);
+    expect(vi.mocked(encryptOutboundBufferToFnoss)).toHaveBeenCalledWith(
+      expect.any(Buffer),
+      expect.objectContaining({ mime: expect.any(String) }),
+    );
   });
 });

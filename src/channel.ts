@@ -14,6 +14,7 @@ import { registerChannelRuntimeContext } from "openclaw/plugin-sdk/channel-runti
 import { CHANNEL_APPROVAL_NATIVE_RUNTIME_CONTEXT_CAPABILITY } from "openclaw/plugin-sdk/approval-handler-adapter-runtime";
 import type { ChannelGatewayContext } from "openclaw/plugin-sdk/channel-contract";
 import { createFridayNextLogger } from "./logging.js";
+import { encryptOutboundBufferToFnoss } from "./public-access/outbound-media-oss.js";
 import type { ChannelAccountSnapshot } from "openclaw/plugin-sdk/status-helpers";
 import { saveMediaBuffer } from "openclaw/plugin-sdk/media-store";
 import { sseEmitter } from "./sse/emitter.js";
@@ -404,7 +405,15 @@ export const fridayNextChannelPlugin = createChatChannelPlugin({
         if (saved.id) {
           const fileUrl = `/friday-next/files/${encodeURIComponent(saved.id)}`;
           const resolved = resolveMediaAttachment(fileUrl);
-          const publicUrl = resolved ? resolved.url : fileUrl;
+          const tunnelUrl = resolved ? resolved.url : fileUrl;
+          // Phase E (E-wire ③): divert the message-tool media send off the relay tunnel — encrypt +
+          // upload to OSS and hand the app a `fnoss:v1:…` ref instead. No-op / graceful fallback to
+          // the tunnel URL when public access is off or the upload fails.
+          const fnoss = await encryptOutboundBufferToFnoss(buffer, {
+            name: path.basename(mediaUrl) || "attachment",
+            mime: mimeType,
+          });
+          const publicUrl = fnoss ?? tunnelUrl;
 
           const conn = sseEmitter.getConnection(deviceId);
           logger.info(
