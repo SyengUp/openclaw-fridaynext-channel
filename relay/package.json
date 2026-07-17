@@ -1,0 +1,4 @@
+{
+  "//": "gw-alloc-server.js 是 CJS(部署在 /opt/gw-alloc/ 无 package.json 的裸目录)。插件仓库根是 type:module,这个标记让 relay/ 在仓库内跑起来与部署环境一致。",
+  "type": "commonjs"
+}
