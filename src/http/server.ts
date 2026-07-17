@@ -6,6 +6,7 @@
  */
 
 import type { IncomingMessage, ServerResponse } from "node:http";
+import { isPublicRequest } from "./middleware/public-surface.js";
 import { handleMessages } from "./handlers/messages.js";
 import { handleSseStream } from "./handlers/sse.js";
 import { handleFilesUpload } from "./handlers/files-upload.js";
@@ -57,16 +58,8 @@ function isAttestExempt(pathname: string): boolean {
   );
 }
 
-/** True when the request arrived over the public relay tunnel. The public-surface
- * filter proxy — which EVERY public request must traverse — stamps this marker and
- * strips any client-supplied value, so it can't be forged from outside. LAN clients
- * hit core directly and never carry it. The App Attest gate keys off this so it
- * enforces "only the genuine app" on the PUBLIC surface only, leaving LAN untouched
- * (old apps keep working at home; a browser that finds the public URL is refused). */
-function isPublicRequest(req: IncomingMessage): boolean {
-  const v = req.headers["x-fridaynext-public"];
-  return (Array.isArray(v) ? v[0] : v) === "1";
-}
+// isPublicRequest moved to middleware/public-surface.ts (shared with the SSE handler's
+// per-connection viaPublic tracking for the OSS side-channel divert).
 
 /** Route matcher - returns the matched handler or null. */
 async function handleFridayNextRoute(req: IncomingMessage, res: ServerResponse): Promise<boolean> {

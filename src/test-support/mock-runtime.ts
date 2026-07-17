@@ -16,6 +16,10 @@ export type MockRuntimeOptions = {
   historyDir?: string;
   sseKeepaliveSec?: number;
   sseBacklogPerDevice?: number;
+  /** Enable publicAccess in the resolved config (OSS side-channel tests). */
+  publicAccessEnabled?: boolean;
+  /** Control-plane base URL for publicAccess (tests point it at a stubbed fetch). */
+  controlPlaneUrl?: string;
 };
 
 export function createTempHistoryDir(): string {
@@ -61,6 +65,14 @@ export function setMockRuntime(opts: MockRuntimeOptions = {}): void {
           keepaliveSec: opts.sseKeepaliveSec ?? 30,
           backlogPerDevice: opts.sseBacklogPerDevice ?? 200,
         },
+        ...(opts.publicAccessEnabled
+          ? {
+              publicAccess: {
+                enabled: true,
+                ...(opts.controlPlaneUrl ? { controlPlaneUrl: opts.controlPlaneUrl } : {}),
+              },
+            }
+          : {}),
       },
     },
   };

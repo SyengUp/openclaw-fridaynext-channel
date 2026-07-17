@@ -22,10 +22,12 @@ import {
 import { resetHeartbeatNotificationTrackerForTest } from "./notifications/heartbeat-notification-tracker.js";
 import { encryptOutboundBufferToFnoss } from "./public-access/outbound-media-oss.js";
 
-// The OSS rewrite hits the control plane + Aliyun; stub it. Default null = public access off, so the
-// existing `/friday-next/files/…` tunnel-URL assertions hold; one test opts in via mockResolvedValueOnce.
+// The OSS rewrite hits the control plane + Aliyun; stub it. Default null = public access off /
+// LAN device, so the existing `/friday-next/files/…` tunnel-URL assertions hold; one test opts in
+// via mockResolvedValueOnce.
 vi.mock("./public-access/outbound-media-oss.js", () => ({
   resolveOssOutboundConfig: vi.fn(() => null),
+  deviceUsesPublicSurface: vi.fn(() => false),
   encryptOutboundBufferToFnoss: vi.fn(async () => null),
 }));
 
@@ -218,6 +220,7 @@ describe("channel-actions handleSend sessionKey routing", () => {
     expect(vi.mocked(encryptOutboundBufferToFnoss)).toHaveBeenCalledWith(
       expect.any(Buffer),
       expect.objectContaining({ mime: "image/jpeg" }),
+      "DEV-ACT-OSS",
     );
   });
 

@@ -407,12 +407,14 @@ export const fridayNextChannelPlugin = createChatChannelPlugin({
           const resolved = resolveMediaAttachment(fileUrl);
           const tunnelUrl = resolved ? resolved.url : fileUrl;
           // Phase E (E-wire ③): divert the message-tool media send off the relay tunnel — encrypt +
-          // upload to OSS and hand the app a `fnoss:v1:…` ref instead. No-op / graceful fallback to
-          // the tunnel URL when public access is off or the upload fails.
-          const fnoss = await encryptOutboundBufferToFnoss(buffer, {
-            name: path.basename(mediaUrl) || "attachment",
-            mime: mimeType,
-          });
+          // upload to OSS and hand the app a `fnoss:v1:…` ref instead. Only for devices whose SSE
+          // stream came via the public relay; LAN devices, public-access-off, and upload failure
+          // all keep the tunnel URL.
+          const fnoss = await encryptOutboundBufferToFnoss(
+            buffer,
+            { name: path.basename(mediaUrl) || "attachment", mime: mimeType },
+            deviceId,
+          );
           const publicUrl = fnoss ?? tunnelUrl;
 
           const conn = sseEmitter.getConnection(deviceId);

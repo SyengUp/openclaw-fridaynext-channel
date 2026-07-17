@@ -61,7 +61,10 @@ import {
   downloadInboundMedia,
   uploadOutboundMedia,
 } from "../../public-access/oss-transfer.js";
-import { resolveOssOutboundConfig } from "../../public-access/outbound-media-oss.js";
+import {
+  deviceUsesPublicSurface,
+  resolveOssOutboundConfig,
+} from "../../public-access/outbound-media-oss.js";
 import {
   contextTokensFromUsageRecord,
   getRunMetadata,
@@ -423,8 +426,14 @@ const ossTransferConfig = resolveOssOutboundConfig;
 
 /** Rewrite outbound deliver-payload media (`/friday-next/files/<token>` URLs the translate step
  * produced) into `fnoss:v1:…` references: read the local bytes, encrypt + upload to OSS, swap the
- * URL. No-op when public access is off; on upload failure the tunnel URL is kept (graceful). */
-async function ossRewriteOutboundMedia(raw: Record<string, unknown>): Promise<void> {
+ * URL. No-op when public access is off or the target device's SSE stream is LAN-direct (only
+ * publicly-connected devices divert — OSS traffic costs money and LAN is faster); on upload
+ * failure the tunnel URL is kept (graceful). */
+async function ossRewriteOutboundMedia(
+  raw: Record<string, unknown>,
+  deviceId: string | undefined,
+): Promise<void> {
+  if (!deviceUsesPublicSurface(deviceId)) return;
   const cfg = ossTransferConfig();
   if (!cfg) return;
   const filesPrefix = "/friday-next/files/";
@@ -654,11 +663,12 @@ export async function handleMessages(req: IncomingMessage, res: ServerResponse):
               }
             }
             const payload = translateDeliverPayload(pl, info.kind, meta);
-            // Phase E: when public access is on, move outbound media off the tunnel — read the
-            // just-resolved `/friday-next/files/…` bytes, encrypt + upload to OSS, and rewrite the
-            // URL to a `fnoss:v1:…` reference the app downloads + decrypts directly. Upload failure
-            // leaves the tunnel URL in place (graceful fallback).
-            await ossRewriteOutboundMedia(payload as Record<string, unknown>);
+            // Phase E: when public access is on AND this device is connected via the public relay,
+            // move outbound media off the tunnel — read the just-resolved `/friday-next/files/…`
+            // bytes, encrypt + upload to OSS, and rewrite the URL to a `fnoss:v1:…` reference the
+            // app downloads + decrypts directly. LAN devices and upload failures keep the tunnel
+            // URL (graceful fallback).
+            await ossRewriteOutboundMedia(payload as Record<string, unknown>, normalizedDeviceId);
             const deliverIsError =
               (payload as { isError?: boolean })?.isError || (pl as { isError?: boolean })?.isError;
             // Drop error deliveries that are a direct consequence of a user stop (the aborted

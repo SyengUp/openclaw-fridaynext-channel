@@ -26,14 +26,18 @@ type BacklogEntry = {
 
 export class SseConnection {
   readonly deviceId: string;
+  /** True when this SSE stream arrived over the public relay (filter-proxy marker). Drives the
+   * OSS side-channel divert: LAN-connected devices keep the cheaper/faster tunnel path. */
+  readonly viaPublic: boolean;
   private readonly res: ServerResponse;
   private closed = false;
   private pending: string[] = [];
   private flushTimer: ReturnType<typeof setTimeout> | null = null;
   private waitingDrain = false;
 
-  constructor(deviceId: string, res: ServerResponse) {
+  constructor(deviceId: string, res: ServerResponse, viaPublic = false) {
     this.deviceId = deviceId;
+    this.viaPublic = viaPublic;
     this.res = res;
     this.res.on("drain", () => {
       this.waitingDrain = false;
@@ -125,7 +129,7 @@ class SseEmitterRegistry {
     return Math.max(disk, mem);
   }
 
-  addConnection(deviceId: string, res: ServerResponse): SseConnection {
+  addConnection(deviceId: string, res: ServerResponse, viaPublic = false): SseConnection {
     const normalized = deviceId.trim().toUpperCase();
     const existing = this.connections.get(normalized);
     if (existing && !existing.isClosed) {
@@ -134,10 +138,18 @@ class SseEmitterRegistry {
         set.delete(normalized);
       }
     }
-    const conn = new SseConnection(normalized, res);
+    const conn = new SseConnection(normalized, res, viaPublic);
     this.connections.set(normalized, conn);
-    logger.info(`connect ${normalized} total=${this.connections.size}`);
+    logger.info(`connect ${normalized} viaPublic=${viaPublic} total=${this.connections.size}`);
     return conn;
+  }
+
+  /** True when the device's LIVE SSE stream arrived over the public relay. LAN-connected and
+   * offline devices are false — outbound media for them stays on the tunnel path (cheaper, and a
+   * tunnel URL is fetchable from either origin once the device reconnects). */
+  isDeviceOnPublicSurface(deviceId: string): boolean {
+    const conn = this.connections.get(deviceId.trim().toUpperCase());
+    return conn !== undefined && !conn.isClosed && conn.viaPublic;
   }
 
   /**

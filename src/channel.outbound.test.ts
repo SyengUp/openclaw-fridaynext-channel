@@ -13,10 +13,11 @@ import {
 } from "./test-support/mock-runtime.js";
 import { encryptOutboundBufferToFnoss } from "./public-access/outbound-media-oss.js";
 
-// The OSS rewrite hits the control plane + Aliyun; stub it. Default null = public access off, so the
-// existing tunnel-URL behavior holds; one test opts in via mockResolvedValueOnce.
+// The OSS rewrite hits the control plane + Aliyun; stub it. Default null = public access off /
+// LAN device, so the existing tunnel-URL behavior holds; one test opts in via mockResolvedValueOnce.
 vi.mock("./public-access/outbound-media-oss.js", () => ({
   resolveOssOutboundConfig: vi.fn(() => null),
+  deviceUsesPublicSurface: vi.fn(() => false),
   encryptOutboundBufferToFnoss: vi.fn(async () => null),
 }));
 
@@ -181,6 +182,7 @@ describe("friday-next channel outbound sessionKey routing", () => {
     expect(vi.mocked(encryptOutboundBufferToFnoss)).toHaveBeenCalledWith(
       expect.any(Buffer),
       expect.objectContaining({ mime: expect.any(String) }),
+      "DEV-MEDIA-OSS",
     );
   });
 });

@@ -201,12 +201,13 @@ async function handleSend(ctx: MessageActionCtx): Promise<unknown> {
       if (!saved.id) continue;
       const tunnelUrl = `/friday-next/files/${encodeURIComponent(saved.id)}`;
       // Phase E (E-wire ③): divert the `message`-tool media send off the relay tunnel — encrypt +
-      // upload to OSS, hand the app a `fnoss:v1:…` ref. Graceful fallback to the tunnel URL when
-      // public access is off or the upload fails.
-      const fnoss = await encryptOutboundBufferToFnoss(source.buffer, {
-        name: filename || path.basename(source.originalMediaUrl) || "attachment",
-        mime: source.mimeType,
-      });
+      // upload to OSS, hand the app a `fnoss:v1:…` ref. Only for devices whose SSE stream came via
+      // the public relay; LAN devices, public-access-off, and upload failure keep the tunnel URL.
+      const fnoss = await encryptOutboundBufferToFnoss(
+        source.buffer,
+        { name: filename || path.basename(source.originalMediaUrl) || "attachment", mime: source.mimeType },
+        to,
+      );
       const publicUrl = fnoss ?? tunnelUrl;
       sseEmitter.broadcast(
         {

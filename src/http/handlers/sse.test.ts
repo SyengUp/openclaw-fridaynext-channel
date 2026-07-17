@@ -68,4 +68,27 @@ describe("handleSseStream", () => {
     (req as unknown as MockReq).emit("close");
     spyReplay.mockRestore();
   });
+
+  it("marks the connection viaPublic when the filter-proxy marker is present (and not otherwise)", async () => {
+    setFridayNextRuntime({
+      config: { loadConfig: () => ({ channels: { "friday-next": { authToken: "t1" } } }) },
+    } as never);
+
+    // LAN-direct: no marker → viaPublic false.
+    const lanReq = new MockReq() as unknown as IncomingMessage;
+    const lanRes = new MockRes() as unknown as ServerResponse;
+    await handleSseStream(lanReq, lanRes);
+    expect(sseEmitter.getConnection("dev-a")?.viaPublic).toBe(false);
+    expect(sseEmitter.isDeviceOnPublicSurface("dev-a")).toBe(false);
+    (lanReq as unknown as MockReq).emit("close");
+
+    // Via the public relay: filter proxy stamped the marker → viaPublic true.
+    const pubReq = new MockReq() as unknown as IncomingMessage;
+    (pubReq as unknown as MockReq).headers["x-fridaynext-public"] = "1";
+    const pubRes = new MockRes() as unknown as ServerResponse;
+    await handleSseStream(pubReq, pubRes);
+    expect(sseEmitter.getConnection("dev-a")?.viaPublic).toBe(true);
+    expect(sseEmitter.isDeviceOnPublicSurface("dev-a")).toBe(true);
+    (pubReq as unknown as MockReq).emit("close");
+  });
 });

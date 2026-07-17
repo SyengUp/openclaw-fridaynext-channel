@@ -14,6 +14,7 @@
 import { resolveFridayNextConfig } from "../config.js";
 import { getHostOpenClawConfigSnapshot } from "../host-config.js";
 import { getFridayNextRuntime } from "../runtime.js";
+import { sseEmitter } from "../sse/emitter.js";
 import { uploadOutboundMedia, encodeRefURI, type OSSTransferConfig } from "./oss-transfer.js";
 
 /** OSS transfer config from the resolved plugin config, or null when public access is off. */
@@ -24,13 +25,26 @@ export function resolveOssOutboundConfig(): OSSTransferConfig | null {
 }
 
 /**
+ * Should outbound media for `deviceId` divert to OSS? Only when the device's LIVE SSE stream
+ * arrived over the public relay (filter-proxy marker). LAN-connected devices keep the direct
+ * tunnel (faster, no OSS traffic cost); offline devices too — a tunnel URL stays fetchable from
+ * either origin once they reconnect.
+ */
+export function deviceUsesPublicSurface(deviceId: string | undefined): boolean {
+  return !!deviceId && sseEmitter.isDeviceOnPublicSurface(deviceId);
+}
+
+/**
  * Encrypt + upload an outbound media buffer to OSS and return a `fnoss:v1:…` reference URI, or
- * `null` when public access is off or the upload failed (caller keeps its tunnel URL).
+ * `null` when the target device isn't on the public surface, public access is off, or the upload
+ * failed (caller keeps its tunnel URL).
  */
 export async function encryptOutboundBufferToFnoss(
   buffer: Buffer,
   opts: { name: string; mime: string },
+  deviceId: string | undefined,
 ): Promise<string | null> {
+  if (!deviceUsesPublicSurface(deviceId)) return null;
   const cfg = resolveOssOutboundConfig();
   if (!cfg) return null;
   const mime = opts.mime || "application/octet-stream";

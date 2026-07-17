@@ -5,6 +5,7 @@ import { getFridayNextRuntime } from "../../runtime.js";
 import { sseEmitter } from "../../sse/emitter.js";
 import { noteFridayDeviceSeen } from "../../friday-session.js";
 import { extractBearerToken } from "../middleware/auth.js";
+import { isPublicRequest } from "../middleware/public-surface.js";
 import { PLUGIN_VERSION } from "../../version.js";
 
 function parseLastEventId(req: IncomingMessage, url: URL): number {
@@ -47,7 +48,10 @@ export async function handleSseStream(req: IncomingMessage, res: ServerResponse)
   res.setHeader("X-Content-Type-Options", "nosniff");
   res.flushHeaders();
 
-  const conn = sseEmitter.addConnection(deviceId, res);
+  // Track whether this stream arrived over the public relay (filter-proxy marker): the OSS
+  // side-channel diverts outbound media only for publicly-connected devices — LAN stays on the
+  // (cheaper, faster) direct tunnel path.
+  const conn = sseEmitter.addConnection(deviceId, res, isPublicRequest(req));
   // Durable last-seen device: SSE connect fires on every app foreground (far more often than a
   // POST), so implicit cron delivery survives gateway restarts + app-backgrounded windows.
   noteFridayDeviceSeen(deviceId);
