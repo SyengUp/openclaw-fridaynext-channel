@@ -30,7 +30,7 @@ import { handleLinkPreview } from "./handlers/link-preview.js";
 import { handleHealth } from "./handlers/health.js";
 import { handlePluginInfo } from "./handlers/plugin-info.js";
 import { handlePluginUpgrade } from "./handlers/plugin-upgrade.js";
-import { handlePublicAccessPairing } from "./handlers/plugin-pairing.js";
+import { handlePairClaim, handlePublicAccessPairing } from "./handlers/plugin-pairing.js";
 import {
   handleAttestChallenge,
   handleAttestVerify,
@@ -54,7 +54,8 @@ function isAttestExempt(pathname: string): boolean {
     pathname === "/friday-next/status" || // server-side install-script connectivity probe
     pathname === "/friday-next/plugin/info" ||
     pathname === "/friday-next/plugin/upgrade" ||
-    pathname === "/friday-next/public-access/pairing"
+    pathname === "/friday-next/public-access/pairing" ||
+    pathname === "/friday-next/pair/claim" // D12 voucher claim — pre-token, voucher IS the credential
   );
 }
 
@@ -234,6 +235,12 @@ async function handleFridayNextRoute(req: IncomingMessage, res: ServerResponse):
   // Route: GET /friday-next/public-access/pairing (superset QR payload for guest sharing)
   if (req.method === "GET" && pathname === "/friday-next/public-access/pairing") {
     return await handlePublicAccessPairing(req, res);
+  }
+
+  // Route: POST /friday-next/pair/claim (D12 — one-time voucher → bearer token; the
+  // voucher is the credential, so no bearer/attest gate; see handler for rate limits)
+  if (req.method === "POST" && pathname === "/friday-next/pair/claim") {
+    return await handlePairClaim(req, res);
   }
 
   // Not found
