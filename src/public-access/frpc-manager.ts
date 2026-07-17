@@ -279,6 +279,15 @@ async function resolveSubdomain(cfg: PublicAccessConfig, log: Logger): Promise<s
   }
 }
 
+/**
+ * Write our OWN frpc config into the plugin-private data dir — never the user's frpc.toml.
+ * Isolation from a user's own frp on the same host is structural:
+ *   • Deliberately NO `webServer.port` — enabling frpc's admin server (default 7400) is the
+ *     one thing that would collide with a user's own frpc. We manage our child by PID
+ *     (killOrphanFrpc), so the admin server is unnecessary as well as risky. Never add it.
+ *   • Proxy `name` is namespaced (`friday-next-public`) so it can't clash on the shared relay.
+ *   • `https2http` forwards into our filter proxy on 127.0.0.1 — no new public listen port.
+ */
 function writeFrpcConfig(cfg: PublicAccessConfig, subdomain: string, crt: string, key: string): string {
   const [host, portRaw] = cfg.relayAddr.split(":");
   const port = Number(portRaw) || 7000;
@@ -304,19 +313,65 @@ keyPath = "${key}"
   return p;
 }
 
-/** Kill any orphan frpc from a prior gateway process (matched by our unique config path). Called
- * ONCE at start — never in the respawn path, or it would kill our own live child and flap. */
-function killOrphanFrpc(confPath: string): void {
+function frpcPidPath(): string {
+  return join(DATA_DIR, "frpc.pid");
+}
+
+/** Read a live process's command line for identity verification. Prefers Linux `/proc`
+ * (zero external deps), falls back to `ps` on macOS. Returns null if the pid isn't alive
+ * (or can't be read) — the caller then reaps nothing, which is the safe outcome. */
+function processCmdline(pid: number): string | null {
   try {
-    execFileSync("pkill", ["-f", confPath]);
+    return readFileSync(`/proc/${pid}/cmdline`).toString("utf8").replace(/\0/g, " ");
   } catch {
-    /* none running */
+    /* not Linux, or pid gone — try ps */
+  }
+  try {
+    return execFileSync("ps", ["-p", String(pid), "-o", "command="], { timeout: 5_000 }).toString();
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Reap ONLY our own orphan frpc left by a prior gateway process (crash/restart before
+ * stopPublicAccess ran). Isolation from a user's own frp is by construction — we never
+ * match on the process name `frpc`, only:
+ *   1. the exact PID we recorded in `frpc.pid` on spawn, AND
+ *   2. a verification that this live PID's command line still references OUR unique config
+ *      path (guards against the PID having been reused by an unrelated process).
+ * If either check doesn't line up we reap nothing — we would rather leak one stale frpc
+ * than ever risk SIGTERM-ing someone else's process. Called ONCE at start, never in the
+ * respawn path (which manages the live `child` reference directly).
+ */
+function killOrphanFrpc(confPath: string, log: Logger): void {
+  let pid = 0;
+  try {
+    pid = Number(readFileSync(frpcPidPath(), "utf8").trim()) || 0;
+  } catch {
+    return; // no pidfile → nothing we started is orphaned
+  }
+  if (!pid || pid === child?.pid) return;
+  const cmd = processCmdline(pid);
+  if (!cmd || !cmd.includes(confPath)) return; // dead, or PID reused by something not ours
+  try {
+    process.kill(pid, "SIGTERM");
+    log(`reaped orphan frpc pid=${pid}`);
+  } catch {
+    /* already gone */
   }
 }
 
 function spawnFrpc(confPath: string, log: Logger): void {
   const c = spawn(frpcPath(), ["-c", confPath], { stdio: "ignore", detached: false });
   child = c;
+  if (c.pid) {
+    try {
+      writeFileSync(frpcPidPath(), String(c.pid));
+    } catch {
+      /* best-effort — orphan reap simply no-ops without a pidfile */
+    }
+  }
   c.on("exit", (code) => {
     if (child !== c) return; // superseded by a newer child — ignore this stale exit
     child = null;
@@ -370,7 +425,7 @@ export async function startPublicAccess(
     log("public access already running — refreshed config, keeping current frpc");
     return cachedPairing;
   }
-  killOrphanFrpc(confPath); // clear a stale frpc from a prior gateway process, once
+  killOrphanFrpc(confPath, log); // clear a stale frpc from a prior gateway process, once
   spawnFrpc(confPath, log);
 
   cachedPairing = {
