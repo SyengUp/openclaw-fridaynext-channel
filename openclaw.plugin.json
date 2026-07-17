@@ -1,8 +1,12 @@
 {
   "id": "friday-next",
-  "channels": ["friday-next"],
+  "channels": [
+    "friday-next"
+  ],
   "contracts": {
-    "gatewayMethodDispatch": ["authenticated-request"]
+    "gatewayMethodDispatch": [
+      "authenticated-request"
+    ]
   },
   "configSchema": {
     "type": "object",
@@ -17,51 +21,114 @@
         "type": "object",
         "additionalProperties": false,
         "properties": {
-          "enabled": { "type": "boolean" },
-          "transport": { "type": "string" },
-          "pathPrefix": { "type": "string" },
-          "historyLimit": { "type": "integer", "minimum": 1, "maximum": 200 },
-          "historyDir": { "type": "string" },
-          "logLevel": { "type": "string", "enum": ["debug", "info", "warn", "error"] },
-          "authToken": { "type": "string" },
+          "enabled": {
+            "type": "boolean"
+          },
+          "transport": {
+            "type": "string"
+          },
+          "pathPrefix": {
+            "type": "string"
+          },
+          "historyLimit": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 200
+          },
+          "historyDir": {
+            "type": "string"
+          },
+          "logLevel": {
+            "type": "string",
+            "enum": [
+              "debug",
+              "info",
+              "warn",
+              "error"
+            ]
+          },
+          "authToken": {
+            "type": "string"
+          },
           "cors": {
             "type": "object",
             "additionalProperties": false,
             "properties": {
-              "enabled": { "type": "boolean" },
-              "allowOrigin": { "type": "string" }
+              "enabled": {
+                "type": "boolean"
+              },
+              "allowOrigin": {
+                "type": "string"
+              }
             }
           },
           "sse": {
             "type": "object",
             "additionalProperties": false,
             "properties": {
-              "keepaliveSec": { "type": "integer", "minimum": 5, "maximum": 120 },
-              "backlogPerDevice": { "type": "integer", "minimum": 0, "maximum": 1000 }
+              "keepaliveSec": {
+                "type": "integer",
+                "minimum": 5,
+                "maximum": 120
+              },
+              "backlogPerDevice": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 1000
+              }
             }
           },
           "publicAccess": {
             "type": "object",
             "additionalProperties": false,
             "properties": {
-              "enabled": { "type": "boolean" },
-              "relayAddr": { "type": "string" },
-              "relayToken": { "type": "string" },
-              "subDomainHost": { "type": "string" },
-              "subdomain": { "type": "string" },
-              "allocatorUrl": { "type": "string" },
-              "certSignUrl": { "type": "string" },
-              "corePort": { "type": "integer", "minimum": 1, "maximum": 65535 }
+              "enabled": {
+                "type": "boolean"
+              },
+              "relayAddr": {
+                "type": "string"
+              },
+              "relayToken": {
+                "type": "string"
+              },
+              "subDomainHost": {
+                "type": "string"
+              },
+              "subdomain": {
+                "type": "string"
+              },
+              "allocatorUrl": {
+                "type": "string"
+              },
+              "certSignUrl": {
+                "type": "string"
+              },
+              "corePort": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 65535
+              },
+              "controlPlaneUrl": {
+                "type": "string"
+              }
             }
           },
           "appAttest": {
             "type": "object",
             "additionalProperties": false,
             "properties": {
-              "required": { "type": "boolean" },
-              "teamId": { "type": "string" },
-              "bundleId": { "type": "string" },
-              "allowDevelopment": { "type": "boolean" }
+              "required": {
+                "type": "boolean"
+              },
+              "teamId": {
+                "type": "string"
+              },
+              "bundleId": {
+                "type": "string"
+              },
+              "allowDevelopment": {
+                "type": "boolean"
+              }
             }
           }
         }
@@ -75,6 +142,8 @@
     }
   },
   "channelEnvVars": {
-    "friday-next": ["FRIDAY_NEXT_AUTH_TOKEN"]
+    "friday-next": [
+      "FRIDAY_NEXT_AUTH_TOKEN"
+    ]
   }
 }

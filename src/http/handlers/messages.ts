@@ -56,6 +56,13 @@ import { runFridayDispatch } from "../../agent/dispatch-bridge.js";
 import { ensureSubagentSpawnScope } from "../../agent/operator-scope.js";
 import { saveInboundMediaBuffer } from "../../agent/media-bridge.js";
 import {
+  decodeRefURI,
+  encodeRefURI,
+  downloadInboundMedia,
+  uploadOutboundMedia,
+  type OSSTransferConfig,
+} from "../../public-access/oss-transfer.js";
+import {
   contextTokensFromUsageRecord,
   getRunMetadata,
   getRunRoute,
@@ -410,14 +417,63 @@ export function composeBodyWithMediaRefs(text: string, mediaRefs: string[]): str
   return trimmed ? `${trimmed}\n\n${mediaRefs.join("\n")}` : mediaRefs.join("\n");
 }
 
+/** OSS transfer config from the resolved plugin config, or null when public access is off. */
+function ossTransferConfig(): OSSTransferConfig | null {
+  const cfg = resolveFridayNextConfig(getHostOpenClawConfigSnapshot(getFridayNextRuntime().config));
+  if (!cfg.publicAccess.enabled) return null;
+  return { controlPlaneUrl: cfg.publicAccess.controlPlaneUrl, authToken: cfg.authToken };
+}
+
+/** Rewrite outbound deliver-payload media (`/friday-next/files/<token>` URLs the translate step
+ * produced) into `fnoss:v1:…` references: read the local bytes, encrypt + upload to OSS, swap the
+ * URL. No-op when public access is off; on upload failure the tunnel URL is kept (graceful). */
+async function ossRewriteOutboundMedia(raw: Record<string, unknown>): Promise<void> {
+  const cfg = ossTransferConfig();
+  if (!cfg) return;
+  const filesPrefix = "/friday-next/files/";
+  const rewrite = async (u: unknown): Promise<unknown> => {
+    if (typeof u !== "string" || !u.startsWith(filesPrefix)) return u;
+    const token = u.slice(filesPrefix.length).split("?")[0];
+    const { buffer, mimeType, filename } = readFile(fridayAttachmentLookupKey(token));
+    if (!buffer) return u;
+    const mime = mimeType || "application/octet-stream";
+    const ref = await uploadOutboundMedia(cfg, buffer, {
+      name: filename || "attachment",
+      mime,
+      isImage: mime.startsWith("image/"),
+    });
+    return ref ? encodeRefURI(ref) : u; // upload failed → keep the tunnel URL
+  };
+  if (typeof raw.mediaUrl === "string") raw.mediaUrl = await rewrite(raw.mediaUrl);
+  if (Array.isArray(raw.mediaUrls)) {
+    raw.mediaUrls = await Promise.all((raw.mediaUrls as unknown[]).map(rewrite));
+  }
+}
+
 async function buildBodyForAgentWithAttachments(
   text: string,
   attachmentIds: string[],
 ): Promise<string> {
   if (attachmentIds.length === 0) return text.trim();
 
+  const ossCfg = ossTransferConfig();
   const mediaRefs: string[] = [];
   for (const id of attachmentIds) {
+    // Phase E: an OSS side-channel reference (`fnoss:v1:…`) instead of a local upload id — download
+    // the ciphertext from OSS and decrypt it here (the app encrypted it with a key delivered in the
+    // ref). On any failure we skip; the app only sends an OSS ref when the side-channel was usable.
+    const ossRef = ossCfg ? decodeRefURI(id) : null;
+    if (ossRef) {
+      const plain = await downloadInboundMedia(ossCfg!, ossRef);
+      if (plain) {
+        const saved = await saveInboundMediaBuffer(plain, ossRef.mime, ossRef.name);
+        if (saved.id && saved.path) {
+          if (ossRef.name) rememberInboundMediaName(saved.path, ossRef.name, ossRef.mime);
+          mediaRefs.push(`[media attached: file://${saved.path}]`);
+        }
+      }
+      continue;
+    }
     const { buffer, mimeType, filename } = readFile(fridayAttachmentLookupKey(id));
     if (!buffer) continue;
 
@@ -601,6 +657,11 @@ export async function handleMessages(req: IncomingMessage, res: ServerResponse):
               }
             }
             const payload = translateDeliverPayload(pl, info.kind, meta);
+            // Phase E: when public access is on, move outbound media off the tunnel — read the
+            // just-resolved `/friday-next/files/…` bytes, encrypt + upload to OSS, and rewrite the
+            // URL to a `fnoss:v1:…` reference the app downloads + decrypts directly. Upload failure
+            // leaves the tunnel URL in place (graceful fallback).
+            await ossRewriteOutboundMedia(payload as Record<string, unknown>);
             const deliverIsError =
               (payload as { isError?: boolean })?.isError || (pl as { isError?: boolean })?.isError;
             // Drop error deliveries that are a direct consequence of a user stop (the aborted

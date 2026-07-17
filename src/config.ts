@@ -39,6 +39,8 @@ export type PublicAccessConfigResolved = {
   allocatorUrl: string;
   certSignUrl: string;
   corePort: number;
+  /** Control-plane base for OSS attachment side-channel signing (Phase E). Client appends /v1. */
+  controlPlaneUrl: string;
 };
 
 function asObject(value: unknown): Record<string, unknown> {
@@ -97,6 +99,7 @@ export function resolveFridayNextConfig(cfg: unknown): FridayNextConfig {
       allocatorUrl: asString(pa.allocatorUrl, "https://friday.syengup.host/gw-alloc/allocate"),
       certSignUrl: asString(pa.certSignUrl, "https://friday.syengup.host/gw-alloc/sign-cert"),
       corePort: asNumber(pa.corePort, 18789, 1, 65535),
+      controlPlaneUrl: asString(pa.controlPlaneUrl, "https://friday.syengup.host"),
     },
     appAttest: {
       // Default ON, but the gate is PUBLIC-SCOPED (only enforced on requests the
