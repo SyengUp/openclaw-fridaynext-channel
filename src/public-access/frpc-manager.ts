@@ -13,6 +13,7 @@
  * `~/.openclaw/friday-next/public-access/`.
  */
 import { execFileSync, spawn, type ChildProcess } from "node:child_process";
+import { request as httpsRequest } from "node:https";
 import {
   existsSync,
   mkdirSync,
@@ -73,6 +74,102 @@ function filterPort(corePort: number): number {
 let keepaliveTimer: ReturnType<typeof setTimeout> | null = null;
 let allocRetryTimer: ReturnType<typeof setTimeout> | null = null;
 let cachedPairing: PairingInfo | null = null;
+let healthTimer: ReturnType<typeof setInterval> | null = null;
+
+// --- Tunnel health watchdog（隧道自愈） ---
+//
+// frpc does NOT retry a proxy whose NewProxy registration the relay rejected — it only
+// re-registers on a fresh connection. So when the grant gate denies an unpaid gateway and the
+// user later pays（出门在外付费开通）, the tunnel would stay down until a manual gateway restart.
+// This watchdog probes our own public URL end-to-end (gateway → frps → back); after
+// `TUNNEL_HEALTH_STRIKES` consecutive failures it kills frpc, and the 3s keepalive respawn
+// re-issues NewProxy — a freshly-granted tunnel comes up within ~STRIKES·INTERVAL of payment.
+// Steady-state cost: one HTTPS HEAD per minute; a permanently-denied gateway retries NewProxy
+// once every ~3 minutes (bounded relay load).
+const TUNNEL_HEALTH_INTERVAL_MS = 60_000;
+const TUNNEL_HEALTH_STRIKES = 3;
+
+/** Consecutive-failure counter for the tunnel watchdog. `note(ok)` returns true when the
+ * caller should restart the tunnel (counter resets so the next window starts clean). */
+export class TunnelHealthTracker {
+  private strikes = 0;
+  constructor(private readonly strikesToRestart: number = TUNNEL_HEALTH_STRIKES) {}
+  get consecutiveFailures(): number {
+    return this.strikes;
+  }
+  note(ok: boolean): boolean {
+    if (ok) {
+      this.strikes = 0;
+      return false;
+    }
+    this.strikes += 1;
+    if (this.strikes >= this.strikesToRestart) {
+      this.strikes = 0;
+      return true;
+    }
+    return false;
+  }
+}
+
+/** Reachability probe through the public relay. ANY HTTP response means the tunnel is up
+ * (401/403/404 all prove frps routed us home); only transport errors/timeouts count as down.
+ * Cert validation is off — reachability is the question here, and the app does real pinning. */
+function probeTunnelHealth(publicUrl: string, timeoutMs = 10_000): Promise<boolean> {
+  return new Promise((resolve) => {
+    let settled = false;
+    const done = (ok: boolean): void => {
+      if (!settled) {
+        settled = true;
+        resolve(ok);
+      }
+    };
+    try {
+      const req = httpsRequest(
+        `${publicUrl}/friday-next/health`,
+        { method: "HEAD", rejectUnauthorized: false, timeout: timeoutMs },
+        (res) => {
+          res.resume();
+          done(true);
+        },
+      );
+      req.on("timeout", () => {
+        req.destroy();
+        done(false);
+      });
+      req.on("error", () => done(false));
+      req.end();
+    } catch {
+      done(false);
+    }
+  });
+}
+
+/** One watchdog per process; idempotent. Skips probing while frpc itself is down (the 3s
+ * keepalive owns that window) and while a probe would race a just-issued restart. */
+function startTunnelHealthWatchdog(publicUrl: string, log: Logger): void {
+  if (healthTimer) return;
+  const tracker = new TunnelHealthTracker();
+  const timer = setInterval(() => {
+    if (stopped || !child) return;
+    void probeTunnelHealth(publicUrl).then((ok) => {
+      if (stopped || !child) return;
+      if (tracker.note(ok)) {
+        log(
+          `tunnel health: ${publicUrl} unreachable ${TUNNEL_HEALTH_STRIKES}x — restarting frpc to re-issue NewProxy`,
+        );
+        try {
+          child.kill(); // exit handler respawns in 3s
+        } catch {
+          /* already gone — keepalive covers it */
+        }
+      } else if (!ok) {
+        log(`tunnel health: probe failed (${tracker.consecutiveFailures}/${TUNNEL_HEALTH_STRIKES})`);
+      }
+    });
+  }, TUNNEL_HEALTH_INTERVAL_MS);
+  timer.unref?.();
+  healthTimer = timer;
+}
 
 function ensureDir(): void {
   mkdirSync(DATA_DIR, { recursive: true });
@@ -423,10 +520,12 @@ export async function startPublicAccess(
   // Idempotent: a duplicate registerFull must NOT respawn a live tunnel (that caused flapping).
   if (child && child.exitCode === null && !child.killed) {
     log("public access already running — refreshed config, keeping current frpc");
+    startTunnelHealthWatchdog(`https://${cn}`, log);
     return cachedPairing;
   }
   killOrphanFrpc(confPath, log); // clear a stale frpc from a prior gateway process, once
   spawnFrpc(confPath, log);
+  startTunnelHealthWatchdog(`https://${cn}`, log);
 
   cachedPairing = {
     v: 1,
@@ -449,6 +548,10 @@ export function stopPublicAccess(): void {
   if (allocRetryTimer) {
     clearTimeout(allocRetryTimer);
     allocRetryTimer = null;
+  }
+  if (healthTimer) {
+    clearInterval(healthTimer);
+    healthTimer = null;
   }
   if (child) {
     try {
