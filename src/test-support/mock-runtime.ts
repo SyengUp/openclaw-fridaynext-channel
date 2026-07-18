@@ -51,8 +51,6 @@ export function setMockRuntime(opts: MockRuntimeOptions = {}): void {
     channels: {
       "friday-next": {
         enabled: true,
-        transport: "http+sse",
-        pathPrefix: "/friday-next",
         historyLimit: 25,
         historyDir,
         logLevel: "info",

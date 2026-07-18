@@ -21,11 +21,12 @@ function json(res: ServerResponse, code: number, obj: unknown): void {
  * one-time pairing voucher** instead of the long-term bearer token: the scanner
  * exchanges it via `POST /friday-next/pair/claim` over the pinned TLS channel.
  * Every fetch mints a fresh voucher and invalidates the previous one (作废重出 —
- * reprinting the QR kills any leaked copy). `token` is still included for
- * transitional compatibility with older `install.js` QR builders; it is
- * Bearer-authed either way, so only a caller that already holds the token (the
- * owner) can fetch this. 503 when public access is disabled or the tunnel has
- * not come up yet (`getPairingInfo()` still null).
+ * reprinting the QR kills any leaked copy). The long-term `token` is deliberately
+ * NOT in the response: `pair/claim` is its only exit (D12's whole point — no
+ * pairing artifact that re-surfaces the permanent credential in logs/captures);
+ * install.js gates on the plugin version, so every builder that reaches this
+ * endpoint understands vouchers. 503 when public access is disabled or the
+ * tunnel has not come up yet (`getPairingInfo()` still null).
  */
 export async function handlePublicAccessPairing(
   req: IncomingMessage,
@@ -52,7 +53,12 @@ export async function handlePublicAccessPairing(
 
   const ticket = mintPairingVoucher();
   logger.info(`pairing superset served — fresh voucher minted (ttl ${ticket.ttlSec}s)`);
-  json(res, 200, { ...pairing, pairingTicket: ticket.voucher, pairingTicketTtlSec: ticket.ttlSec });
+  const { token: _token, ...pairingSansToken } = pairing;
+  json(res, 200, {
+    ...pairingSansToken,
+    pairingTicket: ticket.voucher,
+    pairingTicketTtlSec: ticket.ttlSec,
+  });
   return true;
 }
 
@@ -98,10 +104,6 @@ export async function handlePairClaim(req: IncomingMessage, res: ServerResponse)
     return true;
   }
   const now = Date.now();
-  if (claimRateLimited(now)) {
-    json(res, 429, { error: "too_many_attempts" });
-    return true;
-  }
   let voucher = "";
   try {
     const body = JSON.parse((await readBody(req)) || "{}") as { voucher?: unknown };
@@ -114,16 +116,27 @@ export async function handlePairClaim(req: IncomingMessage, res: ServerResponse)
     json(res, 503, { error: "pairing_unavailable" });
     return true;
   }
+  // Verify the voucher FIRST; the rate limiter throttles only INVALID attempts. A global
+  // pre-check would let anyone lock ALL pairing (a legit user with a fresh QR gets 429
+  // because a stranger spammed garbage) — a zero-cost DoS. Brute force is hopeless against
+  // a 128-bit voucher anyway; the limiter just slows scanners down.
   const outcome = claimPairingVoucher(voucher, now);
   if (outcome === "ok") {
     logger.info("pairing voucher claimed — bearer token delivered over pinned channel");
     json(res, 200, { token: pairing.token, lanUrl: pairing.lanUrl, publicUrl: pairing.publicUrl });
     return true;
   }
+  if (outcome === "expired") {
+    // A real (matching) voucher past its TTL — a legitimate scanner with an old QR, not a
+    // guesser (matches are unforgeable). Don't count it against the abuse window.
+    logger.warn("pairing voucher claim refused (expired)");
+    json(res, 410, { error: "voucher_expired" });
+    return true;
+  }
   failedClaimTimes.push(now);
-  logger.warn(`pairing voucher claim refused (${outcome})`);
-  json(res, outcome === "expired" ? 410 : 403, {
-    error: outcome === "expired" ? "voucher_expired" : "voucher_invalid",
+  logger.warn("pairing voucher claim refused (invalid)");
+  json(res, claimRateLimited(now) ? 429 : 403, {
+    error: claimRateLimited(now) ? "too_many_attempts" : "voucher_invalid",
   });
   return true;
 }

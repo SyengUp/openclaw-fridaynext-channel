@@ -53,7 +53,10 @@ function isAttestExempt(pathname: string): boolean {
     pathname === "/friday-next/health" ||
     pathname === "/friday-next/status" || // server-side install-script connectivity probe
     pathname === "/friday-next/plugin/info" ||
-    pathname === "/friday-next/plugin/upgrade" ||
+    // NOTE: plugin/upgrade is deliberately NOT exempt. It is called from the app's
+    // connection page inside a normally-attested session — unlike pair/claim it has no
+    // "must be reachable pre-token" necessity, and exempting it let a leaked bearer
+    // trigger npm installs + gateway restarts from the public internet.
     pathname === "/friday-next/public-access/pairing" ||
     pathname === "/friday-next/pair/claim" // D12 voucher claim — pre-token, voucher IS the credential
   );

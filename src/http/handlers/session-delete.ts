@@ -22,6 +22,11 @@
 
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { dispatchGatewayMethod } from "openclaw/plugin-sdk/gateway-method-runtime";
+import { isPublicRequest } from "../middleware/public-surface.js";
+import { verifySession } from "../../attest/attest-store.js";
+import { resolveFridayNextConfig } from "../../config.js";
+import { getHostOpenClawConfigSnapshot } from "../../host-config.js";
+import { getFridayNextRuntime } from "../../runtime.js";
 
 function json(res: ServerResponse, status: number, body: Record<string, unknown>): true {
   res.statusCode = status;
@@ -55,6 +60,24 @@ export async function handleSessionDelete(
 ): Promise<boolean> {
   if (req.method !== "DELETE") {
     return json(res, 405, { error: "Method Not Allowed" });
+  }
+
+  // App Attest gate, mirroring server.ts's for `/friday-next/*`: this route lives under a
+  // SIBLING prefix so the shared gate never sees it, yet the filter proxy exposes it publicly
+  // — without this check a leaked bearer could permanently delete sessions from the internet.
+  // Gate PUBLIC-marked requests only (the marker is a header — check it before touching the
+  // runtime, so LAN requests never need a configured runtime at all).
+  if (isPublicRequest(req)) {
+    const attestCfg = resolveFridayNextConfig(
+      getHostOpenClawConfigSnapshot(getFridayNextRuntime().config),
+    );
+    if (attestCfg.appAttest.required) {
+      const sess = req.headers["x-fridaynext-attest"];
+      const token = Array.isArray(sess) ? sess[0] : sess;
+      if (!token || !verifySession(token, Date.now())) {
+        return json(res, 403, { error: "app attestation required", code: "attest_required" });
+      }
+    }
   }
 
   const url = new URL(req.url ?? "/", "http://localhost");

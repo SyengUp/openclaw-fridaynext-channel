@@ -57,20 +57,41 @@ const HOST = "127.0.0.1";
 const DATA_DIR = process.env.GW_ALLOC_DATA_DIR || "/opt/gw-alloc";
 const DATA = path.join(DATA_DIR, "registry.json");
 const CP_STATE = path.join(DATA_DIR, "cp-state.json");
-const AUDIT = path.join(DATA_DIR, "audit.jsonl");
 const TMP = path.join(DATA_DIR, "tmp");
 const WEBROOT = "/var/www/acme";
 const SUBDOMAIN_HOST = process.env.GW_SUBDOMAIN_HOST || "bj.gw.syengup.host";
 const ACME_EMAIL = "admin@syengup.host";
-// Bearer secret for /allocate + /sign-cert + /v1/admin. Sourced from the environment
-// ONLY — never hardcoded, because this value is also the frps auth.token, which is
-// shared with the operator's personal tunnels. Keeping it out of the (open-source)
-// repo is what lets the relay be published without leaking the token. Set via
-// systemd `Environment=GW_ALLOC_TOKEN=…`.
+// Bearer secret for /allocate + /sign-cert. Sourced from the environment ONLY — never
+// hardcoded, because this value is also the frps auth.token, which is shared with the
+// operator's personal tunnels AND distributed to every user gateway (the plugin needs it
+// to allocate and to run frpc). It is therefore treated as SEMI-PUBLIC — which is exactly
+// why it must NOT guard admin surfaces. Set via systemd `Environment=GW_ALLOC_TOKEN=…`.
 const TOKEN = process.env.GW_ALLOC_TOKEN;
 if (!TOKEN) {
   console.error("FATAL: GW_ALLOC_TOKEN not set — refusing to start without a bearer secret");
   process.exit(1);
+}
+// SEPARATE operator-only bearer for /v1/admin/*, /v1/codes/issue and /v1/apple/webhook.
+// The NewProxy gate's whole threat model treats GW_ALLOC_TOKEN as leaked; the same value
+// must never also be the key to backup exfiltration / global killswitch / issuing
+// ourselves 365-day codes. Held only by the operator (systemd env + the off-site backup
+// puller); never shipped to user gateways.
+const ADMIN_TOKEN = process.env.GW_ALLOC_ADMIN_TOKEN;
+if (!ADMIN_TOKEN) {
+  console.error("FATAL: GW_ALLOC_ADMIN_TOKEN not set — refusing to start without an admin bearer");
+  process.exit(1);
+}
+if (ADMIN_TOKEN === TOKEN) {
+  console.error("FATAL: GW_ALLOC_ADMIN_TOKEN must differ from GW_ALLOC_TOKEN (the split is the point)");
+  process.exit(1);
+}
+
+/** Constant-time bearer comparison (=== leaks length/prefix timing; one-liner to not). */
+function tokenEqual(presented, expected) {
+  if (typeof presented !== "string" || !presented || !expected) return false;
+  const a = Buffer.from(presented);
+  const b = Buffer.from(expected);
+  return a.length === b.length && crypto.timingSafeEqual(a, b);
 }
 // Per-tunnel server-enforced bandwidth cap. Generous for a personal gateway
 // (chat + attachments + canvas), but stops one tunnel saturating the relay.
@@ -125,14 +146,41 @@ function loadJson(file, fallback) {
     return fallback;
   }
 }
+
+/** Load a REQUIRED state file. A missing/empty file is a legitimate fresh start; a file
+ * that EXISTS but can't be parsed is corruption — refuse to boot rather than silently
+ * starting empty, because the next saveCp()/saveJson() would overwrite the only copy of
+ * production state (grants, subscriptions, allocations) with defaults and destroy the
+ * evidence. Restore from the off-site backup or fix the file, then restart. */
+function loadJsonStrict(file, fallback) {
+  let raw;
+  try {
+    raw = fs.readFileSync(file, "utf8");
+  } catch {
+    return fallback; // ENOENT etc — fresh start
+  }
+  if (!raw.trim()) return fallback;
+  try {
+    return JSON.parse(raw);
+  } catch (e) {
+    console.error(
+      `FATAL: ${file} exists but is unparseable (${e.message}) — refusing to start. ` +
+        `Continuing would clobber production state with empty defaults on the next save. ` +
+        `Restore it from the off-site backup (latest.json) before restarting.`,
+    );
+    process.exit(1);
+  }
+}
 function saveJson(file, obj) {
   const tmp = file + ".tmp";
   fs.writeFileSync(tmp, JSON.stringify(obj, null, 2));
   fs.renameSync(tmp, file); // atomic replace
 }
 
-const registry = loadJson(DATA, {}); // { keyHash: subdomain }
+const registry = loadJsonStrict(DATA, {}); // { keyHash: subdomain }
 const used = new Set(Object.values(registry));
+// Per-Apple-ID subdomains (cp.appleSubs) must ALSO count as allocated at the frps gate —
+// they live in cp-state, not the registry, so fold them into `used` after cp loads below.
 
 /** Control-plane durable state. Shapes mirror mock-control-plane.mjs Maps. */
 const cp = Object.assign(
@@ -142,38 +190,81 @@ const cp = Object.assign(
     grants: {}, // grantId → {appAccountToken, tunnelId, deviceId, expiresAt, attested}
     subs: {}, // appAccountToken → {state, expiresAt, source}
     codes: {}, // CODE → {days, maxRedemptions, used, expiresAt, batch}
+    // D31 per-Apple-ID subdomains: `${gatewayKey}:${appAccountToken}` → subdomain. The FIRST
+    // Apple ID on a gateway reuses the gateway's base subdomain (registry[gatewayKey]); each
+    // ADDITIONAL Apple ID gets its own. The gateway polls /v1/gateway/subdomains to learn which
+    // to run an frpc proxy for, so an un-granted Apple ID simply has no reachable subdomain.
+    appleSubs: {},
     attestKeys: {}, // keyId → {publicKey, signCount, environment, deviceId, createdAt}
     revoked: [], // [subdomain] — rejected at the frps gate on next registration
     killswitch: false, // emergency: reject ALL FridayNext-namespace registrations
     ossUsage: {}, // subdomain → { month: "2026-07", bytes } — sign-time traffic accounting
   },
-  loadJson(CP_STATE, {}),
+  loadJsonStrict(CP_STATE, {}),
 );
-if (!cp.ossUsage) cp.ossUsage = {}; // state files written before Phase E
 function saveCp() {
   saveJson(CP_STATE, cp);
 }
 
-/** Append-only audit trail (D21). One JSON object per line; never rewritten. */
+// Fold persisted per-Apple-ID subdomains into the gate's allocated set (see note by `used`).
+for (const sub of Object.values(cp.appleSubs || {})) used.add(sub);
+
+// One-time attest nonces (P2-19) — in-memory is fine: 5-min TTL, and a relay restart
+// invalidating outstanding nonces just means one extra round-trip for the client.
+const attestNonces = new Map(); // nonce → expiresAt(ms)
+
+/** Append-only audit trail (D21), rotated monthly (`audit-YYYY-MM.jsonl`) so it can't
+ * grow without bound under sign/gate spam. One JSON object per line; never rewritten. */
 function audit(ev, fields = {}) {
   try {
-    fs.appendFileSync(AUDIT, JSON.stringify({ ts: new Date().toISOString(), ev, ...fields }) + "\n");
+    const file = path.join(DATA_DIR, `audit-${new Date().toISOString().slice(0, 7)}.jsonl`);
+    fs.appendFileSync(file, JSON.stringify({ ts: new Date().toISOString(), ev, ...fields }) + "\n");
   } catch {
     /* audit must never take the service down */
   }
 }
 
-function allocate(key) {
-  if (registry[key]) return registry[key]; // idempotent
+function mintSubdomain() {
   let sub;
   do {
     sub = "fn" + crypto.randomBytes(5).toString("hex");
   } while (used.has(sub)); // registry-checked uniqueness = hard guarantee
+  return sub;
+}
+
+function allocate(key) {
+  if (registry[key]) return registry[key]; // idempotent
+  const sub = mintSubdomain();
   registry[key] = sub;
   used.add(sub);
   saveJson(DATA, registry);
   audit("allocate", { subdomain: sub });
   return sub;
+}
+
+/**
+ * D31: resolve the per-Apple-ID subdomain for (gatewayKey, appAccountToken). The FIRST Apple
+ * ID to activate on a gateway reuses the gateway's base subdomain (so single-user installs are
+ * byte-identical to the pre-D31 world); each ADDITIONAL Apple ID gets a freshly-minted one.
+ * All per-Apple-ID subs join `used`, so the frps gate authorizes them like any allocation.
+ */
+function resolveAppleSubdomain(gatewayKey, appAccountToken, baseSub) {
+  const mapKey = `${gatewayKey}:${appAccountToken}`;
+  if (cp.appleSubs[mapKey]) return cp.appleSubs[mapKey];
+  // Reuse the base subdomain for the first owner; mint a distinct one for everyone after.
+  const baseTaken = Object.values(cp.appleSubs).includes(baseSub);
+  const sub = baseTaken ? mintSubdomain() : baseSub;
+  cp.appleSubs[mapKey] = sub;
+  used.add(sub);
+  saveCp();
+  audit("apple-sub.assign", { gatewayKey: gatewayKey.slice(0, 12), subdomain: sub, reused: sub === baseSub });
+  return sub;
+}
+
+/** Whether a subdomain currently belongs to an entitled Apple ID with a live-or-recent grant —
+ * the truth the gateway poll and the expiry sweep both consult. */
+function appleSubActive(sub) {
+  return subdomainHasActiveGrant(sub) || subdomainHasEntitledOwner(sub);
 }
 
 // ---------------------------------------------------------------------------
@@ -300,6 +391,102 @@ function subdomainHasActiveGrant(sub) {
   }
   return false;
 }
+
+/** Whether any tunnel on `sub` is owned by a still-ENTITLED account, even if its grant
+ * lapsed. Grants slide on app activity (D16); a paying user who doesn't open the app for
+ * 30 days would otherwise be cut at the next frpc reconnect despite a valid subscription
+ * — the gate treats "entitled owner, stale grant" as pass. */
+function subdomainHasEntitledOwner(sub) {
+  for (const t of Object.values(cp.tunnels)) {
+    if (t.subdomain === sub && entitled(t.appAccountToken)) return true;
+  }
+  return false;
+}
+
+// ---------------------------------------------------------------------------
+// Immediate enforcement (P1-5). frps has no per-proxy close API, so the ONLY way to cut
+// an ALREADY-ESTABLISHED tunnel is to restart frps: every frpc reconnects within seconds
+// and re-registers through the NewProxy gate, where revocation/killswitch/grant checks
+// now apply. Personal (non-FridayNext) tunnels re-register untouched — they just blip
+// for a couple of seconds, which is why this fires only on explicit admin actions and
+// the (ENFORCE_GRANTS-gated) expiry sweep, never routinely.
+// ---------------------------------------------------------------------------
+const FRPS_RESTART_ENABLED = process.env.GW_FRPS_RESTART !== "0";
+let lastFrpsRestartAt = 0;
+function forceProxyReregistration(reason) {
+  if (!FRPS_RESTART_ENABLED) {
+    audit("frps.restart.skipped", { reason, why: "GW_FRPS_RESTART=0" });
+    return;
+  }
+  lastFrpsRestartAt = now();
+  execFile("systemctl", ["restart", "frps"], (err) => {
+    audit("frps.restart", { reason, ok: !err, err: err ? String(err.message || err) : undefined });
+    if (err) console.error(`[enforce] frps restart failed: ${err.message}`);
+    else console.log(`[enforce] frps restarted (${reason}) — all proxies re-register through the gate`);
+  });
+}
+
+// Live registrations the gate has allowed since boot (sub → last NewProxy ts). Feeds the
+// expiry sweep: a sub that registered while granted but whose grant/entitlement has since
+// lapsed keeps serving until frpc reconnects — the sweep forces that re-registration.
+const gateAllowedSubs = new Map();
+const EXPIRY_SWEEP_INTERVAL_MS = 10 * 60_000;
+const EXPIRY_SWEEP_RESTART_COOLDOWN_MS = 60 * 60_000; // at most one sweep restart per hour
+if (ENFORCE_GRANTS) {
+  const sweep = setInterval(() => {
+    const stale = [...gateAllowedSubs.keys()].filter(
+      (sub) =>
+        !subdomainHasActiveGrant(sub) && !subdomainHasEntitledOwner(sub),
+    );
+    if (!stale.length) return;
+    if (now() - lastFrpsRestartAt < EXPIRY_SWEEP_RESTART_COOLDOWN_MS) return;
+    audit("enforce.sweep", { stale });
+    forceProxyReregistration(`expiry-sweep:${stale.join(",")}`);
+  }, EXPIRY_SWEEP_INTERVAL_MS);
+  sweep.unref?.();
+}
+
+// ---------------------------------------------------------------------------
+// State GC — cp-state only ever grew (expired reservations/grants/codes, past-month OSS
+// usage), inflating every full-state save and every O(n) scan. Sweep at boot + daily.
+// Expired grants get a 90-day retention (post-mortem/debugging value) before deletion.
+// ---------------------------------------------------------------------------
+function gcState() {
+  const t = now();
+  let dropped = 0;
+  for (const [id, r] of Object.entries(cp.reservations)) {
+    if (r.expiresAt < t) {
+      delete cp.reservations[id];
+      dropped++;
+    }
+  }
+  for (const [id, g] of Object.entries(cp.grants)) {
+    if (g.expiresAt < t - 90 * DAY) {
+      delete cp.grants[id];
+      dropped++;
+    }
+  }
+  for (const [code, c] of Object.entries(cp.codes)) {
+    if (c.expiresAt < t - 90 * DAY) {
+      delete cp.codes[code];
+      dropped++;
+    }
+  }
+  const month = new Date().toISOString().slice(0, 7);
+  for (const [sub, u] of Object.entries(cp.ossUsage)) {
+    if (u.month !== month) {
+      delete cp.ossUsage[sub];
+      dropped++;
+    }
+  }
+  if (dropped) {
+    saveCp();
+    audit("gc", { dropped });
+  }
+}
+gcState();
+const gcTimer = setInterval(gcState, DAY);
+gcTimer.unref?.();
 
 // ---------------------------------------------------------------------------
 // OSS side-channel signing (Phase E).
@@ -446,7 +633,7 @@ const server = http.createServer((req, res) => {
   };
   const auth = req.headers.authorization || "";
   const tok = auth.startsWith("Bearer ") ? auth.slice(7) : "";
-  if (tok !== TOKEN) return j(401, { error: "unauthorized" });
+  if (!tokenEqual(tok, TOKEN)) return j(401, { error: "unauthorized" });
 
   if (req.method !== "POST") return j(404, { error: "not found" });
 
@@ -487,7 +674,12 @@ const server = http.createServer((req, res) => {
           audit("sign-cert", { subdomain });
           j(200, { fullchain, fqdn: `${subdomain}.${SUBDOMAIN_HOST}` });
         })
-        .catch((e) => j(502, { error: `cert signing failed: ${e.message || String(e)}` }));
+        .catch((e) => {
+          // Detail (certbot stderr, paths) goes to the audit log only — the response
+          // audience is every token holder, and stderr can leak internals.
+          audit("sign-cert.error", { subdomain, detail: String(e.message || e).slice(0, 500) });
+          j(502, { error: "cert_signing_failed" });
+        });
       return;
     }
 
@@ -557,34 +749,42 @@ const frpGate = http.createServer((req, res) => {
       return reply({ reject: true, reject_reason: "service suspended" });
     }
 
-    // It claims our namespace → it MUST correspond to an allocated subdomain.
-    const okSub = allocatedSubdomain(sub);
-    const okDomain = domains.some((d) => allocatedSubdomain(String(d).split(".")[0]));
-
-    if (!okSub && !okDomain) {
-      const asked = sub || domains.join(",") || "(none)";
-      console.log(`[frp-gate] REJECT proxy=${content.proxy_name} sub=${asked} — not allocated`);
-      audit("gate.reject", { proxy: content.proxy_name, sub: asked, reason: "not_allocated" });
-      return reply({ reject: true, reject_reason: "subdomain not allocated by relay" });
-    }
-
-    // Per-subdomain revocation (D4): allocated but administratively revoked → reject.
-    const effectiveSub = okSub
+    // It claims our namespace → it MUST correspond to an allocated subdomain. One pass:
+    // resolve the effective bare label ("" = nothing allocated matches).
+    const effectiveSub = allocatedSubdomain(sub)
       ? String(sub).toLowerCase()
       : String(domains.find((d) => allocatedSubdomain(String(d).split(".")[0])) || "")
           .split(".")[0]
           .toLowerCase();
+    if (!effectiveSub) {
+      const asked = sub || domains.join(",") || "(none)";
+      console.log(`[frp-gate] REJECT proxy=${content.proxy_name} sub=${asked} — not allocated`);
+      audit("gate.reject", { proxy: content.proxy_name, sub: asked, reason: "not_allocated" });
+      gateAllowedSubs.delete(String(sub || "").toLowerCase());
+      return reply({ reject: true, reject_reason: "subdomain not allocated by relay" });
+    }
+
+    // Per-subdomain revocation (D4): allocated but administratively revoked → reject.
     if (cp.revoked.includes(effectiveSub)) {
       audit("gate.reject", { proxy: content.proxy_name, sub: effectiveSub, reason: "revoked" });
+      gateAllowedSubs.delete(effectiveSub);
       return reply({ reject: true, reject_reason: "subdomain revoked" });
     }
 
     // Grant enforcement (D7 到期=中继停转发). OFF until app-side activation is rolled
-    // out (CP_ENFORCE_GRANTS=1) — see policy note at the top.
-    if (ENFORCE_GRANTS && !subdomainHasActiveGrant(effectiveSub)) {
+    // out (CP_ENFORCE_GRANTS=1) — see policy note at the top. "Entitled owner with a
+    // stale grant" passes (silent-but-paying users must not be cut on reconnect).
+    if (
+      ENFORCE_GRANTS &&
+      !subdomainHasActiveGrant(effectiveSub) &&
+      !subdomainHasEntitledOwner(effectiveSub)
+    ) {
       audit("gate.reject", { proxy: content.proxy_name, sub: effectiveSub, reason: "no_active_grant" });
+      gateAllowedSubs.delete(effectiveSub);
       return reply({ reject: true, reject_reason: "no active grant (subscription expired?)" });
     }
+
+    gateAllowedSubs.set(effectiveSub, now()); // feeds the ENFORCE_GRANTS expiry sweep
 
     // Accept + inject a server-enforced bandwidth cap. Echo the received content
     // verbatim so frp re-parses a well-formed config, overriding only the cap.
@@ -630,7 +830,9 @@ const cpServer = http.createServer(async (req, res) => {
 
   const auth = req.headers.authorization || "";
   const bearer = auth.startsWith("Bearer ") ? auth.slice(7) : "";
-  const isAdmin = bearer === TOKEN;
+  // Admin surfaces take ONLY the operator token — never GW_ALLOC_TOKEN, which every user
+  // gateway holds (see the token-split note at the top).
+  const isAdmin = tokenEqual(bearer, ADMIN_TOKEN);
 
   // ————— admin/ops (bearer) —————
   if (p.startsWith("/v1/admin/") || p === "/v1/codes/issue" || p === "/v1/apple/webhook") {
@@ -663,6 +865,9 @@ const cpServer = http.createServer(async (req, res) => {
     if (!cp.revoked.includes(sub)) cp.revoked.push(sub);
     saveCp();
     audit("admin.revoke", { subdomain: sub });
+    // Cut the LIVE tunnel too — without this, revocation only bites at the proxy's next
+    // natural reconnect, which can be days away.
+    forceProxyReregistration(`revoke:${sub}`);
     return j(200, { ok: true, revoked: cp.revoked });
   }
   if (p === "/v1/admin/unrevoke") {
@@ -676,10 +881,67 @@ const cpServer = http.createServer(async (req, res) => {
     cp.killswitch = b.on === true;
     saveCp();
     audit("admin.killswitch", { on: cp.killswitch });
+    // Engaging the killswitch must stop abuse NOW, not at the abuser's next reconnect.
+    if (cp.killswitch) forceProxyReregistration("killswitch");
     return j(200, { ok: true, killswitch: cp.killswitch });
+  }
+  // Batch-clamp free-test trials to a cutoff (Phase F day-one tool: "即日起未付费即停"
+  // without hand-revoking every subdomain). Body: { expiresAt: ms | ISO string }.
+  if (p === "/v1/admin/free-test-clamp") {
+    const cutoff = typeof b.expiresAt === "string" ? Date.parse(b.expiresAt) : Number(b.expiresAt);
+    if (!Number.isFinite(cutoff) || cutoff <= 0) return j(400, { error: "bad_expires_at" });
+    let clamped = 0;
+    for (const s of Object.values(cp.subs)) {
+      if (s.source === "free-test" && (!s.expiresAt || s.expiresAt > cutoff)) {
+        s.expiresAt = cutoff;
+        clamped++;
+      }
+    }
+    saveCp();
+    audit("admin.free-test-clamp", { cutoff, clamped });
+    return j(200, { ok: true, clamped, cutoff });
   }
 
   // ————— public /v1 (contract §2) —————
+
+  // D31 gateway reconcile poll. The gateway proves identity by knowing gatewayKey =
+  // sha256(its own bearer) — present in the allocation registry, and never derivable by a
+  // third party who only saw a public URL. Returns the per-Apple-ID subdomains it should be
+  // running an frpc proxy for RIGHT NOW (active grant or still-entitled owner); the plugin
+  // reconciles its proxy set against this. Un-granted Apple IDs are simply absent → no proxy
+  // → no reachable subdomain, which is how family-freeloading is closed under ENFORCE_GRANTS.
+  if (p === "/v1/gateway/subdomains") {
+    const gk = typeof b.gatewayKey === "string" ? b.gatewayKey.trim().toLowerCase() : "";
+    if (!gk || !registry[gk]) return j(403, { error: "gateway_not_allocated" });
+    const prefix = `${gk}:`;
+    const active = [];
+    for (const [mk, sub] of Object.entries(cp.appleSubs)) {
+      if (!mk.startsWith(prefix)) continue;
+      if (cp.revoked.includes(sub)) continue;
+      // When enforcement is off, every assigned sub is served (matches today's behavior);
+      // when on, only entitled/granted ones — the freeloading close.
+      if (!ENFORCE_GRANTS || appleSubActive(sub)) active.push(sub);
+    }
+    // Always include the base subdomain itself so the owner's existing tunnel keeps running
+    // even before their first activate (backward-compat with pre-D31 installs).
+    const baseSub = registry[gk];
+    if (!cp.revoked.includes(baseSub) && !active.includes(baseSub)) {
+      if (!ENFORCE_GRANTS || appleSubActive(baseSub)) active.push(baseSub);
+    }
+    return j(200, { subdomains: active, subDomainHost: SUBDOMAIN_HOST });
+  }
+
+  // One-time attest nonce (P2-19). The static `gatewayId|deviceId` challenge made every
+  // attestation/assertion replayable forever; a consumed server nonce restores freshness.
+  // Optional while ATTEST_REQUIRE=0 (legacy static challenge still accepted); REQUIRED
+  // alongside the attestation once ATTEST_REQUIRE=1.
+  if (p === "/v1/attest/nonce") {
+    for (const [n, exp] of attestNonces) if (exp < now()) attestNonces.delete(n);
+    if (attestNonces.size > 10_000) return j(429, { error: "too_many_nonces" });
+    const nonce = rid(16);
+    attestNonces.set(nonce, now() + 5 * 60_000);
+    return j(200, { nonce, ttlSec: 300 });
+  }
 
   // D12 one-time pairing ticket. (The plugin-side QR flow adopts this later; the
   // endpoint is live so the app-side reserve path can be built against production.)
@@ -711,9 +973,22 @@ const cpServer = http.createServer(async (req, res) => {
       gatewayId = rsv.gatewayId;
     }
 
+    // Challenge freshness (P2-19): a server-issued one-time nonce when provided (consumed
+    // here — replay of the same attestation blob then fails the challenge check). The
+    // legacy static gatewayId challenge is tolerated only while ATTEST_REQUIRE=0.
+    let challenge = gatewayId;
+    if (typeof b.attestNonce === "string" && b.attestNonce) {
+      const exp = attestNonces.get(b.attestNonce);
+      attestNonces.delete(b.attestNonce);
+      if (!exp || exp < now()) return j(403, { error: "attest_rejected", hint: "stale_nonce" });
+      challenge = b.attestNonce;
+    } else if (ATTEST_REQUIRE && b.attestation) {
+      return j(403, { error: "attest_rejected", hint: "nonce_required" });
+    }
+
     // Real App Attest (D3). Present-but-invalid → hard reject. Absent/unverifiable →
     // allowed while ATTEST_REQUIRE=0, but the grant is flagged unattested.
-    const att = await verifyActivationAttest(b.attestation, gatewayId, deviceId);
+    const att = await verifyActivationAttest(b.attestation, challenge, deviceId);
     if (att.invalid) {
       audit("activate.attest_rejected", { appAccountToken, deviceId, detail: att.detail });
       return j(403, { error: "attest_rejected" });
@@ -728,15 +1003,41 @@ const cpServer = http.createServer(async (req, res) => {
       return j(402, { error: "no_entitlement", hint: "需订阅/试用/兑换码" });
     }
 
-    // Production semantics: the tunnel's subdomain was allocated by the gateway plugin
-    // at install — activate CLAIMS it (must exist in the registry). The mock minted
-    // one here; production never invents subdomains the gate would have to trust.
-    const sub = bareSubdomain(b.subdomain);
-    if (!sub) return j(400, { error: "subdomain_required", hint: "send the paired gateway's subdomain" });
-    if (!used.has(sub)) return j(404, { error: "subdomain_not_allocated" });
-    if (cp.revoked.includes(sub)) return j(403, { error: "subdomain_revoked" });
+    // The `subdomain` the app sends is the gateway's BASE subdomain (from the QR / durable
+    // pairing) — the ownership TARGET. Under D31 the tunnel it actually activates is the
+    // caller's PER-APPLE-ID subdomain (the base for the first owner, a distinct one after),
+    // resolved below. Production never invents base subdomains the gate wouldn't trust.
+    const baseSub = bareSubdomain(b.subdomain);
+    if (!baseSub) return j(400, { error: "subdomain_required", hint: "send the paired gateway's subdomain" });
+    if (!used.has(baseSub)) return j(404, { error: "subdomain_not_allocated" });
 
     const owned = Object.entries(cp.tunnels).filter(([, t]) => t.appAccountToken === appAccountToken);
+    const gk = typeof b.gatewayKey === "string" ? b.gatewayKey.trim().toLowerCase() : "";
+    // Ownership proof (P0-4): gatewayKey = sha256(the gateway's bearer token) — the same key
+    // the plugin allocated the base subdomain under, which only a genuinely-paired app can
+    // derive from the bearer it holds. The subdomain is public (it's in every URL); knowing
+    // the bearer is what proves pairing. Required unless this Apple ID already owns a tunnel
+    // here (ownership was proven at first claim). Also the key under which the per-Apple-ID
+    // subdomain is filed, so it must be present+correct on the first activate.
+    const mapKey = `${gk}:${appAccountToken}`;
+    const alreadyMine = Boolean(cp.appleSubs[mapKey]) || owned.length > 0;
+    if (!alreadyMine) {
+      if (!gk || registry[gk] !== baseSub) {
+        audit("activate.ownership_rejected", { appAccountToken, subdomain: baseSub });
+        return j(403, { error: "subdomain_ownership_required", hint: "send gatewayKey" });
+      }
+    }
+
+    // Resolve the per-Apple-ID subdomain (D31). Needs the verified gatewayKey; re-activations
+    // recover it from the stored gatewayId→key isn't available, so require gk here too when a
+    // fresh assignment would be minted.
+    const resolveKey = gk || Object.keys(cp.appleSubs).find((k) => k.endsWith(`:${appAccountToken}`))?.split(":")[0];
+    if (!resolveKey) {
+      return j(403, { error: "subdomain_ownership_required", hint: "send gatewayKey" });
+    }
+    const sub = resolveAppleSubdomain(resolveKey, appAccountToken, baseSub);
+    if (cp.revoked.includes(sub)) return j(403, { error: "subdomain_revoked" });
+
     let tunnelId = (owned.find(([, t]) => t.subdomain === sub) || [])[0];
     if (!tunnelId) {
       if (owned.length >= TUNNEL_CAP) return j(409, { error: "tunnel_cap_reached", cap: TUNNEL_CAP });
@@ -762,13 +1063,22 @@ const cpServer = http.createServer(async (req, res) => {
     });
   }
 
-  // D16 grant sliding renewal
+  // D16 grant sliding renewal. The grant may not outlive the subscription it rides on
+  // (+72h grace, D-series 宽限) — an unconditional now+30d let a user renew on the eve
+  // of expiry and keep the tunnel a whole month past their subscription.
   if (p === "/v1/grants/renew") {
     const g = cp.grants[b.grantId];
     if (!g) return j(404, { error: "grant_not_found" });
     ensureFreeTestEntitlement(g.appAccountToken);
     if (!entitled(g.appAccountToken)) return j(402, { error: "no_entitlement" });
-    g.expiresAt = now() + 30 * DAY;
+    if (ATTEST_REQUIRE && !g.attested) {
+      // Grants issued before the attest wall went up don't get to slide past it.
+      audit("renew.attest_rejected", { grantId: b.grantId });
+      return j(403, { error: "attest_rejected", hint: "re-activate with attestation" });
+    }
+    const s = cp.subs[g.appAccountToken];
+    const subCeiling = s && s.expiresAt ? s.expiresAt + 72 * 3600_000 : Infinity;
+    g.expiresAt = Math.min(now() + 30 * DAY, subCeiling);
     saveCp();
     audit("renew", { grantId: b.grantId });
     return j(200, { grantId: b.grantId, expiresAt: g.expiresAt });
@@ -805,8 +1115,9 @@ const cpServer = http.createServer(async (req, res) => {
       if (!Number.isFinite(size) || size <= 0) return j(400, { error: "bad_size" });
       if (size > OSS_MAX_OBJECT_BYTES) return j(413, { error: "object_too_large", maxBytes: OSS_MAX_OBJECT_BYTES });
       const cap = ossCapFor(sub);
-      if (ossUsedBytes(sub) + size > cap) {
-        return j(429, { error: "oss_quota_exceeded", cap, used: ossUsedBytes(sub) });
+      const usedBytes = ossUsedBytes(sub);
+      if (usedBytes + size > cap) {
+        return j(429, { error: "oss_quota_exceeded", cap, used: usedBytes });
       }
       const signed = ossPresign("PUT", objectKey, b.contentType || "application/octet-stream");
       const total = ossCharge(sub, size); // meter at sign time (upload commit is fire-and-forget)

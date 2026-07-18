@@ -4,8 +4,6 @@ export type FridayNextLogLevel = "debug" | "info" | "warn" | "error";
 
 export type FridayNextConfig = {
   channelId: "friday-next";
-  pathPrefix: string;
-  transport: string;
   historyLimit: number;
   historyDir: string;
   logLevel: FridayNextLogLevel;
@@ -62,6 +60,12 @@ function asBool(value: unknown, fallback: boolean): boolean {
   return typeof value === "boolean" ? value : fallback;
 }
 
+function asLogLevel(value: unknown): FridayNextLogLevel {
+  return value === "debug" || value === "info" || value === "warn" || value === "error"
+    ? value
+    : "info";
+}
+
 export function resolveFridayNextConfig(cfg: unknown): FridayNextConfig {
   const root = asObject(cfg);
   const channels = asObject(root.channels);
@@ -78,11 +82,9 @@ export function resolveFridayNextConfig(cfg: unknown): FridayNextConfig {
 
   return {
     channelId: "friday-next",
-    pathPrefix: asString(section.pathPrefix, "/friday-next"),
-    transport: asString(section.transport, "http+sse"),
     historyLimit: asNumber(section.historyLimit, 25, 1, 200),
     historyDir: asString(section.historyDir, `${homedir()}/.openclaw/friday-next/history`),
-    logLevel: asString(section.logLevel, "info") as FridayNextLogLevel,
+    logLevel: asLogLevel(section.logLevel),
     authToken,
     corsEnabled: asBool(cors.enabled, false),
     corsAllowOrigin: asString(cors.allowOrigin, "*"),

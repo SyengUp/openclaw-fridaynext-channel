@@ -5,7 +5,7 @@ describe("resolveFridayNextConfig", () => {
   it("uses defaults", () => {
     const cfg = resolveFridayNextConfig({});
     expect(cfg.channelId).toBe("friday-next");
-    expect(cfg.pathPrefix).toBe("/friday-next");
+    expect(cfg.logLevel).toBe("info");
     expect(cfg.sseKeepaliveSec).toBe(30);
   });
 

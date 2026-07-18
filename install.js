@@ -522,25 +522,22 @@ async function fetchPairingSuperset(url, token) {
 let qrPayload = JSON.stringify({ url: gatewayUrl, token: gatewayToken });
 if (DIST_TAG === "beta") {
   const pairing = await fetchPairingSuperset(verifyUrl, gatewayToken);
-  if (pairing && pairing.publicUrl) {
-    // D12: prefer the 10-minute one-time pairing voucher over the permanent token —
-    // a leaked/photographed QR is then worthless after one claim or 10 minutes, and
+  if (pairing && pairing.publicUrl && pairing.pairingTicket) {
+    // D12: the QR carries a 10-minute one-time pairing voucher, never the permanent
+    // token — a leaked/photographed QR is worthless after one claim or 10 minutes, and
     // re-running install (or refetching the pairing) invalidates any outstanding QR.
     // The app exchanges it via POST /friday-next/pair/claim inside the pinned TLS
-    // channel. Gateways older than the voucher route fall back to the token QR.
-    const base = {
-      v: pairing.pairingTicket ? 2 : (pairing.v ?? 1),
+    // channel. No token fallback: the install gate above guarantees the running plugin
+    // is the freshly-installed version, which always mints vouchers (and its pairing
+    // response no longer contains the token at all).
+    qrPayload = JSON.stringify({
+      v: 2,
       lanUrl: pairing.lanUrl || gatewayUrl,
       publicUrl: pairing.publicUrl,
       fingerprint: pairing.fingerprint,
-    };
-    if (pairing.pairingTicket) {
-      qrPayload = JSON.stringify({ ...base, pairingTicket: pairing.pairingTicket });
-      log("Public access is on — QR carries a one-time pairing voucher (10 min), no token (一次性配对券).");
-    } else {
-      qrPayload = JSON.stringify({ ...base, token: pairing.token || gatewayToken });
-      log("Public access is on — QR includes the relay address (二维码含公网地址).");
-    }
+      pairingTicket: pairing.pairingTicket,
+    });
+    log("Public access is on — QR carries a one-time pairing voucher (10 min), no token (一次性配对券).");
   } else {
     warn(
       "Public access not active — QR carries LAN URL + token only. Enable " +

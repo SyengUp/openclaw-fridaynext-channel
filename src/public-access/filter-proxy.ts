@@ -50,7 +50,7 @@ const DENY = [
  * Normalize the path BEFORE matching so `..`, `%2e%2e`, and `//` can't smuggle a
  * denied path past the allowlist (the core resolves those, so we must too).
  */
-function normalizedPath(rawUrl: string): string {
+export function normalizedPath(rawUrl: string): string {
   try {
     let p = new URL(rawUrl, "http://x").pathname; // strips query, resolves ./ and ../
     try {
@@ -64,7 +64,7 @@ function normalizedPath(rawUrl: string): string {
   }
 }
 
-function allowed(url: string): boolean {
+export function allowed(url: string): boolean {
   const p = normalizedPath(url);
   if (DENY.some((re) => re.test(p))) return false;
   return ALLOW.some((re) => re.test(p));
@@ -120,6 +120,11 @@ export function startFilterProxy(listenPort: number, corePort: number, log: (m: 
     socket.on("error", () => up.destroy());
   });
 
+  // Without a listener, a listen failure (EADDRINUSE on the hardcoded corePort+1, …) throws
+  // uncaughtException and takes down the ENTIRE host gateway for an accessory feature.
+  server.on("error", (err) => {
+    log(`public surface filter error: ${err.message} — public access unavailable until restart`);
+  });
   server.listen(listenPort, "127.0.0.1", () => {
     log(`public surface filter on 127.0.0.1:${listenPort} → core:${corePort} (allowlist only)`);
   });
