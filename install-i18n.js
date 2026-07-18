@@ -35,6 +35,7 @@ const STRINGS = {
     stepConfigure: "配置 OpenClaw",
     stepRestart: "重启网关",
     stepVerify: "校验网关",
+    stepTunnel: "等待隧道就绪",
 
     detailUpdated: "已更新",
     detailUnchanged: "无需改动",
@@ -50,6 +51,7 @@ const STRINGS = {
 
     noteNoSudo: "无需 sudo 运行",
     noteLanOnly: "公网未开启，配对码仅含局域网地址",
+    noteRelayBootstrapFailed: "无法获取中继凭据，本次仅配置局域网访问",
 
     failNoNode: "未找到 node",
     failNoNodeHint: "先安装 Node.js",
@@ -71,6 +73,7 @@ const STRINGS = {
     stepConfigure: "Configure OpenClaw",
     stepRestart: "Restart gateway",
     stepVerify: "Verify gateway",
+    stepTunnel: "Waiting for tunnel",
 
     detailUpdated: "updated",
     detailUnchanged: "no changes",
@@ -86,6 +89,7 @@ const STRINGS = {
 
     noteNoSudo: "sudo is not needed",
     noteLanOnly: "public access off — QR carries the LAN address only",
+    noteRelayBootstrapFailed: "could not fetch relay credentials — LAN access only this run",
 
     failNoNode: "node not found",
     failNoNodeHint: "install Node.js first",

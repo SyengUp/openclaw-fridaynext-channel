@@ -171,6 +171,22 @@ try {
   die(msg.trim().split("\n").pop() || T.failInstall, "npx -y @syengup/friday-channel-next");
 }
 
+/** GET the relay's bootstrap credentials (frps address + shared token). null on any failure. */
+async function fetchRelayBootstrap() {
+  const base = process.env.FRIDAY_CONTROL_PLANE || "https://friday.syengup.host";
+  try {
+    const res = await fetch(`${base}/v1/relay/bootstrap`, {
+      headers: { Accept: "application/json" },
+      signal: AbortSignal.timeout(8000),
+    });
+    if (!res.ok) return null;
+    const body = await res.json();
+    return typeof body?.relayToken === "string" && body.relayToken ? body : null;
+  } catch {
+    return null;
+  }
+}
+
 // --------------- configure OpenClaw ---------------
 
 const configStep = ui.step(T.stepConfigure);
@@ -292,6 +308,44 @@ if (Array.isArray(mainAgent.tools.deny)) {
     if (idx !== -1) {
       mainAgent.tools.deny.splice(idx, 1);
       configChanged = true;
+    }
+  }
+}
+
+// —— public access (beta line only) ——
+//
+// Until now `publicAccess` was hand-edited, so an upgrading user's gateway had no tunnel at
+// all: `enabled` defaults false and `relayToken` defaults empty, so the app's pairing self-heal
+// found nothing to adopt and "upgrade → tunnel works" was impossible without manual config.
+//
+// Scoped to the beta dist-tag on purpose — that line is opt-in (`--beta`), i.e. exactly the
+// invited testers. A `latest` install must never be auto-routed through our relay.
+//
+// Existing values are never touched: a user (or operator) who already configured public access,
+// including one who deliberately turned it OFF, keeps their setting.
+let enabledPublicAccess = false;
+if (DIST_TAG === "beta") {
+  const pa = (config.channels["friday-next"].publicAccess ??= {});
+  if (pa.enabled === undefined) {
+    // relayToken = the frps auth token. Fetched from the control plane rather than shipped in
+    // this file: the repo is open source and the npm tarball is public, while this token never
+    // rotates. Keeping it server-side means P5 can gate the handout without republishing an
+    // installer that already lives on users' machines. FRIDAY_RELAY_TOKEN overrides for
+    // offline/manual installs.
+    const bootstrap = process.env.FRIDAY_RELAY_TOKEN
+      ? { relayToken: process.env.FRIDAY_RELAY_TOKEN }
+      : await fetchRelayBootstrap();
+    if (bootstrap?.relayToken) {
+      pa.enabled = true;
+      pa.relayToken = bootstrap.relayToken;
+      if (bootstrap.relayAddr) pa.relayAddr = bootstrap.relayAddr;
+      configChanged = true;
+      enabledPublicAccess = true;
+    } else {
+      // No credentials → leave public access untouched rather than writing a config that
+      // brings frpc up in a permanent auth-failure loop.
+      delete config.channels["friday-next"].publicAccess;
+      ui.note(T.noteRelayBootstrapFailed);
     }
   }
 }
@@ -471,7 +525,11 @@ async function fetchPairingSuperset(url, token) {
 // upgrades it to the public-access superset so a scan also arms remote access.
 let qrFields = { url: gatewayUrl, token: gatewayToken };
 if (DIST_TAG === "beta") {
-  const pairing = await fetchPairingSuperset(verifyUrl, gatewayToken);
+  // A tunnel that was just switched on needs a few seconds after the restart to register with
+  // the relay, so poll rather than settle for a LAN-only QR on the very install that enabled it.
+  const pairing = enabledPublicAccess
+    ? await pollPairingSuperset(verifyUrl, gatewayToken)
+    : await fetchPairingSuperset(verifyUrl, gatewayToken);
   if (pairing && pairing.publicUrl && pairing.pairingTicket) {
     // D12: the QR carries a 10-minute one-time pairing voucher, never the permanent
     // token — a leaked/photographed QR is worthless after one claim or 10 minutes, and
@@ -491,6 +549,21 @@ if (DIST_TAG === "beta") {
     ui.note(T.noteLanOnly);
   }
 }
+/** Retry the pairing fetch while a freshly-enabled tunnel comes up (~30s worst case). */
+async function pollPairingSuperset(url, token) {
+  const step = ui.step(T.stepTunnel);
+  for (let i = 0; i < 10; i++) {
+    const pairing = await fetchPairingSuperset(url, token);
+    if (pairing?.publicUrl) {
+      step.ok();
+      return pairing;
+    }
+    await new Promise((r) => setTimeout(r, 3000));
+  }
+  step.fail();
+  return null;
+}
+
 // Encrypt the QR payload into the `FNQR1:` envelope so a generic QR reader shows
 // only ciphertext — the public relay domain never appears in plaintext, and the
 // pairing code is only useful inside the FridayNext app (which holds the key and

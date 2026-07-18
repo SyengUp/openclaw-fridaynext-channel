@@ -60,6 +60,9 @@ const CP_STATE = path.join(DATA_DIR, "cp-state.json");
 const TMP = path.join(DATA_DIR, "tmp");
 const WEBROOT = "/var/www/acme";
 const SUBDOMAIN_HOST = process.env.GW_SUBDOMAIN_HOST || "bj.gw.syengup.host";
+// Public frps endpoint handed to installers by /v1/relay/bootstrap (matches the plugin's
+// own `relayAddr` default — kept here so a relay move needs no installer republish).
+const FRPS_ADDR = process.env.GW_FRPS_PUBLIC_ADDR || "47.95.195.236:7000";
 const ACME_EMAIL = "admin@syengup.host";
 // Bearer secret for /allocate + /sign-cert. Sourced from the environment ONLY — never
 // hardcoded, because this value is also the frps auth.token, which is shared with the
@@ -82,7 +85,9 @@ if (!ADMIN_TOKEN) {
   process.exit(1);
 }
 if (ADMIN_TOKEN === TOKEN) {
-  console.error("FATAL: GW_ALLOC_ADMIN_TOKEN must differ from GW_ALLOC_TOKEN (the split is the point)");
+  console.error(
+    "FATAL: GW_ALLOC_ADMIN_TOKEN must differ from GW_ALLOC_TOKEN (the split is the point)",
+  );
   process.exit(1);
 }
 
@@ -257,7 +262,11 @@ function resolveAppleSubdomain(gatewayKey, appAccountToken, baseSub) {
   cp.appleSubs[mapKey] = sub;
   used.add(sub);
   saveCp();
-  audit("apple-sub.assign", { gatewayKey: gatewayKey.slice(0, 12), subdomain: sub, reused: sub === baseSub });
+  audit("apple-sub.assign", {
+    gatewayKey: gatewayKey.slice(0, 12),
+    subdomain: sub,
+    reused: sub === baseSub,
+  });
   return sub;
 }
 
@@ -372,14 +381,22 @@ function ensureFreeTestEntitlement(appAccountToken) {
 
 function issueGrant(appAccountToken, tunnelId, deviceId, attested) {
   const grantId = rid();
-  cp.grants[grantId] = { appAccountToken, tunnelId, deviceId, expiresAt: now() + 30 * DAY, attested };
+  cp.grants[grantId] = {
+    appAccountToken,
+    tunnelId,
+    deviceId,
+    expiresAt: now() + 30 * DAY,
+    attested,
+  };
   saveCp();
   return grantId;
 }
 
 /** Normalize an activate `subdomain` (bare "fnabc…" or full FQDN) to the bare label. */
 function bareSubdomain(input) {
-  const s = String(input || "").trim().toLowerCase();
+  const s = String(input || "")
+    .trim()
+    .toLowerCase();
   if (!s) return "";
   return s.endsWith("." + SUBDOMAIN_HOST) ? s.slice(0, -(SUBDOMAIN_HOST.length + 1)) : s;
 }
@@ -422,7 +439,10 @@ function forceProxyReregistration(reason) {
   execFile("systemctl", ["restart", "frps"], (err) => {
     audit("frps.restart", { reason, ok: !err, err: err ? String(err.message || err) : undefined });
     if (err) console.error(`[enforce] frps restart failed: ${err.message}`);
-    else console.log(`[enforce] frps restarted (${reason}) — all proxies re-register through the gate`);
+    else
+      console.log(
+        `[enforce] frps restarted (${reason}) — all proxies re-register through the gate`,
+      );
   });
 }
 
@@ -435,8 +455,7 @@ const EXPIRY_SWEEP_RESTART_COOLDOWN_MS = 60 * 60_000; // at most one sweep resta
 if (ENFORCE_GRANTS) {
   const sweep = setInterval(() => {
     const stale = [...gateAllowedSubs.keys()].filter(
-      (sub) =>
-        !subdomainHasActiveGrant(sub) && !subdomainHasEntitledOwner(sub),
+      (sub) => !subdomainHasActiveGrant(sub) && !subdomainHasEntitledOwner(sub),
     );
     if (!stale.length) return;
     if (now() - lastFrpsRestartAt < EXPIRY_SWEEP_RESTART_COOLDOWN_MS) return;
@@ -492,7 +511,9 @@ gcTimer.unref?.();
 // OSS side-channel signing (Phase E).
 // ---------------------------------------------------------------------------
 function ossConfigured() {
-  return Boolean(OSS_MOCK_BASE || (OSS_BUCKET && OSS_ENDPOINT && OSS_ACCESS_KEY_ID && OSS_ACCESS_KEY_SECRET));
+  return Boolean(
+    OSS_MOCK_BASE || (OSS_BUCKET && OSS_ENDPOINT && OSS_ACCESS_KEY_ID && OSS_ACCESS_KEY_SECRET),
+  );
 }
 
 /** Monthly cap for a tunnel: paid tier if ANY entitled non-trial sub owns a grant on it. */
@@ -539,7 +560,10 @@ function ossPresign(method, objectKey, contentType) {
   }
   const resource = `/${OSS_BUCKET}/${objectKey}`;
   const stringToSign = `${method}\n\n${contentType || ""}\n${expires}\n${resource}`;
-  const signature = crypto.createHmac("sha1", OSS_ACCESS_KEY_SECRET).update(stringToSign).digest("base64");
+  const signature = crypto
+    .createHmac("sha1", OSS_ACCESS_KEY_SECRET)
+    .update(stringToSign)
+    .digest("base64");
   const q = new URLSearchParams({
     OSSAccessKeyId: OSS_ACCESS_KEY_ID,
     Expires: String(expires),
@@ -604,10 +628,22 @@ async function signCert(subdomain, csrPem) {
     await execFileP(
       "certbot",
       [
-        "certonly", "--non-interactive", "--agree-tos", "-m", ACME_EMAIL,
-        "--webroot", "-w", WEBROOT,
-        "--csr", csrPath,
-        "--cert-path", certPath, "--fullchain-path", fullPath, "--chain-path", chainPath,
+        "certonly",
+        "--non-interactive",
+        "--agree-tos",
+        "-m",
+        ACME_EMAIL,
+        "--webroot",
+        "-w",
+        WEBROOT,
+        "--csr",
+        csrPath,
+        "--cert-path",
+        certPath,
+        "--fullchain-path",
+        fullPath,
+        "--chain-path",
+        chainPath,
       ],
       { timeout: 120_000 },
     );
@@ -779,7 +815,11 @@ const frpGate = http.createServer((req, res) => {
       !subdomainHasActiveGrant(effectiveSub) &&
       !subdomainHasEntitledOwner(effectiveSub)
     ) {
-      audit("gate.reject", { proxy: content.proxy_name, sub: effectiveSub, reason: "no_active_grant" });
+      audit("gate.reject", {
+        proxy: content.proxy_name,
+        sub: effectiveSub,
+        reason: "no_active_grant",
+      });
       gateAllowedSubs.delete(effectiveSub);
       return reply({ reject: true, reject_reason: "no active grant (subscription expired?)" });
     }
@@ -790,11 +830,15 @@ const frpGate = http.createServer((req, res) => {
     // verbatim so frp re-parses a well-formed config, overriding only the cap.
     content.bandwidth_limit = BW_LIMIT;
     content.bandwidth_limit_mode = "server";
-    console.log(`[frp-gate] allow proxy=${content.proxy_name} sub=${sub || domains.join(",")} bw=${BW_LIMIT}`);
+    console.log(
+      `[frp-gate] allow proxy=${content.proxy_name} sub=${sub || domains.join(",")} bw=${BW_LIMIT}`,
+    );
     return reply({ reject: false, unchange: false, content });
   });
 });
-frpGate.listen(FRP_GATE_PORT, HOST, () => console.log(`gw-alloc (frp-gate) on ${HOST}:${FRP_GATE_PORT}`));
+frpGate.listen(FRP_GATE_PORT, HOST, () =>
+  console.log(`gw-alloc (frp-gate) on ${HOST}:${FRP_GATE_PORT}`),
+);
 
 // ---------------------------------------------------------------------------
 // Control plane /v1 (port 7003) — the production mock-control-plane.mjs.
@@ -826,6 +870,24 @@ const cpServer = http.createServer(async (req, res) => {
   // —— health (no auth; used by uptime monitoring + the off-site backup script) ——
   if (p === "/v1/healthz") {
     return j(200, { ok: true, uptimeSec: Math.floor(process.uptime()), killswitch: cp.killswitch });
+  }
+
+  // —— relay bootstrap (no auth, ON PURPOSE) ——
+  // The installer needs `relayToken` (= GW_ALLOC_TOKEN = frps auth.token) before it can bring a
+  // tunnel up, and that token is the very thing /allocate is guarded by — a chicken-and-egg the
+  // beta line previously solved by hand-editing openclaw.json.
+  //
+  // Serving it unauthenticated is a DELIBERATE, BOUNDED choice for the invite-only beta:
+  //  · this token is already semi-public by design — it sits in plaintext on every user gateway;
+  //  · frps registration is not the security boundary — the NewProxy gate is: a stranger holding
+  //    this token still cannot claim a subdomain that isn't allocated to their gateway key;
+  //  · it lives HERE, not in the open-source installer, so P5 can gate or retire it (invite code,
+  //    grant check) WITHOUT republishing an installer that is already on users' machines.
+  // Set GW_RELAY_BOOTSTRAP=0 to switch it off — that is the P5 kill switch.
+  if (p === "/v1/relay/bootstrap") {
+    if (process.env.GW_RELAY_BOOTSTRAP === "0") return j(404, { error: "not found" });
+    console.log(`[bootstrap] relay credentials served → ${req.socket.remoteAddress ?? "?"}`);
+    return j(200, { relayAddr: FRPS_ADDR, relayToken: TOKEN, subDomainHost: SUBDOMAIN_HOST });
   }
 
   const auth = req.headers.authorization || "";
@@ -1008,10 +1070,13 @@ const cpServer = http.createServer(async (req, res) => {
     // caller's PER-APPLE-ID subdomain (the base for the first owner, a distinct one after),
     // resolved below. Production never invents base subdomains the gate wouldn't trust.
     const baseSub = bareSubdomain(b.subdomain);
-    if (!baseSub) return j(400, { error: "subdomain_required", hint: "send the paired gateway's subdomain" });
+    if (!baseSub)
+      return j(400, { error: "subdomain_required", hint: "send the paired gateway's subdomain" });
     if (!used.has(baseSub)) return j(404, { error: "subdomain_not_allocated" });
 
-    const owned = Object.entries(cp.tunnels).filter(([, t]) => t.appAccountToken === appAccountToken);
+    const owned = Object.entries(cp.tunnels).filter(
+      ([, t]) => t.appAccountToken === appAccountToken,
+    );
     const gk = typeof b.gatewayKey === "string" ? b.gatewayKey.trim().toLowerCase() : "";
     // Ownership proof (P0-4): gatewayKey = sha256(the gateway's bearer token) — the same key
     // the plugin allocated the base subdomain under, which only a genuinely-paired app can
@@ -1031,7 +1096,11 @@ const cpServer = http.createServer(async (req, res) => {
     // Resolve the per-Apple-ID subdomain (D31). Needs the verified gatewayKey; re-activations
     // recover it from the stored gatewayId→key isn't available, so require gk here too when a
     // fresh assignment would be minted.
-    const resolveKey = gk || Object.keys(cp.appleSubs).find((k) => k.endsWith(`:${appAccountToken}`))?.split(":")[0];
+    const resolveKey =
+      gk ||
+      Object.keys(cp.appleSubs)
+        .find((k) => k.endsWith(`:${appAccountToken}`))
+        ?.split(":")[0];
     if (!resolveKey) {
       return j(403, { error: "subdomain_ownership_required", hint: "send gatewayKey" });
     }
@@ -1040,7 +1109,8 @@ const cpServer = http.createServer(async (req, res) => {
 
     let tunnelId = (owned.find(([, t]) => t.subdomain === sub) || [])[0];
     if (!tunnelId) {
-      if (owned.length >= TUNNEL_CAP) return j(409, { error: "tunnel_cap_reached", cap: TUNNEL_CAP });
+      if (owned.length >= TUNNEL_CAP)
+        return j(409, { error: "tunnel_cap_reached", cap: TUNNEL_CAP });
       tunnelId = rid();
       cp.tunnels[tunnelId] = {
         appAccountToken,
@@ -1088,7 +1158,11 @@ const cpServer = http.createServer(async (req, res) => {
   if (p === "/v1/subscriptions/verify") {
     const s = cp.subs[b.appAccountToken];
     if (!s) return j(200, { state: "none", entitled: false });
-    return j(200, { state: s.state, entitled: entitled(b.appAccountToken), expiresAt: s.expiresAt });
+    return j(200, {
+      state: s.state,
+      entitled: entitled(b.appAccountToken),
+      expiresAt: s.expiresAt,
+    });
   }
 
   // Phase E — OSS attachment side-channel: presign a scoped PUT/GET URL.
@@ -1113,7 +1187,8 @@ const cpServer = http.createServer(async (req, res) => {
     if (op === "put") {
       const size = Number(b.size || 0);
       if (!Number.isFinite(size) || size <= 0) return j(400, { error: "bad_size" });
-      if (size > OSS_MAX_OBJECT_BYTES) return j(413, { error: "object_too_large", maxBytes: OSS_MAX_OBJECT_BYTES });
+      if (size > OSS_MAX_OBJECT_BYTES)
+        return j(413, { error: "object_too_large", maxBytes: OSS_MAX_OBJECT_BYTES });
       const cap = ossCapFor(sub);
       const usedBytes = ossUsedBytes(sub);
       if (usedBytes + size > cap) {
@@ -1156,10 +1231,21 @@ const cpServer = http.createServer(async (req, res) => {
     c.used++;
     const prev = cp.subs[b.appAccountToken];
     const base = prev && prev.expiresAt > now() ? prev.expiresAt : now();
-    cp.subs[b.appAccountToken] = { state: "active", expiresAt: base + c.days * DAY, source: "code" };
+    cp.subs[b.appAccountToken] = {
+      state: "active",
+      expiresAt: base + c.days * DAY,
+      source: "code",
+    };
     saveCp();
-    audit("code.redeem", { code: String(b.code).toUpperCase(), appAccountToken: b.appAccountToken });
-    return j(200, { ok: true, grantedDays: c.days, expiresAt: cp.subs[b.appAccountToken].expiresAt });
+    audit("code.redeem", {
+      code: String(b.code).toUpperCase(),
+      appAccountToken: b.appAccountToken,
+    });
+    return j(200, {
+      ok: true,
+      grantedDays: c.days,
+      expiresAt: cp.subs[b.appAccountToken].expiresAt,
+    });
   }
 
   // Refund reclaim (App Store Server Notifications v2). Admin-bearer for now — real
