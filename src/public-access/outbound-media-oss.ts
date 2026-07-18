@@ -10,6 +10,16 @@
  * When public access is off, or on any upload failure, callers keep their tunnel
  * `/friday-next/files/…` URL — the app downloads either kind through the same choke point
  * (`AttachmentDownloadManager`, which recognizes `fnoss:v1:…`).
+ *
+ * Deliberately NOT a third surface: image links inside the assistant's message BODY. It reads like
+ * a hole (the body is never scanned, so a `/friday-next/files/…` link there would ride the relay),
+ * but nothing can put one there — the token is minted at delivery time, so the agent cannot know it,
+ * and every `resolveMediaAttachment` call site writes to structured media fields only
+ * (`mediaUrl`/`mediaUrls`, history `images`), never to text. Body links are therefore always either
+ * external URLs the agent found — which are not ours to proxy onto our OSS bill — or `file://`
+ * paths, which the app does not render as images. Revisit only if we start emitting tunnel URLs
+ * into body text (e.g. letting the agent cite a just-sent attachment, or inlining history images
+ * as markdown); until then a body rewrite would only risk mangling code blocks and quotes.
  */
 import { resolveFridayNextConfig } from "../config.js";
 import { getHostOpenClawConfigSnapshot } from "../host-config.js";
