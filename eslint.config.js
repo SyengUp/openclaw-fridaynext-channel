@@ -10,6 +10,7 @@ export default tseslint.config(
       "scripts/**",
       "install.js",
       "install-ui.js",
+      "install-i18n.js",
       "eslint.config.js",
       "vitest.config.ts",
       "vitest.e2e.config.ts",

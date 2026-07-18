@@ -10,6 +10,7 @@
     "src/",
     "install.js",
     "install-ui.js",
+    "install-i18n.js",
     "tsconfig.json",
     "openclaw.plugin.json"
   ],

@@ -15,6 +15,25 @@
 const SPINNER_FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
 const SPINNER_INTERVAL_MS = 80;
 
+/** Terminal columns a string occupies — CJK/fullwidth code points take two. */
+function displayWidth(s) {
+  let w = 0;
+  for (const ch of String(s)) {
+    const c = ch.codePointAt(0);
+    w +=
+      (c >= 0x1100 && c <= 0x115f) ||
+      (c >= 0x2e80 && c <= 0xa4cf) ||
+      (c >= 0xac00 && c <= 0xd7a3) ||
+      (c >= 0xf900 && c <= 0xfaff) ||
+      (c >= 0xfe30 && c <= 0xfe6f) ||
+      (c >= 0xff00 && c <= 0xff60) ||
+      (c >= 0xffe0 && c <= 0xffe6)
+        ? 2
+        : 1;
+  }
+  return w;
+}
+
 const ANSI = {
   reset: "\x1b[0m",
   dim: "\x1b[2m",
@@ -108,11 +127,12 @@ export function createInstallerUI(opts = {}) {
     },
 
     /**
-     * Terminal success block: pairing QR, then the LAN address and token. `qr` is
-     * the pre-rendered code (install.js owns qrcode-terminal); nothing else prints
-     * after this.
+     * Terminal success block: pairing QR, then the labelled fields (address, token).
+     * `qr` is the pre-rendered code (install.js owns qrcode-terminal) and `fields` is
+     * `[{label, value}]` — labels come from the caller so this file stays
+     * language-agnostic. Nothing else prints after this.
      */
-    result({ qr, url, token }) {
+    result({ qr, fields = [] }) {
       if (qr) {
         // Indent the code to the step lines' margin; keep the quiet zone intact.
         const body = qr
@@ -123,8 +143,14 @@ export function createInstallerUI(opts = {}) {
         write("\n" + body + "\n");
       }
       write("\n");
-      if (url) write(`  ${dim("地址")}  ${url}\n`);
-      if (token) write(`  ${dim("令牌")}  ${token}\n`);
+      const shown = fields.filter((f) => f?.value);
+      // Column-aware padding: CJK labels are two columns per character, so a plain
+      // `.length` pad would misalign a 中文 label against an English one.
+      const width = Math.max(0, ...shown.map((f) => displayWidth(f.label)));
+      for (const { label, value } of shown) {
+        const pad = " ".repeat(width - displayWidth(label));
+        write(`  ${dim(label)}${pad}  ${value}\n`);
+      }
       write("\n");
     },
 

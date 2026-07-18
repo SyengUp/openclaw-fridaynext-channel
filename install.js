@@ -4,6 +4,7 @@ import { existsSync, readFileSync, writeFileSync, rmSync } from "node:fs";
 import { homedir, networkInterfaces } from "node:os";
 import { join } from "node:path";
 import { createInstallerUI } from "./install-ui.js";
+import { strings } from "./install-i18n.js";
 
 const sudoUser = process.env.SUDO_USER;
 
@@ -27,6 +28,8 @@ const OPENCLAW_CONFIG = join(USER_HOME, ".openclaw", "openclaw.json");
 // All output goes through the UI module (install-ui.js) — one line per step, no
 // prose. `scripts/preview-install-ui.mjs` drives the same module with fake timings
 // when iterating on the look.
+// Copy follows the terminal's locale (zh/en); FRIDAY_INSTALL_LANG overrides.
+const T = strings();
 const ui = createInstallerUI();
 process.on("exit", () => ui.cleanup());
 
@@ -63,10 +66,10 @@ function hasOpenclaw() {
 
 ui.header();
 
-if (sudoUser) ui.note("无需 sudo 运行");
+if (sudoUser) ui.note(T.noteNoSudo);
 
-if (!has("node")) die("未找到 node", "先安装 Node.js");
-if (!hasOpenclaw()) die("未找到 openclaw", "https://docs.openclaw.ai");
+if (!has("node")) die(T.failNoNode, T.failNoNodeHint);
+if (!hasOpenclaw()) die(T.failNoOpenclaw, "https://docs.openclaw.ai");
 
 // --------------- version check ---------------
 {
@@ -84,7 +87,7 @@ if (!hasOpenclaw()) die("未找到 openclaw", "https://docs.openclaw.ai");
           break;
         }
       }
-      if (tooOld) die(`OpenClaw ${m[0]} 版本过低，需 2026.5.12 以上`, `${openclawCmd} update`);
+      if (tooOld) die(T.failTooOld(m[0]), `${openclawCmd} update`);
     }
   } catch {
     /* version unreadable — not worth a line; the verify step is the real gate */
@@ -138,7 +141,7 @@ async function resolveTaggedVersion(distTag) {
   return null;
 }
 
-const installStep = ui.step("安装插件");
+const installStep = ui.step(T.stepInstall);
 
 const resolvedVersion = await resolveTaggedVersion(DIST_TAG);
 // Registry lookup failed — fall back to the bare dist-tag so a transient network
@@ -165,19 +168,19 @@ try {
 } catch (e) {
   const msg = (e.stderr || e.stdout || e.message || "").toString();
   installStep.fail();
-  die(msg.trim().split("\n").pop() || "插件安装失败", "npx -y @syengup/friday-channel-next");
+  die(msg.trim().split("\n").pop() || T.failInstall, "npx -y @syengup/friday-channel-next");
 }
 
 // --------------- configure OpenClaw ---------------
 
-const configStep = ui.step("配置 OpenClaw");
+const configStep = ui.step(T.stepConfigure);
 
 let config;
 try {
   config = JSON.parse(readFileSync(OPENCLAW_CONFIG, "utf8"));
 } catch {
   configStep.fail();
-  die(`无法读取 ${OPENCLAW_CONFIG}`, "确认 OpenClaw 已安装并至少运行过一次");
+  die(T.failReadConfig(OPENCLAW_CONFIG), T.failReadConfigHint);
 }
 
 let configChanged = false;
@@ -296,19 +299,19 @@ if (Array.isArray(mainAgent.tools.deny)) {
 if (configChanged) {
   try {
     writeFileSync(OPENCLAW_CONFIG, JSON.stringify(config, null, 2) + "\n", "utf8");
-    configStep.ok("已更新");
+    configStep.ok(T.detailUpdated);
   } catch {
     configStep.fail();
-    die(`无法写入 ${OPENCLAW_CONFIG}`);
+    die(T.failWriteConfig(OPENCLAW_CONFIG));
   }
 } else {
-  configStep.ok("无需改动");
+  configStep.ok(T.detailUnchanged);
 }
 
 // --------------- restart gateway ---------------
 
-const restartStep = ui.step("重启网关");
-restartStep.detail("20-30 秒");
+const restartStep = ui.step(T.stepRestart);
+restartStep.detail(T.detailRestartHint);
 try {
   // A full gateway restart commonly takes 20s+ on a fresh boot; give it plenty of room
   // so we don't kill it mid-restart and report a false failure.
@@ -322,7 +325,7 @@ try {
   // ETIMEDOUT/SIGTERM here usually means the restart is simply slow, not broken —
   // the verify step below is the real gate either way, so never fail hard here.
   const slow = e.code === "ETIMEDOUT" || e.signal === "SIGTERM";
-  restartStep.ok(slow ? "较慢，继续校验" : "未确认，继续校验");
+  restartStep.ok(slow ? T.detailRestartSlow : T.detailRestartUnconfirmed);
 }
 
 // --------------- verify ---------------
@@ -387,23 +390,23 @@ async function verifyGateway(url, token, retries = 30) {
         try {
           const data = JSON.parse(res.body);
           if (data.ok) return { ok: true, version: data.version };
-          return { ok: false, reason: "插件返回 ok=false" };
+          return { ok: false, reason: T.reasonNotOk };
         } catch {
-          verifyStep.detail(`重试 ${i}/${retries}`);
+          verifyStep.detail(T.detailRetry(i, retries));
           continue;
         }
       }
-      if (res.status === 401) return { ok: false, reason: "令牌不匹配（gateway.auth.token）" };
-      if (res.status === 404) return { ok: false, reason: "插件未加载（路由 404）" };
-      verifyStep.detail(`重试 ${i}/${retries}`);
+      if (res.status === 401) return { ok: false, reason: T.reasonAuth };
+      if (res.status === 404) return { ok: false, reason: T.reasonNotLoaded };
+      verifyStep.detail(T.detailRetry(i, retries));
     } catch {
-      verifyStep.detail(`重试 ${i}/${retries}`);
+      verifyStep.detail(T.detailRetry(i, retries));
     }
   }
-  return { ok: false, reason: "校验超时" };
+  return { ok: false, reason: T.reasonTimeout };
 }
 
-const verifyStep = ui.step("校验网关");
+const verifyStep = ui.step(T.stepVerify);
 const verified = await verifyGateway(verifyUrl, gatewayToken);
 
 // Hard gate: if the gateway didn't verify, the install did NOT succeed — stop here
@@ -412,7 +415,7 @@ const verified = await verifyGateway(verifyUrl, gatewayToken);
 if (!verified.ok) {
   verifyStep.fail(verified.reason);
   die(
-    "网关未就绪，安装未完成",
+    T.failGateway,
     "openclaw gateway status",
     "openclaw gateway restart",
     "npx -y @syengup/friday-channel-next",
@@ -485,7 +488,7 @@ if (DIST_TAG === "beta") {
       pairingTicket: pairing.pairingTicket,
     };
   } else {
-    ui.note("公网未开启，配对码仅含局域网地址");
+    ui.note(T.noteLanOnly);
   }
 }
 // Encrypt the QR payload into the `FNQR1:` envelope so a generic QR reader shows
@@ -597,4 +600,10 @@ try {
   // qrcode-terminal unavailable — the URL/token below are still enough to pair by hand.
 }
 
-ui.result({ qr, url: gatewayUrl, token: gatewayToken });
+ui.result({
+  qr,
+  fields: [
+    { label: T.labelAddress, value: gatewayUrl },
+    { label: T.labelToken, value: gatewayToken },
+  ],
+});
