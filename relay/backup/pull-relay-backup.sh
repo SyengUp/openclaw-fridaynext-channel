@@ -11,8 +11,9 @@
 #   cp ai.fridaynext.relay-backup.plist ~/Library/LaunchAgents/
 #   launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/ai.fridaynext.relay-backup.plist
 #
-# Token：/v1/admin/* 的 bearer = GW_ALLOC_TOKEN = frps relayToken，直接从本机
-# openclaw 插件配置读取（channels.friday-next.publicAccess.relayToken），不落副本。
+# Token：/v1/admin/* 的 bearer 自 2026-07-18 起 = GW_ALLOC_ADMIN_TOKEN（与 frps
+# relayToken 拆分，P0-3），只运维持有。从同目录 `admin-token` 文件读（0600，不入
+# openclaw 配置）。过渡：文件缺失时回退旧的 relayToken（拆分前的老部署）。
 set -euo pipefail
 
 CP_BASE="${FN_RELAY_CP_BASE:-https://friday.syengup.host}"
@@ -22,13 +23,17 @@ NODE_BIN="${FN_NODE_BIN:-/opt/homebrew/bin/node}"
 
 mkdir -p "$DEST_DIR"
 
-TOKEN=$("$NODE_BIN" -e '
+if [ -f "$DEST_DIR/admin-token" ]; then
+  TOKEN=$(tr -d '[:space:]' < "$DEST_DIR/admin-token")
+else
+  TOKEN=$("$NODE_BIN" -e '
 const fs = require("fs");
 const c = JSON.parse(fs.readFileSync(process.env.HOME + "/.openclaw/openclaw.json", "utf8"));
 console.log(((c.channels || {})["friday-next"]?.publicAccess || {}).relayToken || "");
 ')
+fi
 if [ -z "$TOKEN" ]; then
-  echo "[relay-backup] FATAL: relayToken not found in openclaw config" >&2
+  echo "[relay-backup] FATAL: admin token not found (expected $DEST_DIR/admin-token)" >&2
   exit 1
 fi
 

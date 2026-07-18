@@ -519,7 +519,7 @@ async function fetchPairingSuperset(url, token) {
 
 // Default QR: legacy `{url, token}` — what stable installs emit. The beta channel
 // upgrades it to the public-access superset so a scan also arms remote access.
-let qrPayload = JSON.stringify({ url: gatewayUrl, token: gatewayToken });
+let qrFields = { url: gatewayUrl, token: gatewayToken };
 if (DIST_TAG === "beta") {
   const pairing = await fetchPairingSuperset(verifyUrl, gatewayToken);
   if (pairing && pairing.publicUrl && pairing.pairingTicket) {
@@ -530,13 +530,13 @@ if (DIST_TAG === "beta") {
     // channel. No token fallback: the install gate above guarantees the running plugin
     // is the freshly-installed version, which always mints vouchers (and its pairing
     // response no longer contains the token at all).
-    qrPayload = JSON.stringify({
+    qrFields = {
       v: 2,
       lanUrl: pairing.lanUrl || gatewayUrl,
       publicUrl: pairing.publicUrl,
       fingerprint: pairing.fingerprint,
       pairingTicket: pairing.pairingTicket,
-    });
+    };
     log("Public access is on — QR carries a one-time pairing voucher (10 min), no token (一次性配对券).");
   } else {
     warn(
@@ -557,22 +557,94 @@ const QR_OBFUSCATION_KEY = Buffer.from(
   "+ZxgpPIzbKu75GRrb1sjlS2Snoo0TSwePXDzQ2N75PY=",
   "base64",
 );
-async function encryptQRPayload(plaintext) {
+
+// ——— FNQR2: binary body instead of JSON ———
+//
+// JSON + hex made the code needlessly dense: ~235 plaintext chars → a 357-char
+// envelope → 67×34 terminal cells, which wraps on an 80-column window and is
+// awkward to scan. The fields are mostly raw bytes wearing text costumes (a
+// 64-char hex fingerprint = 32 bytes, a 32-char hex voucher = 16, an IPv4:port =
+// 6, a public URL that is a constant suffix plus a short subdomain), so FNQR2
+// packs them as bytes: 71 plaintext bytes → 47×24 cells, ~half the QR area.
+// Layout: version byte 0x02, then `tag(1) len(1) value` records.
+//
+// Every field has a compact tag AND a plain-string tag; the compact one is used only
+// when the value actually matches its shape, so an unusual LAN address or a
+// self-hosted relay domain degrades to the string form instead of breaking.
+const QR_PUBLIC_SUFFIX = ".friday.syengup.host"; // must match PairingQRCrypto.swift
+const QR_TAG = {
+  lanV4: 0x01, // ip(4) ‖ port(2, BE), scheme http
+  lanUrl: 0x02,
+  subdomain: 0x03, // publicUrl = https://<value><QR_PUBLIC_SUFFIX>
+  publicUrl: 0x04,
+  fingerprintRaw: 0x05, // 32 bytes → 64-char lowercase hex
+  fingerprintStr: 0x06,
+  voucherRaw: 0x07, // 16 bytes → "fnpv1-" ‖ hex
+  pairingTicket: 0x08,
+  token: 0x09,
+  controlPlane: 0x0a,
+  reservationId: 0x0b,
+};
+
+/** Pack the pairing fields into the FNQR2 binary body. */
+function packQRFields(f) {
+  const recs = [];
+  const put = (tag, buf) => {
+    if (buf.length > 255) throw new Error(`FNQR2 field ${tag} too long`);
+    recs.push(Buffer.from([tag, buf.length]), buf);
+  };
+  const putStr = (tag, s) => put(tag, Buffer.from(s, "utf8"));
+
+  const lan = f.lanUrl || f.url;
+  if (lan) {
+    const m = /^http:\/\/(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3}):(\d{1,5})\/?$/.exec(lan);
+    const octets = m ? m.slice(1, 5).map(Number) : null;
+    const port = m ? Number(m[5]) : 0;
+    if (octets && octets.every((o) => o <= 255) && port >= 1 && port <= 65535) {
+      const b = Buffer.alloc(6);
+      octets.forEach((o, i) => (b[i] = o));
+      b.writeUInt16BE(port, 4);
+      put(QR_TAG.lanV4, b);
+    } else {
+      putStr(QR_TAG.lanUrl, lan);
+    }
+  }
+  if (f.publicUrl) {
+    const m = /^https:\/\/([^./]+)\.(.+?)\/?$/.exec(f.publicUrl);
+    if (m && "." + m[2] === QR_PUBLIC_SUFFIX) putStr(QR_TAG.subdomain, m[1]);
+    else putStr(QR_TAG.publicUrl, f.publicUrl);
+  }
+  if (f.fingerprint) {
+    if (/^[0-9a-f]{64}$/.test(f.fingerprint)) put(QR_TAG.fingerprintRaw, Buffer.from(f.fingerprint, "hex"));
+    else putStr(QR_TAG.fingerprintStr, f.fingerprint);
+  }
+  if (f.pairingTicket) {
+    const m = /^fnpv1-([0-9a-f]{32})$/.exec(f.pairingTicket);
+    if (m) put(QR_TAG.voucherRaw, Buffer.from(m[1], "hex"));
+    else putStr(QR_TAG.pairingTicket, f.pairingTicket);
+  }
+  if (f.token) putStr(QR_TAG.token, f.token);
+  if (f.controlPlane) putStr(QR_TAG.controlPlane, f.controlPlane);
+  if (f.reservationId) putStr(QR_TAG.reservationId, f.reservationId);
+  return Buffer.concat([Buffer.from([0x02]), ...recs]);
+}
+
+async function encryptQRPayload(body) {
   const { createCipheriv, randomBytes } = await import("node:crypto");
   const iv = randomBytes(12);
   const cipher = createCipheriv("aes-256-gcm", QR_OBFUSCATION_KEY, iv);
-  const ct = Buffer.concat([cipher.update(plaintext, "utf8"), cipher.final()]);
+  const ct = Buffer.concat([cipher.update(body), cipher.final()]);
   const tag = cipher.getAuthTag();
-  return "FNQR1:" + Buffer.concat([iv, ct, tag]).toString("base64url");
+  return "FNQR2:" + Buffer.concat([iv, ct, tag]).toString("base64url");
 }
 
-// Fall back to the plaintext payload only if crypto is somehow unavailable (very
+// Fall back to the plaintext JSON only if packing/crypto is somehow unavailable (very
 // old Node); the app parser still accepts plaintext for backward compatibility.
-let qrData = qrPayload;
+let qrData = JSON.stringify(qrFields);
 try {
-  qrData = await encryptQRPayload(qrPayload);
+  qrData = await encryptQRPayload(packQRFields(qrFields));
 } catch {
-  qrData = qrPayload;
+  /* keep the plaintext JSON */
 }
 
 let qrShown = false;
