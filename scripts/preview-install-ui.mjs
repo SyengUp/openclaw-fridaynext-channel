@@ -7,6 +7,7 @@
  *   node scripts/preview-install-ui.mjs fail       # gateway never comes up
  *   node scripts/preview-install-ui.mjs lan-only   # public access off → LAN pairing
  *   node scripts/preview-install-ui.mjs slow       # slow restart, retrying verify
+ *   node scripts/preview-install-ui.mjs no-qr      # QR could not render → manual fallback
  *   node scripts/preview-install-ui.mjs all        # every scenario back to back
  *   node scripts/preview-install-ui.mjs ok --fast  # skip the sleeps
  *   node scripts/preview-install-ui.mjs all --lang=en   # force a language (default: yours)
@@ -82,14 +83,18 @@ async function run(name) {
 
   if (name === "lan-only") ui.note(T.noteLanOnly);
 
-  ui.result({
-    qr: renderQR(QR_DATA),
-    fields: [
-      { label: T.labelAddress, value: LAN_URL },
-      { label: T.labelToken, value: TOKEN },
-    ],
-  });
+  ui.result(
+    name === "no-qr"
+      ? {
+          hint: T.scanFallback,
+          fields: [
+            { label: T.labelAddress, value: LAN_URL },
+            { label: T.labelToken, value: TOKEN },
+          ],
+        }
+      : { qr: renderQR(QR_DATA), hint: T.scanToPair },
+  );
 }
 
-const scenarios = scenario === "all" ? ["ok", "lan-only", "slow", "fail"] : [scenario];
+const scenarios = scenario === "all" ? ["ok", "lan-only", "slow", "no-qr", "fail"] : [scenario];
 for (const s of scenarios) await run(s);

@@ -600,10 +600,18 @@ try {
   // qrcode-terminal unavailable — the URL/token below are still enough to pair by hand.
 }
 
-ui.result({
-  qr,
-  fields: [
-    { label: T.labelAddress, value: gatewayUrl },
-    { label: T.labelToken, value: gatewayToken },
-  ],
-});
+// The QR is the pairing path — it carries the address plus (with public access on)
+// a one-time voucher, so printing the long-term token alongside it is both noise and
+// a credential needlessly left on screen. The URL/token pair stays only as the
+// fallback for a terminal where the code could not be drawn at all.
+ui.result(
+  qr
+    ? { qr, hint: T.scanToPair }
+    : {
+        hint: T.scanFallback,
+        fields: [
+          { label: T.labelAddress, value: gatewayUrl },
+          { label: T.labelToken, value: gatewayToken },
+        ],
+      },
+);

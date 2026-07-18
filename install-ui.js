@@ -127,12 +127,14 @@ export function createInstallerUI(opts = {}) {
     },
 
     /**
-     * Terminal success block: pairing QR, then the labelled fields (address, token).
-     * `qr` is the pre-rendered code (install.js owns qrcode-terminal) and `fields` is
-     * `[{label, value}]` — labels come from the caller so this file stays
-     * language-agnostic. Nothing else prints after this.
+     * Terminal success block: a one-line call to action, then the pairing QR. `qr` is
+     * the pre-rendered code (install.js owns qrcode-terminal); `hint` is that line.
+     * `fields` (`[{label, value}]`) is the manual fallback — only passed when the QR
+     * could not be rendered, since the code itself is the pairing path. All copy comes
+     * from the caller so this file stays language-agnostic. Nothing prints after this.
      */
-    result({ qr, fields = [] }) {
+    result({ qr, hint, fields = [] }) {
+      if (hint) write("\n  " + hint + "\n");
       if (qr) {
         // Indent the code to the step lines' margin; keep the quiet zone intact.
         const body = qr
