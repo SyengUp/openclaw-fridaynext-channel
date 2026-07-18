@@ -43,7 +43,7 @@ const STRINGS = {
     detailRestartUnconfirmed: "未确认，继续校验",
     detailRetry: (i, n) => `重试 ${i}/${n}`,
 
-    scanToPair: "打开 Friday Next 扫描下方二维码完成配对",
+    scanToPair: "扫描下方二维码完成配对",
     scanFallback: "二维码无法显示，请在 Friday Next 中手动填写",
     labelAddress: "地址",
     labelToken: "令牌",
@@ -79,7 +79,7 @@ const STRINGS = {
     detailRestartUnconfirmed: "unconfirmed, verifying",
     detailRetry: (i, n) => `retry ${i}/${n}`,
 
-    scanToPair: "Open Friday Next and scan the code below to pair",
+    scanToPair: "Scan the code below to pair",
     scanFallback: "QR unavailable — enter these in Friday Next manually",
     labelAddress: "Address",
     labelToken: "Token",

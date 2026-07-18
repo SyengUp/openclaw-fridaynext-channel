@@ -39,6 +39,7 @@ const ANSI = {
   dim: "\x1b[2m",
   bold: "\x1b[1m",
   green: "\x1b[32m",
+  greenBright: "\x1b[92m",
   red: "\x1b[31m",
   yellow: "\x1b[33m",
 };
@@ -133,8 +134,21 @@ export function createInstallerUI(opts = {}) {
      * could not be rendered, since the code itself is the pairing path. All copy comes
      * from the caller so this file stays language-agnostic. Nothing prints after this.
      */
-    result({ qr, hint, fields = [] }) {
-      if (hint) write("\n  " + hint + "\n");
+    result({ qr, hint, hintMuted = false, fields = [] }) {
+      // The call to action is the one line the user must not skim past, so it gets the
+      // only emphatic treatment in the whole run: a brand-green bar plus bold bright
+      // text, against step lines that are all plain. The manual-fallback variant is
+      // muted instead — there it's an apology, not an invitation.
+      if (hint) {
+        write(
+          hintMuted
+            ? "\n  " + dim(hint) + "\n"
+            : "\n  " +
+                paint(ANSI.greenBright, "▎") +
+                paint(ANSI.bold + ANSI.greenBright, " " + hint) +
+                "\n",
+        );
+      }
       if (qr) {
         // Indent the code to the step lines' margin; keep the quiet zone intact.
         const body = qr

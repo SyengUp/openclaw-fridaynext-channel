@@ -609,6 +609,7 @@ ui.result(
     ? { qr, hint: T.scanToPair }
     : {
         hint: T.scanFallback,
+        hintMuted: true,
         fields: [
           { label: T.labelAddress, value: gatewayUrl },
           { label: T.labelToken, value: gatewayToken },

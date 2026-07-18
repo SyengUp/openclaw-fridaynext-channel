@@ -87,6 +87,7 @@ async function run(name) {
     name === "no-qr"
       ? {
           hint: T.scanFallback,
+          hintMuted: true,
           fields: [
             { label: T.labelAddress, value: LAN_URL },
             { label: T.labelToken, value: TOKEN },
