@@ -51,9 +51,19 @@ export async function handlePublicAccessPairing(
     return true;
   }
 
+  const { token: _token, ...pairingSansToken } = pairing;
+
+  // `?voucher=0` — an ALREADY-paired app asking for the public-access coordinates it is
+  // missing (upgrade self-heal): it holds the bearer, so it needs no voucher, and minting
+  // one would silently invalidate an outstanding QR someone is mid-scan on.
+  if ((new URL(req.url ?? "/", "http://localhost").searchParams.get("voucher") ?? "") === "0") {
+    logger.info("pairing superset served — no voucher (already-paired client)");
+    json(res, 200, pairingSansToken);
+    return true;
+  }
+
   const ticket = mintPairingVoucher();
   logger.info(`pairing superset served — fresh voucher minted (ttl ${ticket.ttlSec}s)`);
-  const { token: _token, ...pairingSansToken } = pairing;
   json(res, 200, {
     ...pairingSansToken,
     pairingTicket: ticket.voucher,

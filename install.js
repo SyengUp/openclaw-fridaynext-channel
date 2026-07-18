@@ -514,7 +514,10 @@ const QR_OBFUSCATION_KEY = Buffer.from("+ZxgpPIzbKu75GRrb1sjlS2Snoo0TSwePXDzQ2N7
 // Every field has a compact tag AND a plain-string tag; the compact one is used only
 // when the value actually matches its shape, so an unusual LAN address or a
 // self-hosted relay domain degrades to the string form instead of breaking.
-const QR_PUBLIC_SUFFIX = ".friday.syengup.host"; // must match PairingQRCrypto.swift
+// The relay's wildcard tunnel base (frps `subDomainHost`), NOT the control plane —
+// public URLs are `https://<sub>.bj.gw.syengup.host`. Must match PairingQRCrypto.swift.
+// A relay on any other base degrades to the full-URL record.
+const QR_PUBLIC_SUFFIX = ".bj.gw.syengup.host";
 const QR_TAG = {
   lanV4: 0x01, // ip(4) ‖ port(2, BE), scheme http
   lanUrl: 0x02,

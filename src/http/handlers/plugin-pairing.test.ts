@@ -4,12 +4,25 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { IncomingMessage, ServerResponse } from "node:http";
-import { handlePairClaim, resetPairClaimRateLimiter } from "./plugin-pairing.js";
 import {
+  handlePairClaim,
+  handlePublicAccessPairing,
+  resetPairClaimRateLimiter,
+} from "./plugin-pairing.js";
+import {
+  claimPairingVoucher,
   clearPairingVoucher,
   mintPairingVoucher,
   setPairingVoucherDirForTest,
 } from "../../public-access/pairing-voucher.js";
+
+// The pairing route authenticates through the plugin runtime, which unit tests don't stand up
+// (`getFridayNextRuntime()` throws). Auth itself is covered by the middleware's own tests; here
+// we care about voucher behaviour, so treat the bearer as valid.
+vi.mock("../middleware/auth.js", () => ({
+  extractBearerToken: (req: { headers?: Record<string, string> }) =>
+    (req.headers?.authorization ?? "").replace(/^Bearer /, "") || null,
+}));
 
 vi.mock("../../public-access/frpc-manager.js", () => ({
   getPairingInfo: () => ({
@@ -86,5 +99,52 @@ describe("handlePairClaim rate limiting", () => {
     const ticket = mintPairingVoucher();
     expect((await claim(ticket.voucher)).code).toBe(200);
     expect((await claim(ticket.voucher)).code).toBe(403);
+  });
+});
+
+// 老用户升级续配: an already-paired app fetches its missing public-access coordinates with
+// `?voucher=0`. It must NOT mint a voucher — doing so would invalidate an outstanding QR
+// someone else is mid-scan on — and must not leak the long-term bearer either way.
+describe("handlePublicAccessPairing voucher suppression", () => {
+  beforeEach(() => {
+    setPairingVoucherDirForTest(mkdtempSync(join(tmpdir(), "fn-pairing-")));
+    clearPairingVoucher();
+  });
+
+  async function fetchPairing(url: string): Promise<{ code: number; body: unknown }> {
+    const req = new EventEmitter() as unknown as IncomingMessage & EventEmitter;
+    (req as { method?: string; url?: string; headers?: Record<string, string> }).method = "GET";
+    (req as { url?: string }).url = url;
+    (req as { headers?: Record<string, string> }).headers = {
+      authorization: "Bearer real-bearer-token",
+    };
+    const { res, result } = fakeRes();
+    await handlePublicAccessPairing(req, res);
+    return result();
+  }
+
+  it("serves the coordinates without minting a voucher when voucher=0", async () => {
+    const outstanding = mintPairingVoucher();
+    const { code, body } = await fetchPairing("/friday-next/public-access/pairing?voucher=0");
+    expect(code).toBe(200);
+    const payload = body as Record<string, unknown>;
+    expect(payload.publicUrl).toBe("https://sub.bj.gw.syengup.host");
+    expect(payload.fingerprint).toBe("ab".repeat(32));
+    expect(payload.pairingTicket).toBeUndefined();
+    expect(payload.token).toBeUndefined();
+    // The pre-existing voucher survives — still claimable.
+    expect(claimPairingVoucher(outstanding.voucher)).toBe("ok");
+  });
+
+  it("still mints a fresh voucher for the default (QR) fetch", async () => {
+    const outstanding = mintPairingVoucher();
+    const { code, body } = await fetchPairing("/friday-next/public-access/pairing");
+    expect(code).toBe(200);
+    const payload = body as Record<string, unknown>;
+    expect(typeof payload.pairingTicket).toBe("string");
+    expect(payload.pairingTicket).not.toBe(outstanding.voucher);
+    expect(payload.token).toBeUndefined();
+    // Minting replaces (= invalidates) the previous one.
+    expect(claimPairingVoucher(outstanding.voucher)).toBe("invalid");
   });
 });
