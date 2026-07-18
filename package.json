@@ -9,6 +9,7 @@
     "index.ts",
     "src/",
     "install.js",
+    "install-ui.js",
     "tsconfig.json",
     "openclaw.plugin.json"
   ],
@@ -22,6 +23,7 @@
     "test": "npm run test:unit && npm run test:e2e",
     "test:unit": "vitest run",
     "test:e2e": "vitest run --config vitest.e2e.config.ts",
+    "preview:install-ui": "node scripts/preview-install-ui.mjs",
     "test:smoke": "node scripts/e2e-smoke.mjs",
     "test:msg-live": "node scripts/message-roundtrip-live.mjs"
   },

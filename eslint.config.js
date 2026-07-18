@@ -9,6 +9,7 @@ export default tseslint.config(
       "node_modules/**",
       "scripts/**",
       "install.js",
+      "install-ui.js",
       "eslint.config.js",
       "vitest.config.ts",
       "vitest.e2e.config.ts",

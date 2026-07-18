@@ -3,6 +3,7 @@ import { execSync } from "node:child_process";
 import { existsSync, readFileSync, writeFileSync, rmSync } from "node:fs";
 import { homedir, networkInterfaces } from "node:os";
 import { join } from "node:path";
+import { createInstallerUI } from "./install-ui.js";
 
 const sudoUser = process.env.SUDO_USER;
 
@@ -23,17 +24,17 @@ function realHome() {
 const USER_HOME = realHome();
 const OPENCLAW_CONFIG = join(USER_HOME, ".openclaw", "openclaw.json");
 
-const G = (s) => `\x1b[32m${s}\x1b[0m`;
-const Y = (s) => `\x1b[33m${s}\x1b[0m`;
-const R = (s) => `\x1b[31m${s}\x1b[0m`;
-function log(msg) {
-  console.log(`  ${msg}`);
-}
-function warn(msg) {
-  console.log(`  ${Y("!")} ${msg}`);
-}
-function err(msg) {
-  console.error(`  ${R("X")} ${msg}`);
+// All output goes through the UI module (install-ui.js) — one line per step, no
+// prose. `scripts/preview-install-ui.mjs` drives the same module with fake timings
+// when iterating on the look.
+const ui = createInstallerUI();
+process.on("exit", () => ui.cleanup());
+
+/** Print a fatal block and stop. `lines[0]` = what broke, rest = commands to run. */
+function die(...lines) {
+  ui.cleanup();
+  ui.fatal(lines);
+  process.exit(1);
 }
 
 function has(cmd) {
@@ -60,19 +61,12 @@ function hasOpenclaw() {
 
 // --------------- prerequisites ---------------
 
-if (sudoUser) {
-  warn("Running under sudo is unnecessary and may cause issues.");
-  warn("If possible, run without sudo: npx -y @syengup/friday-channel-next");
-}
+ui.header();
 
-if (!has("node")) {
-  err("node is required but not found. Install it first.");
-  process.exit(1);
-}
-if (!hasOpenclaw()) {
-  err("openclaw is required but not found. Install OpenClaw first: https://docs.openclaw.ai");
-  process.exit(1);
-}
+if (sudoUser) ui.note("无需 sudo 运行");
+
+if (!has("node")) die("未找到 node", "先安装 Node.js");
+if (!hasOpenclaw()) die("未找到 openclaw", "https://docs.openclaw.ai");
 
 // --------------- version check ---------------
 {
@@ -90,15 +84,10 @@ if (!hasOpenclaw()) {
           break;
         }
       }
-      if (tooOld) {
-        err(`OpenClaw version ${m[0]} is too old.`);
-        err(`Friday Next channel requires OpenClaw 2026.5.12 or above.`);
-        err(`Please update: ${openclawCmd} update`);
-        process.exit(1);
-      }
+      if (tooOld) die(`OpenClaw ${m[0]} 版本过低，需 2026.5.12 以上`, `${openclawCmd} update`);
     }
   } catch {
-    warn("Could not determine OpenClaw version — continuing anyway.");
+    /* version unreadable — not worth a line; the verify step is the real gate */
   }
 }
 
@@ -149,61 +138,46 @@ async function resolveTaggedVersion(distTag) {
   return null;
 }
 
-log(
-  DIST_TAG === "beta"
-    ? "Installing Friday Next channel plugin (beta / public-access preview)..."
-    : "Installing Friday Next channel plugin...",
-);
+const installStep = ui.step("安装插件");
 
 const resolvedVersion = await resolveTaggedVersion(DIST_TAG);
-let installSpec;
-if (resolvedVersion) {
-  installSpec = `${PKG}@${resolvedVersion}`;
-} else {
-  // Registry lookup failed — fall back to the bare dist-tag so a transient
-  // network hiccup doesn't block the install. Re-running the installer later
-  // will pin an exact spec once the registry is reachable.
-  warn(`Could not resolve exact ${DIST_TAG} version — falling back to @${DIST_TAG}.`);
-  installSpec = `${PKG}@${DIST_TAG}`;
-}
+// Registry lookup failed — fall back to the bare dist-tag so a transient network
+// hiccup doesn't block the install. Re-running later pins an exact spec.
+const installSpec = `${PKG}@${resolvedVersion ?? DIST_TAG}`;
 
 try {
-  const out = execSync(`${openclawCmd} plugins install ${installSpec} --force`, {
+  execSync(`${openclawCmd} plugins install ${installSpec} --force`, {
     encoding: "utf8",
     stdio: "pipe",
     timeout: 120000,
   });
-  if (out.trim()) console.log(out.trim());
-  log("Plugin registered with install record — auto-upgrade enabled.");
 
   // Remove old manual install to avoid "duplicate plugin id" warning.
   const legacyDir = join(USER_HOME, ".openclaw", "extensions", "friday-channel-next");
   if (existsSync(legacyDir)) {
     try {
       rmSync(legacyDir, { recursive: true, force: true });
-      log("Removed legacy manual install.");
     } catch {
       /* non-critical */
     }
   }
+  installStep.ok((resolvedVersion ?? DIST_TAG) + (DIST_TAG === "beta" ? " (beta)" : ""));
 } catch (e) {
   const msg = (e.stderr || e.stdout || e.message || "").toString();
-  err("Plugin install failed: " + (msg.trim().split("\n").pop() || "unknown error"));
-  err("Fix the error above and re-run: npx -y @syengup/friday-channel-next");
-  process.exit(1);
+  installStep.fail();
+  die(msg.trim().split("\n").pop() || "插件安装失败", "npx -y @syengup/friday-channel-next");
 }
 
 // --------------- configure OpenClaw ---------------
 
-log("Configuring OpenClaw...");
+const configStep = ui.step("配置 OpenClaw");
 
 let config;
 try {
   config = JSON.parse(readFileSync(OPENCLAW_CONFIG, "utf8"));
 } catch {
-  err(`Failed to read ${OPENCLAW_CONFIG}.`);
-  err("Make sure OpenClaw is installed and has been run at least once.");
-  process.exit(1);
+  configStep.fail();
+  die(`无法读取 ${OPENCLAW_CONFIG}`, "确认 OpenClaw 已安装并至少运行过一次");
 }
 
 let configChanged = false;
@@ -322,37 +296,33 @@ if (Array.isArray(mainAgent.tools.deny)) {
 if (configChanged) {
   try {
     writeFileSync(OPENCLAW_CONFIG, JSON.stringify(config, null, 2) + "\n", "utf8");
-    log("openclaw.json updated.");
+    configStep.ok("已更新");
   } catch {
-    err(`Failed to write ${OPENCLAW_CONFIG}.`);
-    process.exit(1);
+    configStep.fail();
+    die(`无法写入 ${OPENCLAW_CONFIG}`);
   }
 } else {
-  log("openclaw.json already configured.");
+  configStep.ok("无需改动");
 }
 
 // --------------- restart gateway ---------------
 
-log("Restarting OpenClaw gateway... (this can take 20-30s)");
+const restartStep = ui.step("重启网关");
+restartStep.detail("20-30 秒");
 try {
   // A full gateway restart commonly takes 20s+ on a fresh boot; give it plenty of room
   // so we don't kill it mid-restart and report a false failure.
-  const out = execSync(`${openclawCmd} gateway restart`, {
+  execSync(`${openclawCmd} gateway restart`, {
     encoding: "utf8",
     stdio: "pipe",
     timeout: 90000,
   });
-  if (out.trim()) console.log(out.trim());
+  restartStep.ok("");
 } catch (e) {
-  if (e.stdout?.trim()) console.log(e.stdout.trim());
-  if (e.stderr?.trim()) console.error(e.stderr.trim());
   // ETIMEDOUT/SIGTERM here usually means the restart is simply slow, not broken —
-  // the verify step below will confirm whether the gateway actually came up.
-  if (e.code === "ETIMEDOUT" || e.signal === "SIGTERM") {
-    warn("Gateway restart is taking a while — will verify below.");
-  } else {
-    warn("Gateway restart failed. Restart manually: openclaw gateway restart");
-  }
+  // the verify step below is the real gate either way, so never fail hard here.
+  const slow = e.code === "ETIMEDOUT" || e.signal === "SIGTERM";
+  restartStep.ok(slow ? "较慢，继续校验" : "未确认，继续校验");
 }
 
 // --------------- verify ---------------
@@ -416,62 +386,39 @@ async function verifyGateway(url, token, retries = 30) {
       if (res.status === 200) {
         try {
           const data = JSON.parse(res.body);
-          if (data.ok) {
-            log(
-              "Gateway verified OK (friday-next " +
-                data.version +
-                ", " +
-                data.connections +
-                " connections).",
-            );
-            return true;
-          }
-          warn("Plugin responded but ok=false — " + JSON.stringify(data));
-          return false;
+          if (data.ok) return { ok: true, version: data.version };
+          return { ok: false, reason: "插件返回 ok=false" };
         } catch {
-          if (i < retries) warn(`Plugin routes not registered yet, retrying (${i}/${retries})...`);
+          verifyStep.detail(`重试 ${i}/${retries}`);
           continue;
         }
       }
-      if (res.status === 401) {
-        warn("Auth token mismatch — check gateway.auth.token.");
-        return false;
-      }
-      if (res.status === 404) {
-        warn("Route not found — plugin may not be loaded.");
-        return false;
-      }
-      if (i < retries) warn(`Gateway responded ${res.status}, retrying (${i}/${retries})...`);
+      if (res.status === 401) return { ok: false, reason: "令牌不匹配（gateway.auth.token）" };
+      if (res.status === 404) return { ok: false, reason: "插件未加载（路由 404）" };
+      verifyStep.detail(`重试 ${i}/${retries}`);
     } catch {
-      if (i < retries) warn(`Gateway not reachable, retrying (${i}/${retries})...`);
+      verifyStep.detail(`重试 ${i}/${retries}`);
     }
   }
-  warn("Gateway verification timed out.");
-  return false;
+  return { ok: false, reason: "校验超时" };
 }
 
-log("Verifying gateway...");
+const verifyStep = ui.step("校验网关");
 const verified = await verifyGateway(verifyUrl, gatewayToken);
 
-const BOLD_YELLOW = (s) => `\x1b[1;33m${s}\x1b[0m`;
-
 // Hard gate: if the gateway didn't verify, the install did NOT succeed — stop here
-// with a non-zero exit and do NOT print the QR / URL / "complete" block, so a failure
-// can never look like a success.
-if (!verified) {
-  log("--------------------------------------------------");
-  err("Installation FAILED: the Friday Next gateway did not come up.");
-  err("Diagnose with:  openclaw gateway status");
-  err("Then restart:   openclaw gateway restart");
-  err("And re-run:     npx -y @syengup/friday-channel-next");
-  process.exit(1);
+// with a non-zero exit and never print the QR block, so a failure can't look like
+// a success.
+if (!verified.ok) {
+  verifyStep.fail(verified.reason);
+  die(
+    "网关未就绪，安装未完成",
+    "openclaw gateway status",
+    "openclaw gateway restart",
+    "npx -y @syengup/friday-channel-next",
+  );
 }
-
-// --------------- show connection info ---------------
-
-log("--------------------------------------------------");
-log("Installation complete! Friday Next channel is now active.");
-log("");
+verifyStep.ok(verified.version ? `friday-next ${verified.version}` : "");
 
 // --------------- QR code ---------------
 
@@ -537,12 +484,8 @@ if (DIST_TAG === "beta") {
       fingerprint: pairing.fingerprint,
       pairingTicket: pairing.pairingTicket,
     };
-    log("Public access is on — QR carries a one-time pairing voucher (10 min), no token (一次性配对券).");
   } else {
-    warn(
-      "Public access not active — QR carries LAN URL + token only. Enable " +
-        "channels.friday-next.publicAccess to include the relay address.",
-    );
+    ui.note("公网未开启，配对码仅含局域网地址");
   }
 }
 // Encrypt the QR payload into the `FNQR1:` envelope so a generic QR reader shows
@@ -553,10 +496,7 @@ if (DIST_TAG === "beta") {
 // relay's server-side authorization gate, NOT this. Its sole job is keeping the
 // domain out of casual/plaintext view. AES-256-GCM, random 12-byte IV, layout
 // iv(12) ‖ ciphertext ‖ tag(16), base64url. Must stay in lockstep with the app.
-const QR_OBFUSCATION_KEY = Buffer.from(
-  "+ZxgpPIzbKu75GRrb1sjlS2Snoo0TSwePXDzQ2N75PY=",
-  "base64",
-);
+const QR_OBFUSCATION_KEY = Buffer.from("+ZxgpPIzbKu75GRrb1sjlS2Snoo0TSwePXDzQ2N75PY=", "base64");
 
 // ——— FNQR2: binary body instead of JSON ———
 //
@@ -615,7 +555,8 @@ function packQRFields(f) {
     else putStr(QR_TAG.publicUrl, f.publicUrl);
   }
   if (f.fingerprint) {
-    if (/^[0-9a-f]{64}$/.test(f.fingerprint)) put(QR_TAG.fingerprintRaw, Buffer.from(f.fingerprint, "hex"));
+    if (/^[0-9a-f]{64}$/.test(f.fingerprint))
+      put(QR_TAG.fingerprintRaw, Buffer.from(f.fingerprint, "hex"));
     else putStr(QR_TAG.fingerprintStr, f.fingerprint);
   }
   if (f.pairingTicket) {
@@ -647,92 +588,13 @@ try {
   /* keep the plaintext JSON */
 }
 
-let qrShown = false;
-
+let qr = "";
 try {
   const { createRequire } = await import("node:module");
   const qrcode = createRequire(import.meta.url)("qrcode-terminal");
-  log(BOLD_YELLOW("Scan below to auto-fill URL & Token in FridayNext app:"));
-  log(BOLD_YELLOW("扫描下方二维码自动填入 URL 和 Token："));
-  log("");
-  qrcode.generate(qrData, { small: true });
-  log("");
-  log("If QR scan doesn't work, enter manually:");
-  log("若二维码无法使用，请手动输入：");
-  qrShown = true;
-} catch {}
-
-if (!qrShown) {
-  log(BOLD_YELLOW("Input the URL and Token below into your FridayNext app to connect."));
-  log(BOLD_YELLOW("请将下方 URL 和 Token 输入至 FridayNext App 完成连接。"));
-}
-log("");
-log("Gateway URL:  " + BOLD_YELLOW(gatewayUrl));
-log("Bearer Token: " + BOLD_YELLOW(gatewayToken));
-log("");
-function classifyIp(ip) {
-  const p = ip.split(".").map(Number);
-  if (p[0] === 100 && p[1] >= 64 && p[1] <= 127) return "tailscale";
-  if (p[0] === 127) return "loopback";
-  if (p[0] === 10) return "private";
-  if (p[0] === 172 && p[1] >= 16 && p[1] <= 31) return "private";
-  if (p[0] === 192 && p[1] === 168) return "private";
-  if (p[0] === 169 && p[1] === 254) return "private";
-  return "public";
-}
-const ip = new URL(gatewayUrl).hostname;
-const ipType = classifyIp(ip);
-if (ipType === "tailscale") {
-  log("This is a Tailscale network URL (" + ip + ").");
-} else if (ipType === "private") {
-  log("This is a LOCAL network URL (" + ip + ", bind=" + bindMode + ").");
-} else {
-  log("This URL appears to be publicly accessible (" + ip + ").");
+  qrcode.generate(qrData, { small: true }, (rendered) => (qr = rendered));
+} catch {
+  // qrcode-terminal unavailable — the URL/token below are still enough to pair by hand.
 }
 
-// The advertised IP is the local/NAT address, which a phone over the internet
-// can't reach. Best-effort: detect the network's public-facing IP. NOTE: an echo
-// service only reports the egress address — on a cloud VPS that's a routable 1:1
-// NAT, but on a home/carrier-grade NAT (CGNAT) it's a shared egress IP that is
-// NOT reachable inbound. So we present it as a hint, not a guarantee.
-if (ipType === "private" || ipType === "loopback") {
-  const publicIp = await detectPublicIp();
-  if (publicIp && publicIp !== ip) {
-    log("");
-    log(BOLD_YELLOW("Network public-facing IP detected — for remote access try:"));
-    log(BOLD_YELLOW("检测到网络出口公网 IP —— 远程连接可尝试："));
-    log("Public URL:   " + BOLD_YELLOW(`http://${publicIp}:${gatewayPort}`));
-    log("First open inbound TCP port " + gatewayPort + " in your firewall / cloud security group.");
-    log("请先在防火墙 / 云安全组放行入站 TCP 端口 " + gatewayPort + "。");
-    log("If this is a home/carrier network (CGNAT), this IP may NOT be reachable from outside —");
-    log("use a tunnel like Tailscale instead.");
-    log("若为家庭宽带 / 运营商大内网(CGNAT)，此地址可能无法从外部入站访问，");
-    log("请改用 Tailscale 等内网穿透方案。");
-  }
-}
-log("--------------------------------------------------");
-
-async function detectPublicIp() {
-  const endpoints = ["http://api.ipify.org", "http://ifconfig.me/ip", "http://icanhazip.com"];
-  const http = await import("node:http");
-  for (const url of endpoints) {
-    try {
-      const ipStr = await new Promise((resolve, reject) => {
-        const req = http.get(url, { timeout: 3000 }, (res) => {
-          let body = "";
-          res.on("data", (c) => (body += c));
-          res.on("end", () => resolve(body.trim()));
-        });
-        req.on("error", reject);
-        req.on("timeout", () => {
-          req.destroy();
-          reject(new Error("timeout"));
-        });
-      });
-      if (/^\d{1,3}(\.\d{1,3}){3}$/.test(ipStr)) return ipStr;
-    } catch {
-      /* try next */
-    }
-  }
-  return null;
-}
+ui.result({ qr, url: gatewayUrl, token: gatewayToken });
