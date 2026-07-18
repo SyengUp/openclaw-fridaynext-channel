@@ -14,14 +14,7 @@
  */
 import { execFile, execFileSync, spawn, type ChildProcess } from "node:child_process";
 import { request as httpsRequest } from "node:https";
-import {
-  existsSync,
-  mkdirSync,
-  writeFileSync,
-  readFileSync,
-  chmodSync,
-  rmSync,
-} from "node:fs";
+import { existsSync, mkdirSync, writeFileSync, readFileSync, chmodSync, rmSync } from "node:fs";
 import { promisify } from "node:util";
 import { createHash } from "node:crypto";
 import { homedir, platform, arch, networkInterfaces } from "node:os";
@@ -200,7 +193,9 @@ function startTunnelHealthWatchdog(publicUrl: string, cfg: PublicAccessConfig, l
           /* already gone — keepalive covers it */
         }
       } else if (!ok) {
-        log(`tunnel health: probe failed (${tracker.consecutiveFailures}/${TUNNEL_HEALTH_STRIKES})`);
+        log(
+          `tunnel health: probe failed (${tracker.consecutiveFailures}/${TUNNEL_HEALTH_STRIKES})`,
+        );
       }
     });
   }, TUNNEL_HEALTH_INTERVAL_MS);
@@ -271,7 +266,9 @@ async function ensureBinary(log: Logger): Promise<void> {
   });
   chmodSync(p, 0o755);
   writeFileSync(frpcVersionPath(), FRP_VERSION);
-  log(`frpc ${FRP_VERSION} installed (checksum ok)${installed ? ` — upgraded from ${installed}` : ""}`);
+  log(
+    `frpc ${FRP_VERSION} installed (checksum ok)${installed ? ` — upgraded from ${installed}` : ""}`,
+  );
 }
 
 /** The one gateway keypair, shared by every cert (base LE cert + all per-Apple-ID self-signed
@@ -289,16 +286,16 @@ function ensureGatewayKey(): string {
 
 /** Persisted self-signed leaf for `cn` + its SHA-256 fingerprint (lowercase hex, no colons).
  * `crtName` lets each per-Apple-ID subdomain keep its own cert file off the shared key. */
-function ensureCert(cn: string, crtName = "gateway-cert.pem"): { crt: string; key: string; fingerprint: string } {
+function ensureCert(
+  cn: string,
+  crtName = "gateway-cert.pem",
+): { crt: string; key: string; fingerprint: string } {
   const key = ensureGatewayKey();
   const crt = join(DATA_DIR, crtName);
   if (!existsSync(crt)) {
     execFileSync(
       "openssl",
-      [
-        "req", "-x509", "-key", key, "-out", crt,
-        "-days", "3650", "-nodes", "-subj", `/CN=${cn}`,
-      ],
+      ["req", "-x509", "-key", key, "-out", crt, "-days", "3650", "-nodes", "-subj", `/CN=${cn}`],
       { timeout: 30_000 },
     );
   }
@@ -378,7 +375,9 @@ async function ensureRealCert(
     }
     const csrPath = join(DATA_DIR, "gateway.csr");
     execFileSync("openssl", ["req", "-new", "-key", key, "-out", csrPath, "-subj", `/CN=${cn}`]);
-    const keyHash = createHash("sha256").update(cfg.authToken || "").digest("hex");
+    const keyHash = createHash("sha256")
+      .update(cfg.authToken || "")
+      .digest("hex");
     const fullchain = await requestSignedCert(
       cfg.certSignUrl,
       cfg.relayToken,
@@ -391,6 +390,56 @@ async function ensureRealCert(
   } catch (e) {
     log(`real cert failed (${e instanceof Error ? e.message : String(e)}); using self-signed`);
     return ensureCert(cn); // app still works via leaf pinning; browsers warn
+  }
+}
+
+/**
+ * Relay credentials (frps address + shared auth token).
+ *
+ * These are deployment facts, not user preferences, so they are no longer written into every
+ * user's `openclaw.json` — a copy of the shared frps token in thousands of config files is pure
+ * leak surface and goes stale the moment the relay moves. The gateway fetches them at bring-up
+ * instead, and an explicit `relayAddr`/`relayToken` in config still wins (self-hosters running
+ * their own frps, and every install that was configured by hand before this).
+ *
+ * Cached to disk so a control-plane outage can't take down a tunnel that was already working.
+ */
+export async function resolveRelayCredentials(
+  cfg: PublicAccessConfig,
+  log: Logger,
+): Promise<PublicAccessConfig | null> {
+  if (cfg.relayToken.trim() && cfg.relayAddr.trim()) return cfg;
+
+  const cachePath = join(DATA_DIR, "relay-bootstrap.json");
+  const base = cfg.controlPlaneUrl.replace(/\/+$/, "");
+  try {
+    const res = await fetch(`${base}/v1/relay/bootstrap`, {
+      headers: { accept: "application/json" },
+      signal: AbortSignal.timeout(10_000),
+    });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const body = (await res.json()) as { relayAddr?: unknown; relayToken?: unknown };
+    const relayAddr = typeof body.relayAddr === "string" ? body.relayAddr.trim() : "";
+    const relayToken = typeof body.relayToken === "string" ? body.relayToken.trim() : "";
+    if (!relayAddr || !relayToken) throw new Error("incomplete bootstrap payload");
+    ensureDir();
+    writeFileSync(cachePath, JSON.stringify({ relayAddr, relayToken }), { mode: 0o600 });
+    return { ...cfg, relayAddr, relayToken };
+  } catch (e) {
+    log(`relay bootstrap failed (${e instanceof Error ? e.message : String(e)})`);
+    try {
+      const cached = JSON.parse(readFileSync(cachePath, "utf8")) as {
+        relayAddr?: string;
+        relayToken?: string;
+      };
+      if (cached.relayAddr && cached.relayToken) {
+        log("using cached relay credentials");
+        return { ...cfg, relayAddr: cached.relayAddr, relayToken: cached.relayToken };
+      }
+    } catch {
+      /* no usable cache */
+    }
+    return null;
   }
 }
 
@@ -440,7 +489,9 @@ export function discardLocalSubdomainAllocation(): void {
  */
 async function resolveSubdomain(cfg: PublicAccessConfig, log: Logger): Promise<string | null> {
   if (cfg.subdomain && cfg.subdomain.trim()) return cfg.subdomain.trim();
-  const key = createHash("sha256").update(cfg.authToken || "").digest("hex");
+  const key = createHash("sha256")
+    .update(cfg.authToken || "")
+    .digest("hex");
   const f = subdomainPath();
   if (existsSync(f)) {
     const s = readFileSync(f, "utf8").trim();
@@ -638,7 +689,9 @@ function spawnFrpc(confPath: string, log: Logger): void {
     child = null;
     if (stopped) return;
     bumpBackoff();
-    log(`frpc exited (code=${code ?? "null"}); respawning in ${Math.round(respawnDelayMs / 1000)}s`);
+    log(
+      `frpc exited (code=${code ?? "null"}); respawning in ${Math.round(respawnDelayMs / 1000)}s`,
+    );
     scheduleRespawn(confPath, log);
   });
 }
@@ -660,31 +713,35 @@ function scheduleBringUpRetry(cfg: PublicAccessConfig, log: Logger): void {
  * QR fingerprints match reality. */
 function startCertRenewalTimer(cfg: PublicAccessConfig, cn: string, log: Logger): void {
   if (certRenewalTimer) return;
-  const timer = setInterval(() => {
-    if (stopped) return;
-    if (!certNeedsRenewal(join(DATA_DIR, "gateway-fullchain.pem"))) return;
-    log("cert renewal window reached — re-issuing and restarting frpc");
-    void (async () => {
-      try {
-        const { crt, key, fingerprint } = await ensureRealCert(cfg, cn, log);
-        if (baseTunnel) baseTunnel = { ...baseTunnel, crt, key };
-        rewriteConfigForServed(cfg);
-        if (cachedPairing) cachedPairing = { ...cachedPairing, fingerprint };
-        if (child) child.kill(); // keepalive respawns with the fresh config/cert
-      } catch (e) {
-        log(`cert renewal failed: ${e instanceof Error ? e.message : String(e)}`);
-      }
-    })();
-  }, 24 * 3600 * 1000);
+  const timer = setInterval(
+    () => {
+      if (stopped) return;
+      if (!certNeedsRenewal(join(DATA_DIR, "gateway-fullchain.pem"))) return;
+      log("cert renewal window reached — re-issuing and restarting frpc");
+      void (async () => {
+        try {
+          const { crt, key, fingerprint } = await ensureRealCert(cfg, cn, log);
+          if (baseTunnel) baseTunnel = { ...baseTunnel, crt, key };
+          rewriteConfigForServed(cfg);
+          if (cachedPairing) cachedPairing = { ...cachedPairing, fingerprint };
+          if (child) child.kill(); // keepalive respawns with the fresh config/cert
+        } catch (e) {
+          log(`cert renewal failed: ${e instanceof Error ? e.message : String(e)}`);
+        }
+      })();
+    },
+    24 * 3600 * 1000,
+  );
   timer.unref?.();
   certRenewalTimer = timer;
 }
 
 /** Bring public access up. Returns the pairing info (also cached for the HTTP endpoint). */
 export async function startPublicAccess(
-  cfg: PublicAccessConfig,
+  rawCfg: PublicAccessConfig,
   log: Logger,
 ): Promise<PairingInfo | null> {
+  let cfg = rawCfg;
   if (!cfg.enabled) {
     // "Disabled" must mean NOT PUBLICLY REACHABLE — tear down whatever a previous enable
     // left behind (live frpc, filter proxy, watchdogs, cached pairing), and reap an orphan
@@ -710,6 +767,18 @@ export async function startPublicAccess(
     scheduleBringUpRetry(cfg, log);
     return null;
   }
+
+  // Relay address + token: from config when set, otherwise from the control plane. Without
+  // them frpc could only fail to authenticate, so block and retry rather than spawn it.
+  const withRelay = await resolveRelayCredentials(cfg, log);
+  if (!withRelay) {
+    log(
+      "public access blocked: no relay credentials (control plane unreachable?) — retrying in 30s",
+    );
+    scheduleBringUpRetry(rawCfg, log);
+    return null;
+  }
+  cfg = withRelay;
 
   // Public-surface allowlist: frpc forwards into this filter (not core directly), so the
   // tunnel exposes only the app's paths — never core's /chat, /control, or / web UI.
@@ -781,7 +850,11 @@ function rewriteConfigForServed(cfg: PublicAccessConfig): string {
  * change, rewrite frpc.toml and restart frpc so the new per-Apple-ID proxies register (and dropped
  * ones stop). The base subdomain is always retained so the owner's tunnel never disappears.
  */
-export function reconcileServedSubdomains(cfg: PublicAccessConfig, desired: string[], log: Logger): boolean {
+export function reconcileServedSubdomains(
+  cfg: PublicAccessConfig,
+  desired: string[],
+  log: Logger,
+): boolean {
   if (!baseTunnel) return false;
   const next = Array.from(new Set([baseTunnel.sub, ...desired.filter(Boolean)])).sort();
   const cur = Array.from(new Set(servedSubdomains)).sort();
@@ -790,7 +863,9 @@ export function reconcileServedSubdomains(cfg: PublicAccessConfig, desired: stri
   const removed = cur.filter((s) => !next.includes(s));
   servedSubdomains = next;
   rewriteConfigForServed(cfg);
-  log(`served subdomains changed (+${added.length}/-${removed.length}) — restarting frpc to re-register`);
+  log(
+    `served subdomains changed (+${added.length}/-${removed.length}) — restarting frpc to re-register`,
+  );
   if (child) child.kill(); // keepalive respawns from the rewritten config
   return true;
 }
@@ -800,7 +875,9 @@ export function reconcileServedSubdomains(cfg: PublicAccessConfig, desired: stri
  * outage just leaves the current set running. */
 function startGatewaySubdomainPoll(cfg: PublicAccessConfig, log: Logger): void {
   if (subdomainPollTimer) return;
-  const gatewayKey = createHash("sha256").update(cfg.authToken || "").digest("hex");
+  const gatewayKey = createHash("sha256")
+    .update(cfg.authToken || "")
+    .digest("hex");
   const url = `${cfg.controlPlaneUrl.replace(/\/$/, "")}/v1/gateway/subdomains`;
   const poll = async (): Promise<void> => {
     if (stopped) return;

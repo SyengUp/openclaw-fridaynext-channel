@@ -94,7 +94,11 @@ export function resolveFridayNextConfig(cfg: unknown): FridayNextConfig {
       // Default OFF: only tunnels when explicitly enabled in config, so a published plugin never
       // auto-routes a stranger's gateway to our relay. The bare-test gateway sets enabled=true.
       enabled: asBool(pa.enabled, false),
-      relayAddr: asString(pa.relayAddr, "47.95.195.236:7000"),
+      // Both OPTIONAL overrides. Left empty, the gateway fetches the relay address and shared
+      // token from the control plane at bring-up (and caches them under the public-access data
+      // dir) — so the token isn't copied into every user's config file, and a relay move needs
+      // no config edit. Set them to point at your own frps.
+      relayAddr: asString(pa.relayAddr, ""),
       relayToken: asString(pa.relayToken, ""),
       subDomainHost: asString(pa.subDomainHost, "bj.gw.syengup.host"),
       subdomain: asString(pa.subdomain, ""),
