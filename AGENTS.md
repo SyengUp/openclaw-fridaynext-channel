@@ -48,8 +48,8 @@ iOS App ←--HTTP/SSE--→ Friday Plugin ←--OpenClaw Plugin API--→ Gateway +
                     [offline-queue] — JSONL per-device persistence for replay
 ```
 
-1. **`index.ts`** — Plugin entry. Registers HTTP routes, `onAgentEvent` → `forwardAgentEventRaw`, an `llm_output` hook → `accumulateRunUsage` (per-run token usage), tool hooks (`before_tool_call`/`after_tool_call` → `tool-hook` SSE), and a `subagent_delivery_target` hook (routes sub-agent completion responses back to the Friday device that initiated the run). Routes are re-registered when `registerFull` receives a **new** `api` (compared via a `WeakRef`) so the plugin survives a health-monitor restart; the `onAgentEvent` listener is disposed+re-added each call, while tool hooks register at most once per process (boolean guard).
-2. **`src/channel.ts`** — Plugin channel definition; `sendText` / `sendMedia` → `sseEmitter.broadcast(..., type: "outbound")` (plus media URL handling via `saveMediaBuffer` / `resolveMediaAttachment`).
+1. **`index.ts`** — Plugin entry. Registers HTTP routes, `onAgentEvent` → `forwardAgentEventRaw`, an `llm_output` hook → `accumulateRunUsage` (per-run token usage), tool hooks (`before_tool_call`/`after_tool_call` → `tool-hook` SSE), and a `subagent_delivery_target` hook (routes sub-agent completion responses back to the Friday device that initiated the run). Routes and hooks are re-registered when `registerFull` receives a **new** `api` (compared via a `WeakRef`) so the plugin survives a health-monitor restart; the `onAgentEvent` listener is disposed+re-added each call.
+2. **`src/channel.ts`** — Plugin channel definition; `sendText` / `sendMedia` → `sseEmitter.broadcast(..., type: "outbound")` (plus media URL handling via `saveMediaBuffer` / `resolveMediaAttachment`). Its passive HTTP/SSE account uses the SDK `runPassiveAccountLifecycle` so core owns `running`/start/stop/error exactly like long-lived bundled providers; status uses `createComputedAccountStatusAdapter` and never hard-codes lifecycle truth.
 3. **`src/http/server.ts`** + **`src/http/handlers/*`** — `/friday-next/*` routes. Full route table:
    - `GET /friday-next/events` — SSE stream (`handleSseStream`)
    - `POST /friday-next/messages` — message dispatch (`handleMessages`)
@@ -123,6 +123,8 @@ Do not reintroduce `run-start` / `run-complete` / `run-error` / `final` / `reaso
 ## Message flow (`POST /messages`)
 
 Validate auth → `ensureSessionLevels` / session mapping → `runFridayDispatch` with `deliver` → `deliver` SSE (+ URL translation + `channelData.fridayNext` metadata); errors → `outbound` `dispatch_error`. No plugin-side conversation history.
+
+The dispatch context follows the same durable inbound-routing contract as bundled channels such as Telegram: `OriginatingChannel: "friday-next"`, `OriginatingTo: <deviceId>`, `Surface: "friday-next"`, and `AccountId: "default"`. OpenClaw persists these as `deliveryContext` plus `lastChannel`/`lastTo`; proactive-delivery and notification-binding tools require the complete channel+target pair.
 
 `ensureSessionLevels` writes `reasoningLevel` and `thinkingLevel` into `~/.openclaw/agents/main/sessions/sessions.json` keyed by the normalized session key (`"agent:main:<raw>"`).
 

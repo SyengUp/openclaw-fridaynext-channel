@@ -622,8 +622,14 @@ export async function handleMessages(req: IncomingMessage, res: ServerResponse):
     SenderId: normalizedDeviceId,
     OwnerAllowFrom: [normalizedDeviceId],
     From: normalizedDeviceId,
-    To: "friday-next",
+    // Match the bundled-provider inbound routing contract used by Telegram. Core persists these
+    // fields as deliveryContext / lastChannel / lastTo; notification-channel binding and future
+    // proactive delivery require both the channel and target to be present.
+    To: normalizedDeviceId,
+    OriginatingChannel: "friday-next" as const,
     OriginatingTo: normalizedDeviceId,
+    AccountId: "default",
+    Surface: "friday-next" as const,
     SessionKey: baseSessionKey,
     MediaUrls: attachments.map(fridayFilesPublicUrl),
     channel: "friday-next" as const,
@@ -668,7 +674,7 @@ export async function handleMessages(req: IncomingMessage, res: ServerResponse):
             // bytes, encrypt + upload to OSS, and rewrite the URL to a `fnoss:v1:…` reference the
             // app downloads + decrypts directly. LAN devices and upload failures keep the tunnel
             // URL (graceful fallback).
-            await ossRewriteOutboundMedia(payload as Record<string, unknown>, normalizedDeviceId);
+            await ossRewriteOutboundMedia(payload, normalizedDeviceId);
             const deliverIsError =
               (payload as { isError?: boolean })?.isError || (pl as { isError?: boolean })?.isError;
             // Drop error deliveries that are a direct consequence of a user stop (the aborted

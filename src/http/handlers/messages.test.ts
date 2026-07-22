@@ -41,13 +41,13 @@ describe("composeBodyWithMediaRefs", () => {
   });
 });
 
-describe("handleMessages dispatch context (owner fields)", () => {
+describe("handleMessages dispatch context", () => {
   afterEach(() => {
     clearFridayNextRuntime();
     __resetMockFridayDispatchForTests();
   });
 
-  it("passes SenderId and OwnerAllowFrom as normalized device id to runFridayDispatch", async () => {
+  it("matches bundled-provider inbound routing metadata and preserves owner fields", async () => {
     setFridayNextRuntime({
       config: { loadConfig: () => ({ gateway: { auth: { token: "tok" } }, channels: {} }) },
     } as never);
@@ -86,6 +86,13 @@ describe("handleMessages dispatch context (owner fields)", () => {
     expect(capturedCtx!.SenderId).toBe(want);
     expect(capturedCtx!.OwnerAllowFrom).toEqual([want]);
     expect(capturedCtx!.From).toBe(want);
+    expect(capturedCtx!.To).toBe(want);
+    expect(capturedCtx!.OriginatingChannel).toBe("friday-next");
+    expect(capturedCtx!.OriginatingTo).toBe(want);
+    expect(capturedCtx!.Provider).toBe("friday-next");
+    expect(capturedCtx!.Surface).toBe("friday-next");
+    expect(capturedCtx!.AccountId).toBe("default");
+    expect(capturedCtx!.SessionKey).toBe("agent:main:default");
   });
 
   it("accepts attachment-only messages (empty text + attachments) and dispatches", async () => {

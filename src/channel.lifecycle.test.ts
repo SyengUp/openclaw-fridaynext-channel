@@ -38,4 +38,60 @@ describe("friday-next channel gateway lifecycle", () => {
     controller.abort();
     await expect(started).resolves.toBeUndefined();
   });
+
+  it("derives account and channel lifecycle status from the core runtime", async () => {
+    const status = (
+      fridayNextChannelPlugin as {
+        status?: {
+          buildAccountSnapshot?: (params: unknown) => Promise<unknown> | unknown;
+          buildChannelSummary?: (snapshot: unknown) => unknown;
+        };
+      }
+    ).status;
+    expect(status?.buildAccountSnapshot).toBeTypeOf("function");
+    expect(status?.buildChannelSummary).toBeTypeOf("function");
+
+    const stopped = (await status!.buildAccountSnapshot!({
+      account: { accountId: "default", name: "Friday Next Channel", enabled: true },
+      runtime: {
+        accountId: "default",
+        running: false,
+        lastStartAt: 100,
+        lastStopAt: 200,
+        lastError: "provider stopped",
+        lastInboundAt: 150,
+      },
+    })) as Record<string, unknown>;
+
+    // Regression: the old adapter hard-coded running:true and hid real lifecycle failures.
+    expect(stopped).toMatchObject({
+      accountId: "default",
+      configured: true,
+      running: false,
+      lastStartAt: 100,
+      lastStopAt: 200,
+      lastError: "provider stopped",
+      connected: false,
+      lastInboundAt: 150,
+      mode: "http+sse",
+    });
+
+    const summary = status!.buildChannelSummary!({
+      snapshot: {
+        configured: true,
+        running: true,
+        lastStartAt: 300,
+        lastStopAt: null,
+        lastError: null,
+      },
+    }) as Record<string, unknown>;
+    expect(summary).toMatchObject({
+      configured: true,
+      running: true,
+      lastStartAt: 300,
+      lastStopAt: null,
+      lastError: null,
+      mode: "http+sse",
+    });
+  });
 });

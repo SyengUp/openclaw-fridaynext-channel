@@ -9,13 +9,17 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { createChatChannelPlugin } from "openclaw/plugin-sdk/core";
-import { waitUntilAbort } from "openclaw/plugin-sdk/channel-lifecycle";
+import { runPassiveAccountLifecycle } from "openclaw/plugin-sdk/channel-lifecycle";
 import { registerChannelRuntimeContext } from "openclaw/plugin-sdk/channel-runtime-context";
 import { CHANNEL_APPROVAL_NATIVE_RUNTIME_CONTEXT_CAPABILITY } from "openclaw/plugin-sdk/approval-handler-adapter-runtime";
 import type { ChannelGatewayContext } from "openclaw/plugin-sdk/channel-contract";
 import { createFridayNextLogger } from "./logging.js";
 import { encryptOutboundBufferToFnoss } from "./public-access/outbound-media-oss.js";
-import type { ChannelAccountSnapshot } from "openclaw/plugin-sdk/status-helpers";
+import {
+  buildBaseChannelStatusSummary,
+  createComputedAccountStatusAdapter,
+  createDefaultChannelRuntimeState,
+} from "openclaw/plugin-sdk/status-helpers";
 import { saveMediaBuffer } from "openclaw/plugin-sdk/media-store";
 import { sseEmitter } from "./sse/emitter.js";
 import { fridayNotificationsStore } from "./notifications/notifications-store.js";
@@ -162,34 +166,44 @@ const fridayGateway = {
         abortSignal: ctx.abortSignal,
       });
     }
-    await waitUntilAbort(ctx.abortSignal);
+    // This passive HTTP/SSE lifecycle is the equivalent of Telegram returning its long-lived
+    // provider monitor: core owns running/start/stop/error and abort is the sole normal exit.
+    await runPassiveAccountLifecycle({
+      abortSignal: ctx.abortSignal,
+      start: async () => undefined,
+    });
   },
 };
 
-const fridayStatus = {
-  buildAccountSnapshot: async (params: {
+const fridayStatus = createComputedAccountStatusAdapter({
+  defaultRuntime: createDefaultChannelRuntimeState("default"),
+  buildChannelSummary: ({ snapshot }: { snapshot: Record<string, unknown> }) =>
+    buildBaseChannelStatusSummary(snapshot, { mode: "http+sse" }),
+  resolveAccountSnapshot: (params: {
     account: { accountId?: string; name?: string; enabled?: boolean };
-    runtime?: ChannelAccountSnapshot;
-  }): Promise<ChannelAccountSnapshot> => {
+    runtime?: { lastInboundAt?: number | null };
+  }) => {
     const { account, runtime } = params;
     const accountId =
       typeof account?.accountId === "string" && account.accountId.trim()
         ? account.accountId.trim()
         : "default";
     const inbound = getLastFridayInboundAt();
-    const connected = sseEmitter.getConnectionCount() > 0;
     return {
       accountId,
       name: typeof account?.name === "string" ? account.name : "Friday Next Channel",
       enabled: account?.enabled !== false,
       configured: true,
-      running: true,
-      connected,
-      lastInboundAt: inbound ?? runtime?.lastInboundAt ?? null,
-      mode: "http+sse",
+      // Lifecycle fields come from `params.runtime`, populated by core around startAccount just
+      // like Telegram. Only Friday-specific transport facts belong in the computed extras.
+      extra: {
+        connected: sseEmitter.getConnectionCount() > 0,
+        lastInboundAt: inbound ?? runtime?.lastInboundAt ?? null,
+        mode: "http+sse",
+      },
     };
   },
-};
+});
 
 export const fridayNextChannelPlugin = createChatChannelPlugin({
   base: {

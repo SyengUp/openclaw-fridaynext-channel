@@ -62,10 +62,102 @@ declare module "openclaw/plugin-sdk/media-store" {
 }
 
 declare module "openclaw/plugin-sdk/channel-lifecycle" {
-  export const waitUntilAbort: (
-    signal?: AbortSignal,
-    onAbort?: () => void | Promise<void>,
-  ) => Promise<void>;
+  export const runPassiveAccountLifecycle: (params: {
+    abortSignal?: AbortSignal;
+    start: () => Promise<unknown>;
+    stop?: (handle: unknown) => void | Promise<void>;
+    onStop?: () => void | Promise<void>;
+  }) => Promise<void>;
+}
+
+declare module "openclaw/plugin-sdk/channel-contract" {
+  export interface ChannelGatewayContext {
+    accountId: string;
+    abortSignal: AbortSignal;
+    channelRuntime?: unknown;
+  }
+
+  export interface ChannelApprovalCapability {
+    native: {
+      describeDeliveryCapabilities: (params: { request: unknown }) => unknown;
+      resolveOriginTarget: (params: { request: unknown }) => unknown;
+    };
+    nativeRuntime?: unknown;
+  }
+}
+
+declare module "openclaw/plugin-sdk/channel-runtime-context" {
+  export const registerChannelRuntimeContext: (params: {
+    channelRuntime: unknown;
+    channelId: string;
+    accountId: string;
+    capability: unknown;
+    context: unknown;
+    abortSignal?: AbortSignal;
+  }) => void;
+}
+
+declare module "openclaw/plugin-sdk/approval-handler-adapter-runtime" {
+  export const CHANNEL_APPROVAL_NATIVE_RUNTIME_CONTEXT_CAPABILITY: unknown;
+}
+
+declare module "openclaw/plugin-sdk/approval-handler-runtime" {
+  export const createChannelApprovalNativeRuntimeAdapter: <
+    PendingPayload,
+    PreparedTarget,
+    Entry,
+    _DeletePayload,
+    UpdatePayload,
+  >(options: {
+    eventKinds: string[];
+    availability: {
+      isConfigured: () => boolean;
+      shouldHandle: (params: { request: unknown }) => boolean;
+    };
+    presentation: {
+      buildPendingPayload: (params: { request: unknown; view: unknown }) => PendingPayload;
+      buildResolvedResult: (params: { request: unknown; view: unknown }) => unknown;
+      buildExpiredResult: (params: { request: unknown; view: unknown }) => unknown;
+    };
+    transport: {
+      prepareTarget: (params: {
+        plannedTarget?: { target?: { to?: string } };
+        request: unknown;
+      }) => { dedupeKey: string; target: PreparedTarget } | null;
+      deliverPending: (params: {
+        preparedTarget: PreparedTarget;
+        pendingPayload: PendingPayload;
+      }) => Entry;
+      updateEntry: (params: { entry: Entry; payload: UpdatePayload }) => void | Promise<void>;
+      deleteEntry: (params: {
+        entry: Entry;
+        phase: "resolved" | "expired";
+      }) => void | Promise<void>;
+    };
+    observe?: { onDeliveryError?: (params: { error: unknown }) => void };
+  }) => unknown;
+}
+
+declare module "openclaw/plugin-sdk/approval-gateway-runtime" {
+  export const resolveApprovalOverGateway: (params: {
+    cfg: unknown;
+    approvalId: string;
+    decision: "allow-once" | "allow-always" | "deny";
+    senderId: string | null;
+    allowPluginFallback: boolean;
+    clientDisplayName: string;
+  }) => Promise<unknown>;
+}
+
+declare module "openclaw/plugin-sdk/gateway-method-runtime" {
+  export const dispatchGatewayMethod: (
+    method: string,
+    params: Record<string, unknown>,
+  ) => Promise<{
+    ok: boolean;
+    error?: { code?: string; message?: string };
+    payload?: unknown;
+  }>;
 }
 
 declare module "openclaw/plugin-sdk/media-runtime" {
@@ -104,7 +196,9 @@ declare module "openclaw/plugin-sdk/plugin-runtime" {
 }
 
 declare module "openclaw/plugin-sdk/status-helpers" {
-  export type ChannelAccountSnapshot = any;
+  export const buildBaseChannelStatusSummary: (...args: any[]) => any;
+  export const createComputedAccountStatusAdapter: (...args: any[]) => any;
+  export const createDefaultChannelRuntimeState: (...args: any[]) => any;
 }
 
 declare module "openclaw/plugin-sdk/config-runtime" {
