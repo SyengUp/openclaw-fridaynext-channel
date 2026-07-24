@@ -296,31 +296,15 @@ if (Array.isArray(mainAgent.tools.deny)) {
   }
 }
 
-// —— public access (beta line only) ——
+// —— FridayTunnel standby ——
 //
-// Until now `publicAccess` was hand-edited, so an upgrading user's gateway had no tunnel at
-// all: `enabled` defaults false, so the app's pairing self-heal found nothing to adopt and
-// "upgrade → tunnel works" was impossible without manual config.
-//
-// Only `enabled` is written. The relay address and shared token are deployment facts, not user
-// preferences — the plugin fetches them from the control plane at bring-up, so they never sit
-// in (and go stale in) thousands of config files. An explicit relayAddr/relayToken still wins
-// for self-hosters running their own frps.
-//
-// Scoped to the beta dist-tag on purpose — that line is opt-in (`--beta`), i.e. exactly the
-// invited testers. A `latest` install must never be auto-routed through our relay.
-//
-// Existing values are never touched: a user (or operator) who already configured public access,
-// including one who deliberately turned it OFF, keeps their setting.
-let enabledPublicAccess = false;
-if (DIST_TAG === "beta") {
-  const pa = (config.channels["friday-next"].publicAccess ??= {});
-  if (pa.enabled === undefined) {
-    pa.enabled = true;
-    configChanged = true;
-    enabledPublicAccess = true;
-  }
-}
+// Standby is now the plugin default on every dist-tag. It registers only a pseudonymous gateway
+// key and waits for entitlement; it does NOT spawn frpc or expose a public port. Therefore the
+// installer no longer writes an `enabled` product state. Existing explicit `enabled:false` stays
+// honored as a legacy operator hard stop; new zero-egress setups should use standbyDisabled=true.
+const publicAccessConfig = config.channels["friday-next"].publicAccess ?? {};
+const enabledPublicAccess =
+  publicAccessConfig.enabled !== false && publicAccessConfig.standbyDisabled !== true;
 
 if (configChanged) {
   try {

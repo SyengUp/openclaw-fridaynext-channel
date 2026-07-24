@@ -7,23 +7,28 @@
  * The app pins the self-signed leaf fingerprint (delivered in the pairing QR superset), so the
  * TLS is end-to-end to this machine.
  *
- * Lifecycle: `startPublicAccess()` ensures the frpc binary (download + checksum), a persisted
- * self-signed cert, and a stable subdomain, writes the frpc config, and spawns frpc with a
- * keepalive respawn. `stopPublicAccess()` tears it down. All state lives under
- * `~/.openclaw/friday-next/public-access/`.
+ * Lifecycle: `startPublicAccess()` always enters a low-traffic control-plane standby after
+ * allocating a stable identity and certificate. It deliberately does NOT download/spawn frpc
+ * until the control plane returns at least one entitled subdomain. Returning to an empty desired
+ * set tears the tunnel down while keeping standby alive. `stopPublicAccess()` is the hidden
+ * operator hard stop. All state lives under `~/.openclaw/friday-next/public-access/`.
  */
 import { execFile, execFileSync, spawn, type ChildProcess } from "node:child_process";
 import { request as httpsRequest } from "node:https";
 import { existsSync, mkdirSync, writeFileSync, readFileSync, chmodSync, rmSync } from "node:fs";
 import { promisify } from "node:util";
-import { createHash } from "node:crypto";
+import { createHash, createPublicKey } from "node:crypto";
 import { homedir, platform, arch, networkInterfaces } from "node:os";
 import { join } from "node:path";
 import type { Server } from "node:http";
 import { startFilterProxy } from "./filter-proxy.js";
 
 const FRP_VERSION = "0.69.1";
-const DATA_DIR = join(homedir(), ".openclaw", "friday-next", "public-access");
+// Override is primarily for hermetic tests and managed deployments. Production defaults to the
+// plugin-private OpenClaw directory; never share this with a user's own frp installation.
+const DATA_DIR =
+  process.env.FRIDAY_NEXT_PUBLIC_ACCESS_DATA_DIR?.trim() ||
+  join(homedir(), ".openclaw", "friday-next", "public-access");
 
 export type PublicAccessConfig = {
   enabled: boolean;
@@ -74,15 +79,23 @@ let allocRetryTimer: ReturnType<typeof setTimeout> | null = null;
 let cachedPairing: PairingInfo | null = null;
 let healthTimer: ReturnType<typeof setInterval> | null = null;
 let certRenewalTimer: ReturnType<typeof setInterval> | null = null;
-let subdomainPollTimer: ReturnType<typeof setInterval> | null = null;
+let subdomainPollTimer: ReturnType<typeof setTimeout> | null = null;
 // D31: the gateway's base tunnel (from resolveSubdomain) + the full set of subdomains currently
 // written into frpc.toml (base + per-Apple-ID). The poll reconciles the set against the control
 // plane; `spawnConfPath` is what the keepalive respawns from.
 let baseTunnel: { sub: string; crt: string; key: string; cn: string } | null = null;
 let servedSubdomains: string[] = [];
 let spawnConfPath: string | null = null;
+let standbyRevision = "";
+let standbyPollRunning = false;
+let tunnelTransition: Promise<void> = Promise.resolve();
 
-const SUBDOMAIN_POLL_INTERVAL_MS = 5 * 60_000;
+// The standby request is held by the control plane for up to 25 seconds and wakes immediately
+// when a grant changes (Telegram-style long polling). A short delay is used only after a response;
+// failures back off separately so an outage cannot create a hot loop.
+const STANDBY_WAIT_SEC = 25;
+const STANDBY_NEXT_POLL_MS = 250;
+const STANDBY_ERROR_RETRY_MS = 5_000;
 
 // --- Tunnel health watchdog（隧道自愈） ---
 //
@@ -167,6 +180,14 @@ function startTunnelHealthWatchdog(publicUrl: string, cfg: PublicAccessConfig, l
   let restartCycles = 0;
   const timer = setInterval(() => {
     if (stopped || !child) return;
+    // An empty set is an intentional control-plane decision: this gateway currently has no
+    // entitled Apple account, so frpc has no proxy to expose. Treat it as healthy/idle instead of
+    // repeatedly restarting and eventually reallocating the stable base subdomain.
+    if (servedSubdomains.length === 0) {
+      tracker.note(true);
+      restartCycles = 0;
+      return;
+    }
     void probeTunnelHealth(publicUrl).then((ok) => {
       if (stopped || !child) return;
       if (ok) {
@@ -284,6 +305,18 @@ function ensureGatewayKey(): string {
   return key;
 }
 
+/** SHA-256 of the RSA public key's PKCS#1 DER bytes. This exactly matches iOS
+ * `SecKeyCopyExternalRepresentation` for the gateway certificate and lets a remotely activating
+ * app seed a host pin before its first public connection (no TOFU window). */
+function gatewayPublicKeyPin(): string {
+  const key = ensureGatewayKey();
+  const der = createPublicKey(readFileSync(key, "utf8")).export({
+    type: "pkcs1",
+    format: "der",
+  });
+  return createHash("sha256").update(der).digest("hex");
+}
+
 /** Persisted self-signed leaf for `cn` + its SHA-256 fingerprint (lowercase hex, no colons).
  * `crtName` lets each per-Apple-ID subdomain keep its own cert file off the shared key. */
 function ensureCert(
@@ -295,7 +328,20 @@ function ensureCert(
   if (!existsSync(crt)) {
     execFileSync(
       "openssl",
-      ["req", "-x509", "-key", key, "-out", crt, "-days", "3650", "-nodes", "-subj", `/CN=${cn}`],
+      [
+        "req",
+        "-new",
+        "-x509",
+        "-key",
+        key,
+        "-out",
+        crt,
+        "-days",
+        "3650",
+        "-nodes",
+        "-subj",
+        `/CN=${cn}`,
+      ],
       { timeout: 30_000 },
     );
   }
@@ -589,12 +635,56 @@ function proxySpecsFor(
       specs.push({ subdomain: sub, crt, key });
     }
   }
-  if (!seen.has(baseSub)) specs.unshift({ subdomain: baseSub, crt: baseCrt, key: baseKey });
   return specs;
 }
 
 function frpcPidPath(): string {
   return join(DATA_DIR, "frpc.pid");
+}
+
+/** A delayed exit from an old frpc must never erase the pidfile of its replacement. */
+export function shouldClearRecordedFrpcPid(
+  recordedPid: number,
+  exitedPid: number | undefined,
+): boolean {
+  return Number.isInteger(recordedPid) && recordedPid > 0 && recordedPid === exitedPid;
+}
+
+/** Remove the pidfile only when it still names the child whose error/exit event fired. */
+function clearRecordedFrpcPid(exitedPid: number | undefined): void {
+  if (!exitedPid) return;
+  try {
+    const recordedPid = Number(readFileSync(frpcPidPath(), "utf8").trim()) || 0;
+    if (shouldClearRecordedFrpcPid(recordedPid, exitedPid)) {
+      rmSync(frpcPidPath(), { force: true });
+    }
+  } catch {
+    /* absent/unreadable pidfile — nothing to clear */
+  }
+}
+
+/** Parse `ps -Ao pid=,command=` and select only this plugin's exact frpc invocation. */
+export function pluginFrpcPidsFromProcessList(
+  processList: string,
+  executablePath: string,
+  confPath: string,
+): number[] {
+  const expectedCommand = `${executablePath} -c ${confPath}`;
+  return processList
+    .split("\n")
+    .map((line) => line.trim().match(/^(\d+)\s+(.+)$/))
+    .filter((match): match is RegExpMatchArray => match != null && match[2] === expectedCommand)
+    .map((match) => Number(match[1]))
+    .filter((pid) => Number.isInteger(pid) && pid > 0);
+}
+
+function pluginFrpcProcessIds(confPath: string): number[] {
+  try {
+    const processList = execFileSync("ps", ["-Ao", "pid=,command="], { timeout: 5_000 }).toString();
+    return pluginFrpcPidsFromProcessList(processList, frpcPath(), confPath);
+  } catch {
+    return [];
+  }
 }
 
 /** Read a live process's command line for identity verification. Prefers Linux `/proc`
@@ -615,30 +705,43 @@ function processCmdline(pid: number): string | null {
 
 /**
  * Reap ONLY our own orphan frpc left by a prior gateway process (crash/restart before
- * stopPublicAccess ran). Isolation from a user's own frp is by construction — we never
- * match on the process name `frpc`, only:
- *   1. the exact PID we recorded in `frpc.pid` on spawn, AND
- *   2. a verification that this live PID's command line still references OUR unique config
- *      path (guards against the PID having been reused by an unrelated process).
- * If either check doesn't line up we reap nothing — we would rather leak one stale frpc
- * than ever risk SIGTERM-ing someone else's process. Called ONCE at start, never in the
- * respawn path (which manages the live `child` reference directly).
+ * stopPublicAccess ran). The pidfile is not sufficient by itself: a second crash can overwrite
+ * it and strand an older child forever. Isolation from a user's own frp remains structural —
+ * candidates must have the exact plugin-private executable AND config paths. The pidfile is
+ * included as a recovery hint, but its command line is verified before any signal is sent.
  */
 function killOrphanFrpc(confPath: string, log: Logger): void {
-  let pid = 0;
+  let recordedPid = 0;
   try {
-    pid = Number(readFileSync(frpcPidPath(), "utf8").trim()) || 0;
+    recordedPid = Number(readFileSync(frpcPidPath(), "utf8").trim()) || 0;
   } catch {
-    return; // no pidfile → nothing we started is orphaned
+    /* process scan below still catches orphans whose pidfile was lost/overwritten */
   }
-  if (!pid || pid === child?.pid) return;
-  const cmd = processCmdline(pid);
-  if (!cmd || !cmd.includes(confPath)) return; // dead, or PID reused by something not ours
-  try {
-    process.kill(pid, "SIGTERM");
-    log(`reaped orphan frpc pid=${pid}`);
-  } catch {
-    /* already gone */
+
+  const candidates = new Set(pluginFrpcProcessIds(confPath));
+  if (recordedPid > 0) candidates.add(recordedPid);
+  for (const pid of candidates) {
+    if (pid === child?.pid) continue;
+    const cmd = processCmdline(pid);
+    if (!cmd || !cmd.includes(frpcPath()) || !cmd.includes(confPath)) continue;
+    try {
+      process.kill(pid, "SIGTERM");
+      log(`reaped orphan frpc pid=${pid}`);
+    } catch {
+      /* already gone */
+    }
+  }
+
+  // Never leave a dead/reused orphan pid looking like the currently managed child.
+  if (recordedPid > 0 && recordedPid !== child?.pid) {
+    const cmd = processCmdline(recordedPid);
+    if (!cmd || !cmd.includes(frpcPath()) || !cmd.includes(confPath)) {
+      try {
+        rmSync(frpcPidPath(), { force: true });
+      } catch {
+        /* best-effort */
+      }
+    }
   }
 }
 
@@ -650,7 +753,7 @@ function scheduleRespawn(confPath: string, log: Logger): void {
   if (keepaliveTimer) clearTimeout(keepaliveTimer);
   keepaliveTimer = setTimeout(() => {
     keepaliveTimer = null;
-    if (!stopped && !child) spawnFrpc(confPath, log);
+    if (!stopped && !child && servedSubdomains.length > 0) spawnFrpc(confPath, log);
   }, respawnDelayMs);
 }
 
@@ -677,6 +780,7 @@ function spawnFrpc(confPath: string, log: Logger): void {
   // (binary deleted → ENOENT on a keepalive respawn, EPERM, …) — which would take down
   // the ENTIRE host gateway process for an accessory feature. Handle it like an exit.
   c.on("error", (err) => {
+    clearRecordedFrpcPid(c.pid);
     if (child !== c) return;
     child = null;
     if (stopped) return;
@@ -685,6 +789,7 @@ function spawnFrpc(confPath: string, log: Logger): void {
     scheduleRespawn(confPath, log);
   });
   c.on("exit", (code) => {
+    clearRecordedFrpcPid(c.pid);
     if (child !== c) return; // superseded by a newer child — ignore this stale exit
     child = null;
     if (stopped) return;
@@ -703,7 +808,7 @@ function scheduleBringUpRetry(cfg: PublicAccessConfig, log: Logger): void {
   if (stopped) return;
   allocRetryTimer = setTimeout(() => {
     allocRetryTimer = null;
-    if (!stopped && !child) void startPublicAccess(cfg, log);
+    if (!stopped && !baseTunnel) void startPublicAccess(cfg, log);
   }, 30_000);
 }
 
@@ -736,37 +841,30 @@ function startCertRenewalTimer(cfg: PublicAccessConfig, cn: string, log: Logger)
   certRenewalTimer = timer;
 }
 
-/** Bring public access up. Returns the pairing info (also cached for the HTTP endpoint). */
+/** Enter FridayTunnel standby. Returns pairing coordinates even when no public proxy is active. */
 export async function startPublicAccess(
   rawCfg: PublicAccessConfig,
   log: Logger,
 ): Promise<PairingInfo | null> {
   let cfg = rawCfg;
   if (!cfg.enabled) {
-    // "Disabled" must mean NOT PUBLICLY REACHABLE — tear down whatever a previous enable
-    // left behind (live frpc, filter proxy, watchdogs, cached pairing), and reap an orphan
-    // frpc from a prior gateway process too: the old early-return skipped killOrphanFrpc,
-    // so flipping the config off and restarting left the tunnel serving forever.
+    // Hidden operator hard stop. Normal unentitled users never enter this branch: they stay in
+    // standby with zero proxies. Reap a prior-process frpc as well so zero-egress is literal.
     const wasRunning = child != null || filterServer != null || cachedPairing != null;
     stopPublicAccess();
     killOrphanFrpc(join(DATA_DIR, "frpc.toml"), log);
     log(
-      `public access disabled (channels.friday-next.publicAccess.enabled=false)` +
+      `FridayTunnel standby hard-disabled (publicAccess.standbyDisabled=true or legacy enabled=false)` +
         (wasRunning ? " — tore down running tunnel" : ""),
     );
     return null;
   }
   stopped = false;
-  try {
-    ensureDir();
-    await ensureBinary(log);
-  } catch (e) {
-    log(
-      `public access bring-up failed (${e instanceof Error ? e.message : String(e)}) — retrying in 30s`,
-    );
-    scheduleBringUpRetry(cfg, log);
-    return null;
+  if (baseTunnel && cachedPairing) {
+    startGatewaySubdomainPoll(cfg, log);
+    return cachedPairing;
   }
+  ensureDir();
 
   // Relay address + token: from config when set, otherwise from the control plane. Without
   // them frpc could only fail to authenticate, so block and retry rather than spawn it.
@@ -780,14 +878,7 @@ export async function startPublicAccess(
   }
   cfg = withRelay;
 
-  // Public-surface allowlist: frpc forwards into this filter (not core directly), so the
-  // tunnel exposes only the app's paths — never core's /chat, /control, or / web UI.
-  if (!filterServer) {
-    filterServer = startFilterProxy(filterPort(cfg.corePort), cfg.corePort, log);
-  }
-
-  // Block (don't tunnel) until the relay hands us a collision-proof subdomain; retry
-  // so a transient relay outage self-heals without minting a risky local subdomain.
+  // Allocate the stable identity while idle. This does not create a proxy or public listener.
   const subdomain = await resolveSubdomain(cfg, log);
   if (!subdomain) {
     log("public access blocked: no subdomain allocated (relay unreachable?) — retrying in 30s");
@@ -797,10 +888,7 @@ export async function startPublicAccess(
   const cn = `${subdomain}.${cfg.subDomainHost}`;
   const { crt, key, fingerprint } = await ensureRealCert(cfg, cn, log);
   baseTunnel = { sub: subdomain, crt, key, cn };
-  // Preserve any already-known per-Apple-ID subdomains across a re-register (the poll refreshes
-  // them); start from just the base if this is a cold bring-up.
-  if (!servedSubdomains.includes(subdomain)) servedSubdomains = [subdomain, ...servedSubdomains];
-  const confPath = rewriteConfigForServed(cfg);
+  servedSubdomains = [];
 
   cachedPairing = {
     v: 2, // superset schema with a one-time pairing voucher minted per fetch (D12)
@@ -811,23 +899,15 @@ export async function startPublicAccess(
     subdomain,
   };
 
-  // Idempotent: a duplicate registerFull must NOT respawn a live tunnel (that caused
-  // flapping) — but the pairing info is still rebuilt above so the endpoint never serves
-  // a stale fingerprint/lanUrl from before a cert renewal or address change.
-  if (child && child.exitCode === null && !child.killed) {
-    log("public access already running — refreshed config/pairing, keeping current frpc");
-    startTunnelHealthWatchdog(`https://${cn}`, cfg, log);
-    startCertRenewalTimer(cfg, cn, log);
-    startGatewaySubdomainPoll(cfg, log);
-    return cachedPairing;
-  }
-  killOrphanFrpc(confPath, log); // clear a stale frpc from a prior gateway process, once
-  spawnFrpc(confPath, log);
-  startTunnelHealthWatchdog(`https://${cn}`, cfg, log);
+  // A crash/restart may have left yesterday's entitled frpc alive. Standby always begins closed;
+  // the authoritative desired-set response below is the only thing allowed to reopen it.
+  killOrphanFrpc(join(DATA_DIR, "frpc.toml"), log);
   startCertRenewalTimer(cfg, cn, log);
   startGatewaySubdomainPoll(cfg, log);
 
-  log(`public access up → ${cachedPairing.publicUrl} (fp ${fingerprint.slice(0, 16)}…)`);
+  log(
+    `FridayTunnel standby → ${cachedPairing.publicUrl} (no proxy; pin ${gatewayPublicKeyPin().slice(0, 16)}…)`,
+  );
   return cachedPairing;
 }
 
@@ -848,60 +928,153 @@ function rewriteConfigForServed(cfg: PublicAccessConfig): string {
 /**
  * Reconcile the served subdomain set against `desired` (from the control-plane poll). On a real
  * change, rewrite frpc.toml and restart frpc so the new per-Apple-ID proxies register (and dropped
- * ones stop). The base subdomain is always retained so the owner's tunnel never disappears.
+ * ones stop). The control-plane list is authoritative, including an empty list: under grant
+ * enforcement the base owner must not remain reachable after their entitlement ends.
  */
-export function reconcileServedSubdomains(
+export async function reconcileServedSubdomains(
   cfg: PublicAccessConfig,
   desired: string[],
   log: Logger,
-): boolean {
+): Promise<boolean> {
   if (!baseTunnel) return false;
-  const next = Array.from(new Set([baseTunnel.sub, ...desired.filter(Boolean)])).sort();
+  const next = normalizedServedSubdomains(desired);
   const cur = Array.from(new Set(servedSubdomains)).sort();
   if (next.length === cur.length && next.every((s, i) => s === cur[i])) return false;
   const added = next.filter((s) => !cur.includes(s));
   const removed = cur.filter((s) => !next.includes(s));
+  if (next.length === 0) {
+    servedSubdomains = [];
+    if (keepaliveTimer) {
+      clearTimeout(keepaliveTimer);
+      keepaliveTimer = null;
+    }
+    const running = child;
+    child = null;
+    try {
+      running?.kill();
+    } catch {
+      /* already gone */
+    }
+    if (filterServer) {
+      try {
+        filterServer.close();
+      } catch {
+        /* already closed */
+      }
+      filterServer = null;
+    }
+    if (healthTimer) {
+      clearInterval(healthTimer);
+      healthTimer = null;
+    }
+    spawnConfPath = null;
+    log(`FridayTunnel entered standby (-${removed.length}); frpc stopped, no public proxy`);
+    return true;
+  }
+
+  // Entitlement exists: only now pay the download/process/listener cost and expose the allowlisted
+  // Friday surface. Serialisation prevents overlapping long-poll responses from double-spawning.
+  try {
+    await ensureBinary(log);
+    if (!filterServer) filterServer = startFilterProxy(filterPort(cfg.corePort), cfg.corePort, log);
+  } catch (e) {
+    log(
+      `FridayTunnel activation preparation failed: ${e instanceof Error ? e.message : String(e)}`,
+    );
+    return false;
+  }
   servedSubdomains = next;
-  rewriteConfigForServed(cfg);
-  log(
-    `served subdomains changed (+${added.length}/-${removed.length}) — restarting frpc to re-register`,
-  );
-  if (child) child.kill(); // keepalive respawns from the rewritten config
+  const confPath = rewriteConfigForServed(cfg);
+  log(`FridayTunnel desired set changed (+${added.length}/-${removed.length}); activating relay`);
+  if (child) {
+    child.kill(); // exit handler respawns from the rewritten config
+  } else {
+    killOrphanFrpc(confPath, log);
+    spawnFrpc(confPath, log);
+  }
+  startTunnelHealthWatchdog(`https://${baseTunnel.cn}`, cfg, log);
   return true;
 }
 
-/** Poll the control plane for the per-Apple-ID subdomains this gateway should serve (D31), and
- * reconcile the frpc proxy set. Idempotent; one timer per process. Best-effort — a control-plane
- * outage just leaves the current set running. */
+/** Canonical normalization for the control-plane-authoritative proxy set. Exported so tests
+ * exercise the exact production decision instead of maintaining a look-alike implementation. */
+export function normalizedServedSubdomains(desired: string[]): string[] {
+  return Array.from(new Set(desired.filter(Boolean))).sort();
+}
+
+/** Telegram-style held HTTP standby: register the gateway's stable identity + public-key pin,
+ * then wait for desired-set revisions. The endpoint carries no messages or remote commands. */
 function startGatewaySubdomainPoll(cfg: PublicAccessConfig, log: Logger): void {
-  if (subdomainPollTimer) return;
+  if (standbyPollRunning || subdomainPollTimer) return;
+  standbyPollRunning = true;
   const gatewayKey = createHash("sha256")
     .update(cfg.authToken || "")
     .digest("hex");
-  const url = `${cfg.controlPlaneUrl.replace(/\/$/, "")}/v1/gateway/subdomains`;
+  const base = cfg.controlPlaneUrl.replace(/\/$/, "");
+  const standbyUrl = `${base}/v1/gateway/standby`;
+  const legacyUrl = `${base}/v1/gateway/subdomains`;
+  const schedule = (delayMs: number): void => {
+    if (stopped) {
+      standbyPollRunning = false;
+      return;
+    }
+    subdomainPollTimer = setTimeout(() => {
+      subdomainPollTimer = null;
+      void poll();
+    }, delayMs);
+    subdomainPollTimer.unref?.();
+  };
   const poll = async (): Promise<void> => {
-    if (stopped) return;
+    if (stopped || !baseTunnel) {
+      standbyPollRunning = false;
+      return;
+    }
+    let retryDelay = STANDBY_NEXT_POLL_MS;
     try {
-      const res = await fetch(url, {
+      let res = await fetch(standbyUrl, {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ gatewayKey }),
-        signal: AbortSignal.timeout(10_000),
+        body: JSON.stringify({
+          gatewayKey,
+          subdomain: baseTunnel.sub,
+          publicKeyPin: gatewayPublicKeyPin(),
+          revision: standbyRevision,
+          waitSec: STANDBY_WAIT_SEC,
+        }),
+        signal: AbortSignal.timeout((STANDBY_WAIT_SEC + 10) * 1_000),
       });
-      if (!res.ok) return;
-      const data = (await res.json()) as { subdomains?: unknown };
+      // Rolling deployment compatibility: old control planes know only the immediate endpoint.
+      if (res.status === 404) {
+        res = await fetch(legacyUrl, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ gatewayKey }),
+          signal: AbortSignal.timeout(10_000),
+        });
+        retryDelay = 30_000;
+      }
+      if (!res.ok) {
+        retryDelay = STANDBY_ERROR_RETRY_MS;
+        return;
+      }
+      const data = (await res.json()) as { subdomains?: unknown; revision?: unknown };
       const subs = Array.isArray(data.subdomains)
         ? data.subdomains.filter((s): s is string => typeof s === "string")
         : [];
-      reconcileServedSubdomains(cfg, subs, log);
+      if (typeof data.revision === "string") standbyRevision = data.revision;
+      tunnelTransition = tunnelTransition
+        .catch(() => undefined)
+        .then(() => reconcileServedSubdomains(cfg, subs, log).then(() => undefined));
+      await tunnelTransition;
     } catch {
-      /* control plane unreachable — keep current set */
+      // Fail-open for an already-authorized live tunnel during a short CP outage; entitlement
+      // expiry is still enforced independently by frps. Standby simply retries with backoff.
+      retryDelay = STANDBY_ERROR_RETRY_MS;
+    } finally {
+      schedule(retryDelay);
     }
   };
-  const timer = setInterval(() => void poll(), SUBDOMAIN_POLL_INTERVAL_MS);
-  timer.unref?.();
-  subdomainPollTimer = timer;
-  void poll(); // fire once now so a newly-granted Apple ID comes up within seconds, not 5 min
+  void poll();
 }
 
 export function stopPublicAccess(): void {
@@ -924,9 +1097,12 @@ export function stopPublicAccess(): void {
     certRenewalTimer = null;
   }
   if (subdomainPollTimer) {
-    clearInterval(subdomainPollTimer);
+    clearTimeout(subdomainPollTimer);
     subdomainPollTimer = null;
   }
+  standbyPollRunning = false;
+  standbyRevision = "";
+  tunnelTransition = Promise.resolve();
   baseTunnel = null;
   servedSubdomains = [];
   spawnConfPath = null;

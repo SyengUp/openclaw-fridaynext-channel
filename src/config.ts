@@ -29,6 +29,8 @@ export type AppAttestConfigResolved = {
 
 /** Public access (FridayNext 云) — resolved from `channels.friday-next.publicAccess`. */
 export type PublicAccessConfigResolved = {
+  /** Emergency/operator hard stop. Normal installs are enabled and remain in control-plane
+   * standby even when no tunnel entitlement exists. */
   enabled: boolean;
   relayAddr: string;
   relayToken: string;
@@ -91,9 +93,11 @@ export function resolveFridayNextConfig(cfg: unknown): FridayNextConfig {
     sseKeepaliveSec: asNumber(sse.keepaliveSec, 30, 5, 120),
     sseBacklogPerDevice: asNumber(sse.backlogPerDevice, 200, 0, 1000),
     publicAccess: {
-      // Default OFF: only tunnels when explicitly enabled in config, so a published plugin never
-      // auto-routes a stranger's gateway to our relay. The bare-test gateway sets enabled=true.
-      enabled: asBool(pa.enabled, false),
+      // Default ON means CONTROL-PLANE STANDBY, not a public tunnel. frpc is only spawned after
+      // the control plane returns an entitled subdomain. An explicit legacy `enabled:false`, or
+      // the clearer `standbyDisabled:true`, remains an operator-only hard stop for incident
+      // response / zero-egress deployments; neither is a normal product state.
+      enabled: asBool(pa.enabled, true) && !asBool(pa.standbyDisabled, false),
       // Both OPTIONAL overrides. Left empty, the gateway fetches the relay address and shared
       // token from the control plane at bring-up (and caches them under the public-access data
       // dir) — so the token isn't copied into every user's config file, and a relay move needs
@@ -110,7 +114,7 @@ export function resolveFridayNextConfig(cfg: unknown): FridayNextConfig {
     appAttest: {
       // Default ON, but the gate is PUBLIC-SCOPED (only enforced on requests the
       // filter proxy marks as arriving via the relay — see server.ts isPublicRequest).
-      // So this default is safe: with public access off there's no marker and the gate
+      // So this default is safe: with the tunnel inactive there's no marker and the gate
       // never fires (LAN untouched); with public access on, the public URL is
       // automatically app-only. Set false to opt out even on the public surface.
       required: asBool(aa.required, true),

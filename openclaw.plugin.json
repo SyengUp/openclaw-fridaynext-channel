@@ -1,12 +1,8 @@
 {
   "id": "friday-next",
-  "channels": [
-    "friday-next"
-  ],
+  "channels": ["friday-next"],
   "contracts": {
-    "gatewayMethodDispatch": [
-      "authenticated-request"
-    ]
+    "gatewayMethodDispatch": ["authenticated-request"]
   },
   "configSchema": {
     "type": "object",
@@ -40,12 +36,7 @@
           },
           "logLevel": {
             "type": "string",
-            "enum": [
-              "debug",
-              "info",
-              "warn",
-              "error"
-            ]
+            "enum": ["debug", "info", "warn", "error"]
           },
           "authToken": {
             "type": "string"
@@ -56,6 +47,10 @@
             "properties": {
               "enabled": {
                 "type": "boolean"
+              },
+              "standbyDisabled": {
+                "type": "boolean",
+                "description": "Operator-only hard stop: disable FridayTunnel standby and all official control-plane traffic"
               },
               "allowOrigin": {
                 "type": "string"
@@ -142,8 +137,6 @@
     }
   },
   "channelEnvVars": {
-    "friday-next": [
-      "FRIDAY_NEXT_AUTH_TOKEN"
-    ]
+    "friday-next": ["FRIDAY_NEXT_AUTH_TOKEN"]
   }
 }

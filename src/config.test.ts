@@ -7,6 +7,20 @@ describe("resolveFridayNextConfig", () => {
     expect(cfg.channelId).toBe("friday-next");
     expect(cfg.logLevel).toBe("info");
     expect(cfg.sseKeepaliveSec).toBe(30);
+    expect(cfg.publicAccess.enabled).toBe(true);
+  });
+
+  it("keeps an operator-only hard stop for zero-egress deployments", () => {
+    expect(
+      resolveFridayNextConfig({
+        channels: { "friday-next": { publicAccess: { standbyDisabled: true } } },
+      }).publicAccess.enabled,
+    ).toBe(false);
+    expect(
+      resolveFridayNextConfig({
+        channels: { "friday-next": { publicAccess: { enabled: false } } },
+      }).publicAccess.enabled,
+    ).toBe(false);
   });
 
   it("prefers gateway auth token over channel token", () => {

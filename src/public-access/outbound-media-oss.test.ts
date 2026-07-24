@@ -138,7 +138,7 @@ describe("encryptOutboundBufferToFnoss per-device gating", () => {
       controlPlaneUrl: "http://cp.test",
       authToken: "gw-token",
     });
-    setMockRuntime({ historyDir }); // publicAccess off
+    setMockRuntime({ historyDir, publicAccessEnabled: false }); // operator hard stop
     expect(resolveOssOutboundConfig()).toBeNull();
   });
 });

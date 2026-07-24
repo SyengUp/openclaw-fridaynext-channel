@@ -8,7 +8,9 @@ import { resolveRelayCredentials } from "./frpc-manager.js";
 // into every user's openclaw.json — the gateway resolves them at bring-up. These tests pin the
 // precedence (config override > control plane > disk cache) and the fail-closed behaviour.
 
-const DATA_DIR = join(homedir(), ".openclaw", "friday-next", "public-access");
+const DATA_DIR =
+  process.env.FRIDAY_NEXT_PUBLIC_ACCESS_DATA_DIR?.trim() ||
+  join(homedir(), ".openclaw", "friday-next", "public-access");
 const CACHE = join(DATA_DIR, "relay-bootstrap.json");
 
 const baseCfg = {

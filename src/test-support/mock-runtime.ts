@@ -63,10 +63,10 @@ export function setMockRuntime(opts: MockRuntimeOptions = {}): void {
           keepaliveSec: opts.sseKeepaliveSec ?? 30,
           backlogPerDevice: opts.sseBacklogPerDevice ?? 200,
         },
-        ...(opts.publicAccessEnabled
+        ...(opts.publicAccessEnabled !== undefined
           ? {
               publicAccess: {
-                enabled: true,
+                enabled: opts.publicAccessEnabled,
                 ...(opts.controlPlaneUrl ? { controlPlaneUrl: opts.controlPlaneUrl } : {}),
               },
             }

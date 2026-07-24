@@ -87,7 +87,8 @@ function coerceCommandOutput(result: unknown): string {
   if (result && typeof result === "object") {
     const r = result as Record<string, unknown>;
     for (const key of ["output", "stdout", "text"]) {
-      if (typeof r[key] === "string") return r[key] as string;
+      const value = r[key];
+      if (typeof value === "string") return value;
     }
     try {
       return JSON.stringify(result);
@@ -95,7 +96,15 @@ function coerceCommandOutput(result: unknown): string {
       return "";
     }
   }
-  return result == null ? "" : String(result);
+  if (
+    typeof result === "number" ||
+    typeof result === "boolean" ||
+    typeof result === "bigint" ||
+    typeof result === "symbol"
+  ) {
+    return String(result);
+  }
+  return "";
 }
 
 function shouldForwardToolEventToFriday(ctx: PluginHookToolContext): boolean {
@@ -131,8 +140,8 @@ export default defineChannelPluginEntry({
       lastApiRoutesRegistered = new WeakRef(api);
       registerFridayNextHttpRoutes(api);
 
-      // Public access (FridayNext 云): bring up the frpc tunnel if enabled. Idempotent — a stale
-      // frpc from a prior plugin reload is killed before respawn. Inert when disabled.
+      // FridayTunnel: enter control-plane standby by default. frpc is spawned only after an
+      // entitled desired set arrives; explicit operator hard-disable keeps this fully inert.
       try {
         const paCfg = resolveFridayNextConfig(
           getHostOpenClawConfigSnapshot(getFridayNextRuntime().config),

@@ -25,8 +25,8 @@ function json(res: ServerResponse, code: number, obj: unknown): void {
  * NOT in the response: `pair/claim` is its only exit (D12's whole point — no
  * pairing artifact that re-surfaces the permanent credential in logs/captures);
  * install.js gates on the plugin version, so every builder that reaches this
- * endpoint understands vouchers. 503 when public access is disabled or the
- * tunnel has not come up yet (`getPairingInfo()` still null).
+ * endpoint understands vouchers. Pairing coordinates are available in standby; 503 therefore
+ * means only that standby was operator-disabled or identity preparation has not completed.
  */
 export async function handlePublicAccessPairing(
   req: IncomingMessage,
@@ -45,8 +45,7 @@ export async function handlePublicAccessPairing(
   if (!pairing) {
     json(res, 503, {
       error: "public access not available",
-      detail:
-        "channels.friday-next.publicAccess.enabled is false, or the tunnel has not come up yet",
+      detail: "FridayTunnel standby is disabled, or gateway identity preparation is incomplete",
     });
     return true;
   }
@@ -93,7 +92,7 @@ function readBody(req: IncomingMessage, limit = 8_192): Promise<string> {
   return new Promise((resolve) => {
     let b = "";
     req.on("data", (c: Buffer) => {
-      b += c;
+      b += c.toString("utf8");
       if (b.length > limit) req.destroy();
     });
     req.on("end", () => resolve(b));

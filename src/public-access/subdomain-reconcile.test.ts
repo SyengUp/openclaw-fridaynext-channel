@@ -1,11 +1,12 @@
 import { describe, expect, it } from "vitest";
+import { normalizedServedSubdomains } from "./frpc-manager.js";
 
-// D31 reconcile is a pure set-diff over the served subdomains: base is always retained, the
-// control-plane list adds/removes per-Apple-ID subdomains, and an unchanged set is a no-op
+// D31 reconcile is a pure set-diff over the served subdomains: the control-plane list is
+// authoritative (including empty), and an unchanged set is a no-op
 // (no frpc restart). We test that decision logic in isolation — the same computation
 // reconcileServedSubdomains performs before deciding whether to rewrite + restart.
-function decideReconcile(baseSub: string, current: string[], desired: string[]) {
-  const next = Array.from(new Set([baseSub, ...desired.filter(Boolean)])).sort();
+function decideReconcile(current: string[], desired: string[]) {
+  const next = normalizedServedSubdomains(desired);
   const cur = Array.from(new Set(current)).sort();
   const changed = !(next.length === cur.length && next.every((s, i) => s === cur[i]));
   return {
@@ -17,40 +18,41 @@ function decideReconcile(baseSub: string, current: string[], desired: string[]) 
 }
 
 describe("D31 served-subdomain reconcile", () => {
-  it("base subdomain is always retained even if the poll omits it", () => {
-    const r = decideReconcile("fnbase", ["fnbase"], []);
-    expect(r.next).toEqual(["fnbase"]);
-    expect(r.changed).toBe(false);
+  it("removes the base subdomain when the entitlement list becomes empty", () => {
+    const r = decideReconcile(["fnbase"], []);
+    expect(r.next).toEqual([]);
+    expect(r.removed).toEqual(["fnbase"]);
+    expect(r.changed).toBe(true);
   });
 
   it("adds a newly-granted Apple ID subdomain", () => {
-    const r = decideReconcile("fnbase", ["fnbase"], ["fnbase", "fnalice"]);
+    const r = decideReconcile(["fnbase"], ["fnbase", "fnalice"]);
     expect(r.changed).toBe(true);
     expect(r.added).toEqual(["fnalice"]);
     expect(r.removed).toEqual([]);
     expect(r.next).toEqual(["fnalice", "fnbase"]);
   });
 
-  it("removes a subdomain whose grant lapsed (never the base)", () => {
-    const r = decideReconcile("fnbase", ["fnbase", "fnalice"], ["fnbase"]);
+  it("removes a subdomain whose grant lapsed", () => {
+    const r = decideReconcile(["fnbase", "fnalice"], ["fnbase"]);
     expect(r.changed).toBe(true);
     expect(r.removed).toEqual(["fnalice"]);
   });
 
-  it("dropping the base from the desired list still keeps it served", () => {
-    const r = decideReconcile("fnbase", ["fnbase", "fnalice"], ["fnalice"]);
-    expect(r.next).toContain("fnbase");
-    expect(r.next).toContain("fnalice");
-    expect(r.changed).toBe(false);
+  it("can drop the base while retaining another entitled Apple-ID subdomain", () => {
+    const r = decideReconcile(["fnbase", "fnalice"], ["fnalice"]);
+    expect(r.next).toEqual(["fnalice"]);
+    expect(r.removed).toEqual(["fnbase"]);
+    expect(r.changed).toBe(true);
   });
 
   it("identical set (order/dupes aside) is a no-op — no frpc restart", () => {
-    const r = decideReconcile("fnbase", ["fnbase", "fnalice"], ["fnalice", "fnalice", "fnbase"]);
+    const r = decideReconcile(["fnbase", "fnalice"], ["fnalice", "fnalice", "fnbase"]);
     expect(r.changed).toBe(false);
   });
 
   it("simultaneous add + remove", () => {
-    const r = decideReconcile("fnbase", ["fnbase", "fnalice"], ["fnbase", "fnbob"]);
+    const r = decideReconcile(["fnbase", "fnalice"], ["fnbase", "fnbob"]);
     expect(r.changed).toBe(true);
     expect(r.added).toEqual(["fnbob"]);
     expect(r.removed).toEqual(["fnalice"]);
