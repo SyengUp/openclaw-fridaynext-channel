@@ -41,6 +41,23 @@ Environment=APPLE_ROOT_CA_FILES=/opt/gw-alloc/apple-roots/AppleRootCA-G2.cer:/op
 
 Both Apple endpoints fail closed with `503 apple_verifier_not_configured` when roots are absent.
 
+The public control-plane locations must not write Nginx access logs. Subscription, entitlement,
+App Attest and security events already have a purpose-built audit trail; duplicating request IPs,
+paths and user agents in the generic web access log is unnecessary.
+
+```nginx
+location /gw-alloc/ {
+    access_log off;
+    proxy_pass http://127.0.0.1:7001/;
+}
+
+location /v1/ {
+    access_log off;
+    limit_req zone=fncp burst=20 nodelay;
+    proxy_pass http://127.0.0.1:7003;
+}
+```
+
 Create an App Store Connect **In-App Purchase** key (Users and Access → Integrations → In-App
 Purchase), download its `.p8` once, and install it outside the repository with mode `0600`. Add a
 root-only systemd drop-in:

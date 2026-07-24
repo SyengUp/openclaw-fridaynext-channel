@@ -1850,7 +1850,6 @@ const cpServer = http.createServer(async (req, res) => {
   // GW_RELAY_BOOTSTRAP=0 is an emergency provisioning stop, not the paid-launch switch.
   if (p === "/v1/relay/bootstrap") {
     if (process.env.GW_RELAY_BOOTSTRAP === "0") return j(404, { error: "not found" });
-    console.log(`[bootstrap] relay credentials served → ${req.socket.remoteAddress ?? "?"}`);
     return j(200, { relayAddr: FRPS_ADDR, relayToken: TOKEN, subDomainHost: SUBDOMAIN_HOST });
   }
 
