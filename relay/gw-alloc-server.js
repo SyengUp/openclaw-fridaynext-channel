@@ -31,10 +31,9 @@
  *   • activate CLAIMS the gateway's already-allocated subdomain (registry check)
  *     instead of minting one — production tunnels are created by the plugin at
  *     install, the control plane only overlays entitlement/grants on them.
- *   • one-time pairing bootstrap: first activation gets a short-lived tunnel
- *     entitlement (30 minutes by default) so pairing/health checks can finish.
- *     The actual free trial is an App Store introductory offer and arrives as a
- *     cryptographically verified Apple transaction.
+ *   • pairing is LAN-only and creates no relay entitlement. The gateway registers a
+ *     dormant identity with the control plane; a cryptographically verified Apple
+ *     transaction can activate it later, including while the phone is away from home.
  *   • ops: /v1/admin/* (bearer) — revoke / killswitch / state / backup; /v1/healthz.
  *     Revocations and the killswitch feed the frps NewProxy gate directly (same
  *     process, shared memory) and take effect at the next proxy (re)registration.
@@ -61,6 +60,7 @@ const DATA_DIR = process.env.GW_ALLOC_DATA_DIR || "/opt/gw-alloc";
 const DATA = path.join(DATA_DIR, "registry.json");
 const CP_STATE = path.join(DATA_DIR, "cp-state.json");
 const TMP = path.join(DATA_DIR, "tmp");
+const FRPC_ASSET_DIR = process.env.FRIDAY_FRPC_ASSET_DIR || path.join(DATA_DIR, "frpc-assets");
 const WEBROOT = "/var/www/acme";
 const SUBDOMAIN_HOST = process.env.GW_SUBDOMAIN_HOST || "bj.gw.syengup.host";
 // Public frps endpoint handed to installers by /v1/relay/bootstrap (matches the plugin's
@@ -106,14 +106,11 @@ function tokenEqual(presented, expected) {
 const BW_LIMIT = process.env.GW_TUNNEL_BW || "4MB";
 
 // ——— control-plane policy knobs (documented in docs/public-access-contract.md) ———
-// Pairing gets only enough temporary entitlement to complete setup and verify the relay. The
-// customer-facing free trial is exclusively Apple's introductory offer, never a server timer.
-const BOOTSTRAP_ENABLED = process.env.CP_BOOTSTRAP_ENABLED !== "0";
-const configuredBootstrapTtlSec = Number(process.env.CP_BOOTSTRAP_TTL_SEC || 30 * 60);
-const BOOTSTRAP_TTL_MS =
-  Number.isFinite(configuredBootstrapTtlSec) && configuredBootstrapTtlSec > 0
-    ? Math.min(configuredBootstrapTtlSec, 24 * 60 * 60) * 1000
-    : 30 * 60_000;
+// Pairing and relay permission are separate. New pairings never manufacture a public-access
+// entitlement; only Apple's subscription/introductory offer may open a relay grant. This ceiling
+// remains solely to retire old `server-trial` rows during the paid-only rollout. Stale
+// CP_BOOTSTRAP_* environment variables are intentionally ignored.
+const LEGACY_SERVER_TRIAL_CLAMP_MS = 30 * 60_000;
 // Require a VERIFIED App Attest on activate. 0 during free test (simulator/dev tolerated,
 // invalid attestations are still rejected); flip to 1 with F.
 const ATTEST_REQUIRE = process.env.CP_ATTEST_REQUIRE === "1";
@@ -191,8 +188,7 @@ const configuredAppleReconcileLookbackSec = Number(
   process.env.APPLE_SERVER_API_RECONCILE_LOOKBACK_SEC || 24 * 60 * 60,
 );
 const APPLE_RECONCILE_LOOKBACK_MS =
-  Number.isFinite(configuredAppleReconcileLookbackSec) &&
-  configuredAppleReconcileLookbackSec > 0
+  Number.isFinite(configuredAppleReconcileLookbackSec) && configuredAppleReconcileLookbackSec > 0
     ? Math.min(30 * 24 * 60 * 60, configuredAppleReconcileLookbackSec) * 1000
     : 24 * 60 * 60_000;
 const APPLE_RECONCILE_OVERLAP_MS = 5 * 60_000;
@@ -524,7 +520,8 @@ async function verifyActivationAttest(att, gatewayId, deviceId) {
 }
 
 // ---------------------------------------------------------------------------
-// Entitlement (D8) + short pairing bootstrap.
+// Entitlement (D8). A still-live `bootstrap` row is accepted only for rolling compatibility;
+// this build never creates a new one.
 // ---------------------------------------------------------------------------
 function entitled(appAccountToken) {
   normalizeLegacyServerTrial(appAccountToken);
@@ -606,7 +603,7 @@ function normalizeLegacyServerTrial(appAccountToken) {
       ? legacyExpiry
       : Math.min(
           Number.isFinite(legacyExpiry) ? legacyExpiry : Infinity,
-          migratedAt + BOOTSTRAP_TTL_MS,
+          migratedAt + LEGACY_SERVER_TRIAL_CLAMP_MS,
         );
   s.state = expiresAt > migratedAt ? "bootstrap" : "expired";
   s.source = "pairing-bootstrap-migrated";
@@ -621,31 +618,6 @@ function normalizeLegacyServerTrial(appAccountToken) {
   cp.bootstrapHistory[appAccountToken] ||= { startedAt: migratedAt, expiresAt };
   saveCp();
   audit("trial.migrate_to_bootstrap", { appAccountToken, expiresAt, grantsClamped });
-}
-
-/** Seed the one-time pairing bootstrap. This is called only by tunnel activation: verifying a
- * subscription, renewing a grant or signing an attachment can never manufacture entitlement. */
-function ensureBootstrapEntitlement(appAccountToken) {
-  if (!appAccountToken) return;
-  normalizeLegacyServerTrial(appAccountToken);
-  if (
-    !BOOTSTRAP_ENABLED ||
-    cp.subs[appAccountToken] ||
-    cp.bootstrapHistory[appAccountToken]
-  ) {
-    return;
-  }
-  const startedAt = now();
-  const expiresAt = startedAt + BOOTSTRAP_TTL_MS;
-  cp.subs[appAccountToken] = {
-    state: "bootstrap",
-    startedAt,
-    expiresAt,
-    source: "pairing-bootstrap",
-  };
-  cp.bootstrapHistory[appAccountToken] = { startedAt, expiresAt };
-  saveCp();
-  audit("bootstrap.seed", { appAccountToken, expiresAt });
 }
 
 // Rollout migration is eager so dormant beta accounts do not keep a misleading 30-day row until
@@ -685,11 +657,7 @@ function removeAccountGrants(appAccountToken, reason) {
 
 function normalizeAppleAccountToken(value) {
   const token = String(value || "").toLowerCase();
-  if (
-    !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
-      token,
-    )
-  ) {
+  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(token)) {
     throw new Error("invalid_app_account_token");
   }
   return token;
@@ -731,11 +699,7 @@ function resolveAppleTransactionOwner(payload, claimedAppAccountToken) {
 }
 
 /** Apply a cryptographically verified App Store transaction to the anonymous entitlement row. */
-function applyAppleTransaction(
-  payload,
-  notificationType = "CLIENT_SYNC",
-  resolvedAppAccountToken,
-) {
+function applyAppleTransaction(payload, notificationType = "CLIENT_SYNC", resolvedAppAccountToken) {
   const appAccountToken = normalizeAppleAccountToken(
     resolvedAppAccountToken || payload.appAccountToken,
   );
@@ -747,8 +711,7 @@ function applyAppleTransaction(
   const expiresDate = Number(payload.expiresDate || 0);
   const offerType = Number(payload.offerType || 0);
   const environment = payload.environment || "unknown";
-  const graceMs =
-    environment === "Sandbox" ? APPLE_SANDBOX_GRACE_MS : APPLE_PRODUCTION_GRACE_MS;
+  const graceMs = environment === "Sandbox" ? APPLE_SANDBOX_GRACE_MS : APPLE_PRODUCTION_GRACE_MS;
   if (!originalTransactionId || !transactionId || !Number.isFinite(signedDate) || !signedDate) {
     throw new Error("invalid_transaction_identity");
   }
@@ -929,9 +892,7 @@ function recordAppleRefundOutcome(result, source) {
   }
   const history = appleRefundHistory(result.appAccountToken);
   const field =
-    result.notificationType === "REFUND"
-      ? "approvedTransactionIds"
-      : "declinedTransactionIds";
+    result.notificationType === "REFUND" ? "approvedTransactionIds" : "declinedTransactionIds";
   const updated = appendUniqueBounded(history[field], result.transactionId);
   if (updated === history[field]) return;
   history[field] = updated;
@@ -973,9 +934,7 @@ function appleRefundConsumptionDecision(result) {
 
   const history = appleRefundHistory(appAccountToken);
   const priorApprovedRefunds = history.approvedTransactionIds.length;
-  const operatorOverride = String(
-    process.env.APPLE_PRODUCTION_REFUND_PREFERENCE || "",
-  ).trim();
+  const operatorOverride = String(process.env.APPLE_PRODUCTION_REFUND_PREFERENCE || "").trim();
 
   if (APPLE_REFUND_PREFERENCES.has(operatorOverride)) {
     return {
@@ -1095,11 +1054,7 @@ async function respondToAppleConsumptionRequest(result, source) {
   if (decision.refundPreference) body.refundPreference = decision.refundPreference;
   if (notificationUUID) appleConsumptionResponsesInFlight.add(notificationUUID);
   try {
-    await appleServerAPI.sendConsumptionInformation(
-      result.environment,
-      result.transactionId,
-      body,
-    );
+    await appleServerAPI.sendConsumptionInformation(result.environment, result.transactionId, body);
     recordAppleConsumptionResponse(result, decision);
     audit("apple.consumption_response_accepted", {
       source,
@@ -1853,6 +1808,38 @@ const cpServer = http.createServer(async (req, res) => {
     return j(200, { relayAddr: FRPS_ADDR, relayToken: TOKEN, subDomainHost: SUBDOMAIN_HOST });
   }
 
+  // —— pinned frpc release cache (no auth; immutable public upstream artifact) ——
+  // Mainland cloud hosts frequently cannot reach GitHub Releases. Gateways fetch the official
+  // archive from this operator-controlled cache first and verify it against a checksum pinned in
+  // the plugin; GitHub remains their fallback. Exact path validation prevents traversal and keeps
+  // this endpoint from becoming a generic file server.
+  const frpcAssetMatch = p.match(
+    /^\/v1\/frpc\/(v\d+\.\d+\.\d+)\/(frp_\d+\.\d+\.\d+_(?:darwin|linux)_(?:amd64|arm64)\.tar\.gz)$/,
+  );
+  if (req.method === "GET" && frpcAssetMatch) {
+    const [, version, filename] = frpcAssetMatch;
+    const assetPath = path.join(FRPC_ASSET_DIR, version, filename);
+    let stat;
+    try {
+      stat = fs.statSync(assetPath);
+    } catch {
+      return j(404, { error: "frpc_asset_not_found" });
+    }
+    if (!stat.isFile()) return j(404, { error: "frpc_asset_not_found" });
+    res.writeHead(200, {
+      "content-type": "application/gzip",
+      "content-length": stat.size,
+      "cache-control": "public, max-age=31536000, immutable",
+    });
+    fs.createReadStream(assetPath)
+      .on("error", () => {
+        if (!res.headersSent) j(500, { error: "frpc_asset_read_failed" });
+        else res.destroy();
+      })
+      .pipe(res);
+    return;
+  }
+
   const auth = req.headers.authorization || "";
   const bearer = auth.startsWith("Bearer ") ? auth.slice(7) : "";
   // Admin surfaces take ONLY the operator token — never GW_ALLOC_TOKEN, which every user
@@ -1979,10 +1966,7 @@ const cpServer = http.createServer(async (req, res) => {
     try {
       return j(
         200,
-        await appleServerAPI.getTestNotificationStatus(
-          b.environment,
-          b.testNotificationToken,
-        ),
+        await appleServerAPI.getTestNotificationStatus(b.environment, b.testNotificationToken),
       );
     } catch (error) {
       return j(502, {
@@ -2121,7 +2105,6 @@ const cpServer = http.createServer(async (req, res) => {
       return j(403, { error: "attest_rejected", hint: att.reason });
     }
 
-    ensureBootstrapEntitlement(appAccountToken);
     if (!entitled(appAccountToken)) {
       return j(402, { error: "no_entitlement", hint: "需有效订阅" });
     }
@@ -2191,10 +2174,7 @@ const cpServer = http.createServer(async (req, res) => {
       saveCp();
     }
     const grantId = issueGrant(appAccountToken, tunnelId, deviceId || "", att.verified);
-    const grantTtlSec = Math.max(
-      0,
-      Math.ceil((cp.grants[grantId].expiresAt - now()) / 1000),
-    );
+    const grantTtlSec = Math.max(0, Math.ceil((cp.grants[grantId].expiresAt - now()) / 1000));
     audit("activate", { appAccountToken, subdomain: sub, grantId, attest: att.reason });
     return j(200, {
       tunnelId,
@@ -2253,11 +2233,7 @@ const cpServer = http.createServer(async (req, res) => {
           attestation.reason === "unknown_key" ? "unknown_key" : attestation.reason;
         throw error;
       }
-      const applied = applyAppleTransaction(
-        payload,
-        "CLIENT_SYNC",
-        ownership.appAccountToken,
-      );
+      const applied = applyAppleTransaction(payload, "CLIENT_SYNC", ownership.appAccountToken);
       if (ownership.firstBind) {
         audit("apple.offer_code_bound", {
           appAccountToken: ownership.appAccountToken,
@@ -2330,10 +2306,9 @@ const cpServer = http.createServer(async (req, res) => {
       return j(200, await processAppleSignedNotification(b.signedPayload, "webhook"));
     } catch (error) {
       audit("apple.notification_rejected", { reason: error.message || String(error) });
-      return j(
-        error?.name === "AppleServerAPIError" ? 502 : 403,
-        { error: "apple_notification_rejected" },
-      );
+      return j(error?.name === "AppleServerAPIError" ? 502 : 403, {
+        error: "apple_notification_rejected",
+      });
     }
   }
 
@@ -2341,7 +2316,7 @@ const cpServer = http.createServer(async (req, res) => {
 });
 cpServer.listen(CP_PORT, HOST, () =>
   console.log(
-    `gw-alloc (control-plane) on ${HOST}:${CP_PORT} bootstrap=${BOOTSTRAP_ENABLED} bootstrapTtlSec=${BOOTSTRAP_TTL_MS / 1000} attestRequire=${ATTEST_REQUIRE} enforceGrants=${ENFORCE_GRANTS}`,
+    `gw-alloc (control-plane) on ${HOST}:${CP_PORT} pairingBootstrap=disabled attestRequire=${ATTEST_REQUIRE} enforceGrants=${ENFORCE_GRANTS}`,
   ),
 );
 
@@ -2356,9 +2331,6 @@ if (appleServerAPI && APPLE_RECONCILE_INTERVAL_MS) {
     Math.min(15_000, APPLE_RECONCILE_INTERVAL_MS),
   );
   initialReconcile.unref?.();
-  const reconcileTimer = setInterval(
-    runScheduledAppleReconciliation,
-    APPLE_RECONCILE_INTERVAL_MS,
-  );
+  const reconcileTimer = setInterval(runScheduledAppleReconciliation, APPLE_RECONCILE_INTERVAL_MS);
   reconcileTimer.unref?.();
 }

@@ -21,6 +21,9 @@ const ALLOC = 17001,
 const TOKEN = "test-bearer-token"; // GW_ALLOC_TOKEN (allocate/sign + frps token, semi-public)
 const ADMIN = "test-admin-token"; // GW_ALLOC_ADMIN_TOKEN (operator-only admin)
 const dataDir = mkdtempSync(join(tmpdir(), "gwalloc-test-"));
+const frpcFixtureDir = join(dataDir, "frpc-assets", "v0.69.1");
+mkdirSync(frpcFixtureDir, { recursive: true });
+writeFileSync(join(frpcFixtureDir, "frp_0.69.1_linux_amd64.tar.gz"), "frpc-fixture");
 
 // Local Apple-shaped trust chain + ES256 signer. Production uses Apple PKI roots; this generated
 // chain exercises the exact x5c/OID/signature/bundle/product/account path without network access.
@@ -201,7 +204,8 @@ function startServer(extraEnv = {}) {
       CP_BOOTSTRAP_ENABLED: "1",
       CP_BOOTSTRAP_TTL_SEC: "1800",
       OSS_MOCK_BASE: "http://127.0.0.1:17999",
-      OSS_CAP_TRIAL: String(1024), // 1KB trial cap → easy quota test
+      OSS_CAP_TRIAL: String(1024),
+      OSS_CAP_PAID: String(1024), // 1KB fixture caps → easy quota tests for either entitlement
       APPLE_ROOT_CA_FILES: appleRootPem,
       APPLE_AVAILABLE_STOREFRONTS: "chn, USA,CHN,invalid",
       APPLE_SERVER_API_ISSUER_ID: "test-issuer",
@@ -270,11 +274,40 @@ const U1 = "aat-user-1",
   U2 = "aat-user-2";
 const DEV = "device-abc";
 
+// Structural activation tests need durable entitlements, but must not depend on the pairing path
+// manufacturing one. Seed explicit paid-like fixtures before the first server boot; StoreKit's
+// signed transaction state machine is exercised independently below.
+const fixtureEntitledAccounts = [U1, U2, "aat-owner-x", "aat-d1", "aat-d2", "aat-standby-owner"];
+writeFileSync(
+  join(dataDir, "cp-state.json"),
+  JSON.stringify({
+    subs: Object.fromEntries(
+      fixtureEntitledAccounts.map((account) => [
+        account,
+        {
+          state: "active",
+          source: "test-fixture",
+          expiresAt: Date.now() + 365 * 86_400_000,
+        },
+      ]),
+    ),
+  }),
+);
+
 try {
   await startServer();
   console.log("— 基础 —");
   let r = await req(CP, "/v1/healthz", { method: "GET" });
   check("healthz", r.status === 200 && r.json.ok === true && r.json.killswitch === false);
+  const frpcAsset = await fetch(
+    `http://127.0.0.1:${CP}/v1/frpc/v0.69.1/frp_0.69.1_linux_amd64.tar.gz`,
+  );
+  check(
+    "frpc 国内缓存免鉴权且 immutable",
+    frpcAsset.status === 200 &&
+      (await frpcAsset.text()) === "frpc-fixture" &&
+      frpcAsset.headers.get("cache-control")?.includes("immutable"),
+  );
 
   // 安装器引导:无 bearer 就能拿到 frps 地址+共用 token(邀请制 beta 的有意选择),
   // 且必须能被 GW_RELAY_BOOTSTRAP=0 关掉——那是 P5 的闸门,不需要重发安装器。
@@ -330,10 +363,10 @@ try {
   );
   check("publicUrl 正确", r.json?.publicUrl === `https://${SUB}.bj.gw.syengup.host`);
   check(
-    "bootstrap grant 按短时权益签发",
+    "付费权益签发 30 天滑动 grant",
     typeof r.json?.grantId === "string" &&
-      r.json.grantTtlSec > 1700 &&
-      r.json.grantTtlSec <= 1800,
+      r.json.grantTtlSec > 29 * 86_400 &&
+      r.json.grantTtlSec <= 30 * 86_400,
   );
   const GRANT = r.json.grantId,
     TUNNEL = r.json.tunnelId;
@@ -350,11 +383,11 @@ try {
   });
   check("FQDN subdomain 归一化 + 隧道复用", r.status === 200 && r.json.tunnelId === TUNNEL);
 
-  console.log("— 配对短时 bootstrap —");
+  console.log("— 配对不制造权益 —");
   r = await req(CP, "/v1/subscriptions/verify", { body: { appAccountToken: U1 } });
   check(
-    "首次 activate 自动种 bootstrap",
-    r.status === 200 && r.json.state === "bootstrap" && r.json.entitled === true,
+    "activate 保持既有付费状态",
+    r.status === 200 && r.json.state === "active" && r.json.entitled === true,
   );
   r = await req(CP, "/v1/subscriptions/verify", { body: { appAccountToken: "never-seen" } });
   check("未见过 token → none", r.json.state === "none" && r.json.entitled === false);
@@ -490,10 +523,10 @@ try {
   console.log("— grant 续期 —");
   r = await req(CP, "/v1/grants/renew", { body: { grantId: GRANT } });
   check(
-    "renew 不越过 bootstrap 边界",
+    "付费 grant 续期保持 30 天窗口",
     r.status === 200 &&
-      r.json.expiresAt > Date.now() + 1700_000 &&
-      r.json.expiresAt <= Date.now() + 1800_000,
+      r.json.expiresAt > Date.now() + 29 * 86_400_000 &&
+      r.json.expiresAt <= Date.now() + 30 * 86_400_000,
   );
   r = await req(CP, "/v1/grants/renew", { body: { grantId: "nope" } });
   check("未知 grant → 404", r.status === 404 && r.json.error === "grant_not_found");
@@ -670,14 +703,12 @@ try {
       ),
   );
 
-  const consumptionCountAfterFirstResponse =
-    appleAPIFixtures.Sandbox.consumptionRequests.length;
+  const consumptionCountAfterFirstResponse = appleAPIFixtures.Sandbox.consumptionRequests.length;
   r = await req(CP, "/v1/apple/webhook", { body: { signedPayload: consumptionPayload } });
   check(
     "同一 CONSUMPTION_REQUEST webhook 重放不重复调用 Apple",
     r.status === 200 &&
-      appleAPIFixtures.Sandbox.consumptionRequests.length ===
-        consumptionCountAfterFirstResponse,
+      appleAPIFixtures.Sandbox.consumptionRequests.length === consumptionCountAfterFirstResponse,
   );
 
   appleAPIFixtures.Sandbox.notifications = [{ signedPayload: consumptionPayload }];
@@ -690,8 +721,7 @@ try {
     r.status === 200 &&
       r.json.environments.Sandbox.history.processed === 1 &&
       r.json.environments.Sandbox.history.rejected === 0 &&
-      appleAPIFixtures.Sandbox.consumptionRequests.length ===
-        consumptionCountAfterFirstResponse,
+      appleAPIFixtures.Sandbox.consumptionRequests.length === consumptionCountAfterFirstResponse,
     JSON.stringify(r.json),
   );
   appleAPIFixtures.Sandbox.notifications = [];
@@ -702,8 +732,7 @@ try {
   check(
     "控制面重启后消费响应幂等记录仍有效",
     r.status === 200 &&
-      appleAPIFixtures.Sandbox.consumptionRequests.length ===
-        consumptionCountAfterFirstResponse,
+      appleAPIFixtures.Sandbox.consumptionRequests.length === consumptionCountAfterFirstResponse,
   );
 
   const secondConsumptionPayload = signAppleJWS({
@@ -910,9 +939,7 @@ try {
     "Production 已启用且已有两次退款 → 建议拒绝重复退款",
     r.status === 200 &&
       appleAPIFixtures.Production.consumptionRequests.some(
-        (item) =>
-          item.transactionId === "49401" &&
-          item.body.refundPreference === "DECLINE",
+        (item) => item.transactionId === "49401" && item.body.refundPreference === "DECLINE",
       ),
   );
 
@@ -1443,20 +1470,20 @@ try {
   });
   check("同一 nonce 重放 → 403 stale_nonce", r.status === 403 && r.json.hint === "stale_nonce");
 
-  console.log("— legacy free-test 运维端点不影响 bootstrap —");
+  console.log("— legacy free-test 运维端点不影响付费权益 —");
   r = await req(CP, "/v1/admin/free-test-clamp", {
     body: { expiresAt: Date.now() - 1000 },
     bearer: ADMIN,
   });
-  check("legacy clamp 仍需 ADMIN 且无 bootstrap 副作用", r.status === 200 && r.json.clamped === 0);
+  check("legacy clamp 仍需 ADMIN 且无付费权益副作用", r.status === 200 && r.json.clamped === 0);
   r = await req(CP, "/v1/subscriptions/verify", { body: { appAccountToken: U1 } });
-  check("bootstrap 仍 entitled", r.json.state === "bootstrap" && r.json.entitled === true);
+  check("付费权益仍 active", r.json.state === "active" && r.json.entitled === true);
 
   console.log("— 持久化(重启存活)—");
   await stopServer();
   await startServer();
   r = await req(CP, "/v1/subscriptions/verify", { body: { appAccountToken: U1 } });
-  check("重启后 bootstrap 还在", r.json.state === "bootstrap" && r.json.entitled === true);
+  check("重启后付费权益还在", r.json.state === "active" && r.json.entitled === true);
   r = await req(CP, "/v1/grants/renew", { body: { grantId: GRANT } });
   check("重启后 grant 还在可续期", r.status === 200);
   r = await gateReq({ proxy_name: "p1", proxy_type: "https", subdomain: SUB });
@@ -1483,86 +1510,50 @@ try {
       r.json.expiresAt <= Date.now() + 30 * 60_000,
   );
   r = await req(CP, "/v1/admin/state", { method: "GET", bearer: ADMIN });
-  check(
-    "迁移写入 bootstrapHistory",
-    Boolean(r.json.bootstrapHistory?.[legacyUser]),
-  );
+  check("迁移写入 bootstrapHistory", Boolean(r.json.bootstrapHistory?.[legacyUser]));
 
-  console.log("— 正式一次性短时 bootstrap（不可重领）—");
+  console.log("— 配对 bootstrap 永久退役 —");
   await stopServer();
   await startServer({
+    // Deliberately leave stale production values behind: this build must ignore them so a
+    // configuration rollback cannot silently restore free relay access.
     CP_BOOTSTRAP_ENABLED: "1",
     CP_BOOTSTRAP_TTL_SEC: "1800",
     CP_ENFORCE_GRANTS: "1",
     GW_RELAY_BOOTSTRAP: "1",
   });
-  const trialUser = "00000000-0000-4000-8000-000000000088";
-  const trialKey = "7".repeat(64);
-  const trialAlloc = await req(ALLOC, "/allocate", {
-    body: { key: trialKey },
+  const unentitledPairingUser = "00000000-0000-4000-8000-000000000088";
+  const unentitledPairingKey = "7".repeat(64);
+  const unentitledPairingAlloc = await req(ALLOC, "/allocate", {
+    body: { key: unentitledPairingKey },
     bearer: TOKEN,
   });
   r = await req(CP, "/v1/tunnels/activate", {
     body: {
       mode: "seamless",
-      gatewayId: "gw-one-time-trial",
-      appAccountToken: trialUser,
+      gatewayId: "gw-no-bootstrap",
+      appAccountToken: unentitledPairingUser,
       deviceId: DEV,
-      subdomain: trialAlloc.json.subdomain,
-      gatewayKey: trialKey,
+      subdomain: unentitledPairingAlloc.json.subdomain,
+      gatewayKey: unentitledPairingKey,
     },
   });
   check(
-    "正式态新用户自动获得一次短时 bootstrap",
-    r.status === 200 && typeof r.json.grantId === "string",
-  );
-  r = await req(CP, "/v1/subscriptions/verify", { body: { appAccountToken: trialUser } });
-  check(
-    "一次性 bootstrap 期限正确",
-    r.status === 200 &&
-      r.json.state === "bootstrap" &&
-      r.json.entitled === true &&
-      r.json.expiresAt > Date.now() + 29 * 60_000 &&
-      r.json.expiresAt <= Date.now() + 30 * 60_000,
-  );
-
-  // Simulate an expired/compacted subscription record. The durable consumed marker must block
-  // both expiration-based extension and deletion-based reseeding for the same stable token.
-  await stopServer();
-  const cpStatePath = join(dataDir, "cp-state.json");
-  const oneTimeState = JSON.parse(readFileSync(cpStatePath, "utf8"));
-  check(
-    "bootstrap 来源正确并写入持久 consumed marker",
-    oneTimeState.subs?.[trialUser]?.source === "pairing-bootstrap" &&
-      Boolean(oneTimeState.bootstrapHistory?.[trialUser]),
-  );
-  delete oneTimeState.subs[trialUser];
-  for (const [grantId, grant] of Object.entries(oneTimeState.grants)) {
-    if (grant.appAccountToken === trialUser) delete oneTimeState.grants[grantId];
-  }
-  writeFileSync(cpStatePath, JSON.stringify(oneTimeState, null, 2));
-  await startServer({
-    CP_BOOTSTRAP_ENABLED: "1",
-    CP_BOOTSTRAP_TTL_SEC: "1800",
-    CP_ENFORCE_GRANTS: "1",
-    GW_RELAY_BOOTSTRAP: "1",
-  });
-  r = await req(CP, "/v1/tunnels/activate", {
-    body: {
-      mode: "seamless",
-      gatewayId: "gw-one-time-trial",
-      appAccountToken: trialUser,
-      deviceId: DEV,
-      subdomain: trialAlloc.json.subdomain,
-      gatewayKey: trialKey,
-    },
-  });
-  check(
-    "删除订阅行后同一用户也不会重领 bootstrap",
+    "遗留 CP_BOOTSTRAP_ENABLED=1 也不能让未订阅配对激活",
     r.status === 402 && r.json.error === "no_entitlement",
   );
+  r = await req(CP, "/v1/subscriptions/verify", {
+    body: { appAccountToken: unentitledPairingUser },
+  });
+  check(
+    "未订阅配对保持 none",
+    r.status === 200 && r.json.state === "none" && r.json.entitled === false,
+  );
+  r = await req(CP, "/v1/admin/state", { method: "GET", bearer: ADMIN });
+  check("配对不会写入 bootstrapHistory", !r.json.bootstrapHistory?.[unentitledPairingUser]);
 
-  // The bootstrap can be disabled independently for an immediate paid-only posture.
+  // Relay infrastructure credential distribution is an independent operator switch. Turning it
+  // off here proves the naming collision cannot affect the paid-only entitlement policy above.
   await stopServer();
   await startServer({
     CP_BOOTSTRAP_ENABLED: "0",

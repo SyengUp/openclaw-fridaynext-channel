@@ -477,12 +477,19 @@ async function fetchPairingSuperset(url, token) {
   }
 }
 
+// Five minutes covers a full slow certificate-signing attempt, the manager's 30s retry delay,
+// and another attempt, while still returning immediately as soon as pairing coordinates exist.
+const PAIRING_WAIT_TIMEOUT_MS = 5 * 60_000;
+const PAIRING_POLL_INTERVAL_MS = 3_000;
+
 // Default QR: legacy `{url, token}` — what stable installs emit. The beta channel
 // upgrades it to the public-access superset so a scan also arms remote access.
 let qrFields = { url: gatewayUrl, token: gatewayToken };
 if (DIST_TAG === "beta") {
-  // A tunnel that was just switched on needs a few seconds after the restart to register with
-  // the relay, so poll rather than settle for a LAN-only QR on the very install that enabled it.
+  // Identity preparation can include a first-time certificate issuance. That normally finishes
+  // quickly, but the signer itself allows up to 130s and transient failures are retried after 30s.
+  // Poll conservatively so a healthy first install is not mislabeled as LAN-only just because
+  // certificate issuance was slow.
   const pairing = enabledPublicAccess
     ? await pollPairingSuperset(verifyUrl, gatewayToken)
     : await fetchPairingSuperset(verifyUrl, gatewayToken);
@@ -502,19 +509,25 @@ if (DIST_TAG === "beta") {
       pairingTicket: pairing.pairingTicket,
     };
   } else {
-    ui.note(T.noteLanOnly);
+    ui.note(enabledPublicAccess ? T.noteTunnelTimeout : T.noteLanOnly);
   }
 }
-/** Retry the pairing fetch while a freshly-enabled tunnel comes up (~30s worst case). */
+
+/** Retry the pairing fetch while a freshly-enabled FridayTunnel identity is prepared. */
 async function pollPairingSuperset(url, token) {
   const step = ui.step(T.stepTunnel);
-  for (let i = 0; i < 10; i++) {
+  step.detail(T.detailTunnelWait);
+  const deadline = Date.now() + PAIRING_WAIT_TIMEOUT_MS;
+  while (Date.now() < deadline) {
     const pairing = await fetchPairingSuperset(url, token);
-    if (pairing?.publicUrl) {
+    if (pairing?.publicUrl && pairing?.pairingTicket) {
       step.ok();
       return pairing;
     }
-    await new Promise((r) => setTimeout(r, 3000));
+    const remaining = deadline - Date.now();
+    if (remaining > 0) {
+      await new Promise((r) => setTimeout(r, Math.min(PAIRING_POLL_INTERVAL_MS, remaining)));
+    }
   }
   step.fail();
   return null;

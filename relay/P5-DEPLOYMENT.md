@@ -2,7 +2,8 @@
 
 > Current status (2026-07-23): app, plugin, Apple verifier/roots, webhook, App Attest and the
 > frps entitlement gate are implemented. FridayTunnel no longer has a server-managed 30-day
-> trial. Pairing gets a one-time short bootstrap; the customer trial is Apple's introductory offer.
+> trial or pairing bootstrap. Pairing stays on the local network; the customer trial is Apple's
+> introductory offer.
 
 ## App Store Connect
 
@@ -116,23 +117,21 @@ operator override. Leave it unset for the evidence-based policy above.
 ## Production switches
 
 ```ini
-CP_BOOTSTRAP_ENABLED=1
-CP_BOOTSTRAP_TTL_SEC=1800
 CP_ATTEST_REQUIRE=1
 CP_ENFORCE_GRANTS=1
 GW_RELAY_BOOTSTRAP=1
 GW_FRPS_RESTART=1
 ```
 
-`CP_BOOTSTRAP_ENABLED` grants a stable `appAccountToken` one pairing entitlement only.
-`bootstrapHistory` prevents deletion, reinstall or expiry from reseeding it. Grant TTL is capped at
-the bootstrap boundary. Subscription verification, grant renewal and OSS signing never create a
-bootstrap.
+`CP_BOOTSTRAP_ENABLED` and `CP_BOOTSTRAP_TTL_SEC` are retired and ignored by the server. Remove
+them from systemd when convenient; leaving stale values behind cannot reopen a pairing tunnel.
+New pairing records remain `none`/unentitled and create neither a grant nor a public proxy.
 
 On rollout, an existing `free-test` or `server-trial` row is migrated on first read: an unexpired
-row is clamped to at most the configured bootstrap TTL and an expired row remains expired. Apple
-and activation-code rows are untouched. `CP_FREE_TEST` and `CP_TRIAL_ENABLED` are obsolete and are
-not consulted by the server.
+row is clamped to at most 30 minutes and an expired row remains expired. Apple rows are untouched.
+The legacy `.bootstrap` state remains readable only so an in-flight rollout does not corrupt an
+already-issued short grant; this build never creates a new one. `CP_FREE_TEST` and
+`CP_TRIAL_ENABLED` are obsolete and are not consulted by the server.
 
 `GW_RELAY_BOOTSTRAP` is unrelated to customer trial/bootstrap state: it distributes the semi-public
 frps material needed by a gateway. The authoritative boundaries remain
@@ -145,17 +144,17 @@ frps material needed by a gateway. The authoritative boundaries remain
    eligibility: Settings → Apple Account → Media & Purchases → Sandbox Account → Manage → select
    the expired subscription → Reset Eligibility. Clearing purchase history alone is not the
    eligibility reset workflow.
-3. Pair: verify the control plane reports `bootstrap`, a grant TTL no greater than 1800 seconds,
-   and the subscription page opens immediately after onboarding.
+3. Pair on the same local network: verify the control plane remains `none`, no grant is created,
+   `/v1/gateway/standby` returns an empty desired-subdomain set, and no frpc proxy starts.
 4. Start the Apple trial: verify the signed transaction reports `offerType=1`, the control plane
-   reports `trial`, and the app shows the Apple expiry countdown plus “管理订阅”.
+   reports `trial`, the dormant gateway wakes and becomes reachable from cellular, and the app
+   shows the Apple expiry countdown plus “管理订阅”.
 5. Exercise renewal, restore, cancellation, expiry and refund. Confirm `apple.transaction` /
    `apple.notification` audit events, environment-appropriate grace, and immediate grant removal
    on refund.
 
-Emergency rollback should use the admin activation-code path or temporarily lengthen
-`CP_BOOTSTRAP_TTL_SEC` (maximum one day). Do not re-enable a server-managed 30-day trial, because it
-would restore the conversion problem this design removes.
+Do not restore a pairing bootstrap as an emergency bypass. Use an App Store entitlement fix or a
+separately audited operator grant so pairing itself never becomes public-access authorization.
 
 ## Deferred follow-ups
 

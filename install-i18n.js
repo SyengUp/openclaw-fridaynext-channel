@@ -43,6 +43,7 @@ const STRINGS = {
     detailRestartSlow: "较慢，继续校验",
     detailRestartUnconfirmed: "未确认，继续校验",
     detailRetry: (i, n) => `重试 ${i}/${n}`,
+    detailTunnelWait: "最长等待 5 分钟",
 
     scanToPair: "扫描下方二维码完成配对",
     scanFallback: "二维码无法显示，请在 Friday Next 中手动填写",
@@ -50,7 +51,8 @@ const STRINGS = {
     labelToken: "令牌",
 
     noteNoSudo: "无需 sudo 运行",
-    noteLanOnly: "公网未开启，配对码仅含局域网地址",
+    noteLanOnly: "FridayTunnel 已停用，配对码仅含本地地址",
+    noteTunnelTimeout: "FridayTunnel 准备超时，配对码暂时仅含本地地址；稍后可重新运行",
 
     failNoNode: "未找到 node",
     failNoNodeHint: "先安装 Node.js",
@@ -80,6 +82,7 @@ const STRINGS = {
     detailRestartSlow: "slow, verifying",
     detailRestartUnconfirmed: "unconfirmed, verifying",
     detailRetry: (i, n) => `retry ${i}/${n}`,
+    detailTunnelWait: "waiting up to 5 min",
 
     scanToPair: "Scan the code below to pair",
     scanFallback: "QR unavailable — enter these in Friday Next manually",
@@ -87,7 +90,9 @@ const STRINGS = {
     labelToken: "Token",
 
     noteNoSudo: "sudo is not needed",
-    noteLanOnly: "public access off — QR carries the LAN address only",
+    noteLanOnly: "FridayTunnel is disabled — QR carries the local address only",
+    noteTunnelTimeout:
+      "FridayTunnel setup timed out — QR temporarily carries the local address only; rerun later",
 
     failNoNode: "node not found",
     failNoNodeHint: "install Node.js first",

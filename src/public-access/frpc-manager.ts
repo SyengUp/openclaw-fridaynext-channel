@@ -15,7 +15,15 @@
  */
 import { execFile, execFileSync, spawn, type ChildProcess } from "node:child_process";
 import { request as httpsRequest } from "node:https";
-import { existsSync, mkdirSync, writeFileSync, readFileSync, chmodSync, rmSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  writeFileSync,
+  readFileSync,
+  chmodSync,
+  rmSync,
+  renameSync,
+} from "node:fs";
 import { promisify } from "node:util";
 import { createHash, createPublicKey } from "node:crypto";
 import { homedir, platform, arch, networkInterfaces } from "node:os";
@@ -24,6 +32,24 @@ import type { Server } from "node:http";
 import { startFilterProxy } from "./filter-proxy.js";
 
 const FRP_VERSION = "0.69.1";
+const FRP_SHA256: Record<string, string> = {
+  "frp_0.69.1_darwin_amd64": "2bc26d02100ef333f2712149ea5997dc530dc0eefac64f4be41cb0f49d032f40",
+  "frp_0.69.1_darwin_arm64": "310012e2f1dcf3cdde2605d29b95340b686c94d1680a23711d58efeffc02f64e",
+  "frp_0.69.1_linux_amd64": "7be257b72dbbc60bcb3e0e25a5afd1dfac7b63f897084864d3c956dd3d5674e1",
+  "frp_0.69.1_linux_arm64": "bbc0c75e896af3f292fb46ba09c844a04fa9b5ea3530c039c7af20637f836355",
+};
+
+export function expectedFrpcArchiveSHA256(base: string): string | null {
+  return FRP_SHA256[base] ?? null;
+}
+
+export function frpcDownloadSources(controlPlaneUrl: string, base: string): string[] {
+  const controlPlaneBase = controlPlaneUrl.replace(/\/+$/, "");
+  return [
+    `${controlPlaneBase}/v1/frpc/v${FRP_VERSION}/${base}.tar.gz`,
+    `https://github.com/fatedier/frp/releases/download/v${FRP_VERSION}/${base}.tar.gz`,
+  ];
+}
 // Override is primarily for hermetic tests and managed deployments. Production defaults to the
 // plugin-private OpenClaw directory; never share this with a user's own frp installation.
 const DATA_DIR =
@@ -252,9 +278,12 @@ function frpcVersionPath(): string {
  * Download + checksum-verify + extract the frpc binary for this platform. A version marker
  * file makes `FRP_VERSION` bumps actually reach existing installs (a bare `existsSync` check
  * would pin old users to the first binary forever — frp security fixes could never ship).
- * The download is async so a slow GitHub fetch can't block the gateway's event loop.
+ * The download is async so a slow fetch can't block the gateway's event loop. The FridayTunnel
+ * control plane is tried first because GitHub Releases is routinely unreachable from mainland
+ * cloud providers; GitHub remains the independent fallback. Every archive is checked against a
+ * checksum pinned in the shipped plugin, so neither source is a supply-chain trust dependency.
  */
-async function ensureBinary(log: Logger): Promise<void> {
+async function ensureBinary(controlPlaneUrl: string, log: Logger): Promise<void> {
   const p = frpcPath();
   const installed = existsSync(frpcVersionPath())
     ? readFileSync(frpcVersionPath(), "utf8").trim()
@@ -264,23 +293,49 @@ async function ensureBinary(log: Logger): Promise<void> {
   const plat = platform() === "darwin" ? "darwin" : "linux";
   const a = arch() === "arm64" ? "arm64" : "amd64";
   const base = `frp_${FRP_VERSION}_${plat}_${a}`;
-  const rel = `https://github.com/fatedier/frp/releases/download/v${FRP_VERSION}`;
+  const expectedSHA256 = expectedFrpcArchiveSHA256(base);
+  if (!expectedSHA256) throw new Error(`unsupported frpc platform: ${plat}/${a}`);
   const tgz = join(DATA_DIR, "frp.tgz");
-  log(`downloading frpc ${base} …`);
-  await execFileAsync("curl", ["-fsSL", "-o", tgz, `${rel}/${base}.tar.gz`], { timeout: 180_000 });
-
-  // Supply-chain: verify against the release's published sha256 checksums.
-  const sums = (
-    await execFileAsync("curl", ["-fsSL", `${rel}/frp_sha256_checksums.txt`], { timeout: 60_000 })
-  ).stdout.toString();
-  const want = sums
-    .split("\n")
-    .find((l) => l.includes(`${base}.tar.gz`))
-    ?.trim()
-    .split(/\s+/)[0];
-  const got = createHash("sha256").update(readFileSync(tgz)).digest("hex");
-  if (!want || want.toLowerCase() !== got.toLowerCase()) {
-    throw new Error(`frpc checksum mismatch: want=${want ?? "(none)"} got=${got}`);
+  const partial = `${tgz}.part`;
+  const sources = frpcDownloadSources(controlPlaneUrl, base);
+  const failures: string[] = [];
+  for (const source of sources) {
+    const sourceHost = new URL(source).host;
+    log(`downloading frpc ${base} from ${sourceHost} …`);
+    try {
+      await execFileAsync(
+        "curl",
+        [
+          "--fail",
+          "--silent",
+          "--show-error",
+          "--location",
+          "--connect-timeout",
+          "10",
+          "--max-time",
+          "120",
+          "--output",
+          partial,
+          source,
+        ],
+        { timeout: 130_000 },
+      );
+      const got = createHash("sha256").update(readFileSync(partial)).digest("hex");
+      if (got.toLowerCase() !== expectedSHA256) {
+        throw new Error(`checksum mismatch (got ${got.slice(0, 12)}…)`);
+      }
+      renameSync(partial, tgz);
+      failures.length = 0;
+      break;
+    } catch (error) {
+      rmSync(partial, { force: true });
+      const detail = error instanceof Error ? error.message.split("\n")[0] : String(error);
+      failures.push(`${sourceHost}: ${detail}`);
+      log(`frpc source ${sourceHost} failed — trying fallback`);
+    }
+  }
+  if (failures.length) {
+    throw new Error(`frpc download failed (${failures.join("; ")})`);
   }
   execFileSync("tar", ["xzf", tgz, "-C", DATA_DIR, "--strip-components=1", `${base}/frpc`], {
     timeout: 60_000,
@@ -975,7 +1030,7 @@ export async function reconcileServedSubdomains(
   // Entitlement exists: only now pay the download/process/listener cost and expose the allowlisted
   // Friday surface. Serialisation prevents overlapping long-poll responses from double-spawning.
   try {
-    await ensureBinary(log);
+    await ensureBinary(cfg.controlPlaneUrl, log);
     if (!filterServer) filterServer = startFilterProxy(filterPort(cfg.corePort), cfg.corePort, log);
   } catch (e) {
     log(
