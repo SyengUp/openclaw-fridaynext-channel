@@ -122,11 +122,40 @@ export function startFilterProxy(listenPort: number, corePort: number, log: (m: 
 
   // Without a listener, a listen failure (EADDRINUSE on the hardcoded corePort+1, …) throws
   // uncaughtException and takes down the ENTIRE host gateway for an accessory feature.
+  //
+  // Logging alone wasn't enough either: frpc stays registered and happily forwards into a port
+  // nothing is listening on, so the relay believes the tunnel is up while every public request
+  // dies — and the health watchdog can't tell, because frpc still answers (with an error). Retry
+  // the bind with backoff so a transient conflict heals without a gateway restart.
+  let retryDelayMs = 1_000;
+  const maxRetryDelayMs = 60_000;
+  let retryTimer: ReturnType<typeof setTimeout> | null = null;
+  let closed = false;
+  const listen = (): void => {
+    if (closed) return;
+    server.listen(listenPort, "127.0.0.1");
+  };
   server.on("error", (err) => {
-    log(`public surface filter error: ${err.message} — public access unavailable until restart`);
+    log(`public surface filter error: ${err.message} — rebinding in ${Math.round(retryDelayMs / 1000)}s`);
+    if (closed || retryTimer) return;
+    retryTimer = setTimeout(() => {
+      retryTimer = null;
+      retryDelayMs = Math.min(retryDelayMs * 2, maxRetryDelayMs);
+      listen();
+    }, retryDelayMs);
+    retryTimer.unref?.();
   });
-  server.listen(listenPort, "127.0.0.1", () => {
+  server.on("listening", () => {
+    retryDelayMs = 1_000;
     log(`public surface filter on 127.0.0.1:${listenPort} → core:${corePort} (allowlist only)`);
   });
+  server.on("close", () => {
+    closed = true;
+    if (retryTimer) {
+      clearTimeout(retryTimer);
+      retryTimer = null;
+    }
+  });
+  listen();
   return server;
 }

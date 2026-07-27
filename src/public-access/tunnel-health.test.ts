@@ -1,5 +1,22 @@
 import { describe, it, expect } from "vitest";
-import { TunnelHealthTracker } from "./frpc-manager.js";
+import { TunnelHealthTracker, isTunnelHealthyStatus } from "./frpc-manager.js";
+
+// "ANY HTTP response = healthy" hid the worst failure mode: frpc answers 5xx when it cannot reach
+// the local filter port, and the relay edge serves 404 for an unregistered vhost — so a tunnel
+// that routed nowhere looked perfectly healthy and the watchdog never restarted it.
+describe("tunnel health status classification", () => {
+  it("counts responses only a live gateway would produce", () => {
+    for (const ok of [200, 204, 301, 302, 401, 403]) {
+      expect(isTunnelHealthyStatus(ok)).toBe(true);
+    }
+  });
+
+  it("treats a dead vhost / unreachable local port as down", () => {
+    for (const down of [404, 500, 502, 503, 504, undefined]) {
+      expect(isTunnelHealthyStatus(down)).toBe(false);
+    }
+  });
+});
 
 describe("TunnelHealthTracker（隧道自愈看门狗计数器）", () => {
   it("restarts only after N consecutive failures", () => {

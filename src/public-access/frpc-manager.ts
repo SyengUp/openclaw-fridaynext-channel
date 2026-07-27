@@ -158,8 +158,17 @@ export class TunnelHealthTracker {
   }
 }
 
-/** Reachability probe through the public relay. ANY HTTP response means the tunnel is up
- * (401/403/404 all prove frps routed us home); only transport errors/timeouts count as down.
+/** Statuses that prove the request reached THIS gateway's core: a live plugin answers 200 (or a
+ * redirect), and 401/403 mean it answered before auth. Deliberately NOT "any HTTP response":
+ * frpc itself replies with a 5xx when it cannot reach the local filter port, and the relay edge
+ * serves 404 for a vhost that is no longer registered — counting those as healthy is exactly how
+ * a broken tunnel stayed broken forever (the watchdog never fired). Mirrors the app-side probe. */
+export function isTunnelHealthyStatus(status: number | undefined): boolean {
+  if (!status) return false;
+  return (status >= 200 && status < 400) || status === 401 || status === 403;
+}
+
+/** Reachability probe through the public relay (gateway → frps → back into our filter port).
  * Cert validation is off — reachability is the question here, and the app does real pinning. */
 function probeTunnelHealth(publicUrl: string, timeoutMs = 10_000): Promise<boolean> {
   return new Promise((resolve) => {
@@ -176,7 +185,7 @@ function probeTunnelHealth(publicUrl: string, timeoutMs = 10_000): Promise<boole
         { method: "HEAD", rejectUnauthorized: false, timeout: timeoutMs },
         (res) => {
           res.resume();
-          done(true);
+          done(isTunnelHealthyStatus(res.statusCode));
         },
       );
       req.on("timeout", () => {
@@ -525,6 +534,7 @@ export async function resolveRelayCredentials(
     if (!relayAddr || !relayToken) throw new Error("incomplete bootstrap payload");
     ensureDir();
     writeFileSync(cachePath, JSON.stringify({ relayAddr, relayToken }), { mode: 0o600 });
+    chmodSync(cachePath, 0o600); // `mode` only applies on create — tighten a pre-existing file too
     return { ...cfg, relayAddr, relayToken };
   } catch (e) {
     log(`relay bootstrap failed (${e instanceof Error ? e.message : String(e)})`);
@@ -589,7 +599,14 @@ export function discardLocalSubdomainAllocation(): void {
  * access rather than minting a locally-random subdomain (which could collide).
  */
 async function resolveSubdomain(cfg: PublicAccessConfig, log: Logger): Promise<string | null> {
-  if (cfg.subdomain && cfg.subdomain.trim()) return cfg.subdomain.trim();
+  const explicit = cfg.subdomain?.trim();
+  if (explicit) {
+    if (!isValidSubdomainLabel(explicit)) {
+      log(`configured subdomain "${explicit}" is not a valid DNS label — refusing to use it`);
+      return null;
+    }
+    return explicit;
+  }
   const key = createHash("sha256")
     .update(cfg.authToken || "")
     .digest("hex");
@@ -599,7 +616,7 @@ async function resolveSubdomain(cfg: PublicAccessConfig, log: Logger): Promise<s
     const allocKey = existsSync(subdomainKeyPath())
       ? readFileSync(subdomainKeyPath(), "utf8").trim()
       : ""; // pre-key-file installs: keep the record and stamp the current key below
-    if (s && (!allocKey || allocKey === key)) {
+    if (s && isValidSubdomainLabel(s) && (!allocKey || allocKey === key)) {
       if (!allocKey) writeFileSync(subdomainKeyPath(), key);
       return s;
     }
@@ -609,6 +626,10 @@ async function resolveSubdomain(cfg: PublicAccessConfig, log: Logger): Promise<s
   ensureDir();
   try {
     const sub = await requestAllocation(cfg.allocatorUrl, cfg.relayToken, key);
+    if (!isValidSubdomainLabel(sub)) {
+      log(`allocator returned a malformed subdomain "${sub}" — refusing`);
+      return null;
+    }
     writeFileSync(f, sub);
     writeFileSync(subdomainKeyPath(), key);
     log(`allocated subdomain "${sub}" from relay registry`);
@@ -993,6 +1014,10 @@ export async function reconcileServedSubdomains(
 ): Promise<boolean> {
   if (!baseTunnel) return false;
   const next = normalizedServedSubdomains(desired);
+  const rejected = desired.filter((s) => Boolean(s) && !isValidSubdomainLabel(s));
+  if (rejected.length) {
+    log(`ignoring ${rejected.length} malformed subdomain(s) from the control plane`);
+  }
   const cur = Array.from(new Set(servedSubdomains)).sort();
   if (next.length === cur.length && next.every((s, i) => s === cur[i])) return false;
   const added = next.filter((s) => !cur.includes(s));
@@ -1051,10 +1076,18 @@ export async function reconcileServedSubdomains(
   return true;
 }
 
+/** A DNS label we are willing to put in frpc.toml and in a filename. The control plane is
+ * first-party, but these strings are interpolated into a config file (`subdomain = "…"`) and into
+ * a cert path (`sub-<label>.pem`) — a quote/newline would be config injection and a `../` would
+ * write outside the plugin data dir. Validating the shape costs nothing and removes the class. */
+export function isValidSubdomainLabel(value: string): boolean {
+  return /^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$/.test(value);
+}
+
 /** Canonical normalization for the control-plane-authoritative proxy set. Exported so tests
  * exercise the exact production decision instead of maintaining a look-alike implementation. */
 export function normalizedServedSubdomains(desired: string[]): string[] {
-  return Array.from(new Set(desired.filter(Boolean))).sort();
+  return Array.from(new Set(desired.filter((s) => Boolean(s) && isValidSubdomainLabel(s)))).sort();
 }
 
 /** Telegram-style held HTTP standby: register the gateway's stable identity + public-key pin,
