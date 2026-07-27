@@ -49,6 +49,7 @@ const crypto = require("node:crypto");
 const { loadTrustedRoots, verifyAppleJWS } = require("./apple-jws.js");
 const { AppleServerAPIClient } = require("./apple-server-api.js");
 const { planExpirySweep } = require("./expiry-sweep.js");
+const { planAttestKeyPrune } = require("./attest-key-prune.js");
 const { execFile } = require("node:child_process");
 const { promisify } = require("node:util");
 const execFileP = promisify(execFile);
@@ -300,7 +301,7 @@ const cp = Object.assign(
     // gatewayKey → stable standby identity. Contains no bearer or user data: only the allocated
     // base subdomain and the gateway TLS public-key pin needed for remote first activation.
     gateways: {},
-    attestKeys: {}, // keyId → {publicKey, signCount, environment, deviceId, createdAt}
+    attestKeys: {}, // keyId → {publicKey, signCount, environment, deviceId, createdAt, lastUsedAt}
     revoked: [], // [subdomain] — rejected at the frps gate on next registration
     killswitch: false, // emergency: reject ALL FridayNext-namespace registrations
     ossUsage: {}, // subdomain → { month: "2026-07", bytes } — sign-time traffic accounting
@@ -519,6 +520,29 @@ async function loadAppAttest() {
  * so the server reconstructs the exact payload from request fields.
  * Returns { verified, reason } and (on first attestation) stores the key.
  */
+// Ceiling for the attested-key table. See attest-key-prune.js for why it needs one at all.
+const CP_ATTEST_KEYS_MAX = Number(process.env.CP_ATTEST_KEYS_MAX || 500);
+const CP_ATTEST_KEY_DEAD_AFTER_SEC = Number(process.env.CP_ATTEST_KEY_DEAD_AFTER_SEC || 86_400);
+
+/** Drop provably-dead and overflow attested keys. Caller persists; evictions are always audited. */
+function pruneAttestKeys() {
+  const plan = planAttestKeyPrune(cp.attestKeys, {
+    now: now(),
+    max: CP_ATTEST_KEYS_MAX,
+    deadAfterMs: CP_ATTEST_KEY_DEAD_AFTER_SEC * 1000,
+  });
+  if (!plan.drop.length) return plan;
+  for (const id of plan.drop) delete cp.attestKeys[id];
+  // Never a silent cap: an evicted key means that client re-attests on its next activation.
+  audit("attest.keys.pruned", {
+    dead: plan.dead.length,
+    overflow: plan.overflow.length,
+    kept: plan.kept,
+    max: CP_ATTEST_KEYS_MAX,
+  });
+  return plan;
+}
+
 async function verifyActivationAttest(att, gatewayId, deviceId) {
   if (!att || typeof att !== "object" || !att.token) return { verified: false, reason: "absent" };
   if (att.kind === "mock") return { verified: false, reason: "mock" };
@@ -542,7 +566,9 @@ async function verifyActivationAttest(att, gatewayId, deviceId) {
         environment: result.environment,
         deviceId,
         createdAt: now(),
+        lastUsedAt: now(),
       };
+      pruneAttestKeys();
       saveCp();
       return { verified: true, reason: "attested" };
     }
@@ -562,6 +588,7 @@ async function verifyActivationAttest(att, gatewayId, deviceId) {
         signCount: stored.signCount,
       });
       stored.signCount = signCount;
+      stored.lastUsedAt = now();
       saveCp();
       return { verified: true, reason: "asserted" };
     }
@@ -1534,9 +1561,12 @@ function gcState() {
       dropped++;
     }
   }
-  if (dropped) {
+  // Attested keys are only pruned on insert otherwise, and a healthy fleet stops minting new ones
+  // entirely — so without this the dead rows already on disk would never be collected.
+  const keyPlan = pruneAttestKeys();
+  if (dropped || keyPlan.drop.length) {
     saveCp();
-    audit("gc", { dropped });
+    if (dropped) audit("gc", { dropped });
   }
 }
 gcState();

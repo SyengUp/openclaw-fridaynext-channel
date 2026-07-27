@@ -128,6 +128,18 @@ tunnel may download before `/v1/oss/sign` starts refusing GETs. Downloads stay f
 than uploads — re-fetching paid blobs on a new device is normal — but egress is billed per GB, so
 it is no longer unbounded.
 
+Optional: `CP_ATTEST_KEYS_MAX` (default `500`) and `CP_ATTEST_KEY_DEAD_AFTER_SEC` (default `86400`)
+bound the attested App Attest key table. It previously only ever grew: one device had accumulated
+77 keys, 37 of them never asserted after attestation, because the app shared a single App Attest
+key id between this control plane and the gateway plugin — each server rejected the other's key as
+`unknown_key`, forcing a fresh full attestation every cold start. The app now keeps one key per
+server; the ceiling here is what stops any other client from refilling the table. A key is dropped
+when it was never asserted and is older than `CP_ATTEST_KEY_DEAD_AFTER_SEC`, or when the table
+exceeds `CP_ATTEST_KEYS_MAX` (least-recently-active evicted first). Pruning runs at boot inside
+`gcState()` and on every new attestation, and every eviction is audited as `attest.keys.pruned` —
+an evicted key simply means that client re-attests on its next activation.
+`relay/attest-key-prune.js` holds the decision; `node relay/test-attest-key-prune.mjs` covers it.
+
 Optional: `CP_EXPIRY_SWEEP_SEC` (default `600`) and `CP_EXPIRY_SWEEP_COOLDOWN_SEC` (default `3600`)
 tune the ENFORCE_GRANTS expiry sweep. The sweep now forces at most ONE frps re-registration per
 subdomain per registration episode and then forgets a subdomain that never came back — an offline
