@@ -44,7 +44,9 @@ try {
   const leafDer = join(dir, "leaf.der");
   const ext = join(dir, "leaf.ext");
   execFileSync("openssl", ["ecparam", "-name", "prime256v1", "-genkey", "-noout", "-out", rootKey]);
-  execFileSync("openssl", ["req", "-x509", "-new", "-key", rootKey, "-subj", "/CN=Test Root", "-days", "30", "-out", rootPem]);
+  // Real Apple roots carry basicConstraints CA:TRUE; set it explicitly so the fixture matches
+  // production (verifyChain now refuses issuers that are not CAs).
+  execFileSync("openssl", ["req", "-x509", "-new", "-key", rootKey, "-subj", "/CN=Test Root", "-days", "30", "-addext", "basicConstraints=critical,CA:true", "-out", rootPem]);
   execFileSync("openssl", ["ecparam", "-name", "prime256v1", "-genkey", "-noout", "-out", leafKey]);
   execFileSync("openssl", ["req", "-new", "-key", leafKey, "-subj", "/CN=Test App Store", "-out", leafCSR]);
   writeFileSync(ext, "basicConstraints=critical,CA:FALSE\nkeyUsage=critical,digitalSignature\n1.2.840.113635.100.6.11.1=DER:05:00\n");
@@ -96,6 +98,57 @@ try {
     "untrusted root is fail-closed",
     () => verifyAppleJWS(jws, { ...options, trustedRoots: [] }),
     "apple_roots_not_configured",
+  );
+
+  // A future signedDate is what certificate validity is judged against — reject it, otherwise an
+  // expired signing certificate could be replayed indefinitely by claiming it signed "later".
+  const futureDated = { ...payload, signedDate: Date.now() + 3 * 3600_000 };
+  const futureInput = `${b64url(JSON.stringify(header))}.${b64url(JSON.stringify(futureDated))}`;
+  const futureJWS = `${futureInput}.${b64url(
+    crypto.sign("sha256", Buffer.from(futureInput), {
+      key: readFileSync(leafKey),
+      dsaEncoding: "ieee-p1363",
+    }),
+  )}`;
+  expectThrow(
+    "future-dated signedDate is refused",
+    () => verifyAppleJWS(futureJWS, options),
+    "signed_date_in_future",
+  );
+
+  // An Apple-rooted END-ENTITY certificate (e.g. any developer certificate) must not be usable as
+  // the issuer of an attacker-generated leaf: signature math alone would accept that chain.
+  const eeKey = join(dir, "ee.key");
+  const eePem = join(dir, "ee.pem");
+  const eeDer = join(dir, "ee.der");
+  const forgedKey = join(dir, "forged.key");
+  const forgedCSR = join(dir, "forged.csr");
+  const forgedPem = join(dir, "forged.pem");
+  const forgedDer = join(dir, "forged.der");
+  execFileSync("openssl", ["ecparam", "-name", "prime256v1", "-genkey", "-noout", "-out", eeKey]);
+  execFileSync("openssl", ["req", "-new", "-key", eeKey, "-subj", "/CN=Apple Developer Leaf", "-out", join(dir, "ee.csr")]);
+  writeFileSync(join(dir, "ee.ext"), "basicConstraints=critical,CA:FALSE\n");
+  execFileSync("openssl", ["x509", "-req", "-in", join(dir, "ee.csr"), "-CA", rootPem, "-CAkey", rootKey, "-CAcreateserial", "-days", "30", "-extfile", join(dir, "ee.ext"), "-out", eePem]);
+  execFileSync("openssl", ["x509", "-in", eePem, "-outform", "DER", "-out", eeDer]);
+  execFileSync("openssl", ["ecparam", "-name", "prime256v1", "-genkey", "-noout", "-out", forgedKey]);
+  execFileSync("openssl", ["req", "-new", "-key", forgedKey, "-subj", "/CN=Forged App Store", "-out", forgedCSR]);
+  execFileSync("openssl", ["x509", "-req", "-in", forgedCSR, "-CA", eePem, "-CAkey", eeKey, "-CAcreateserial", "-days", "30", "-extfile", ext, "-out", forgedPem]);
+  execFileSync("openssl", ["x509", "-in", forgedPem, "-outform", "DER", "-out", forgedDer]);
+  const forgedHeader = {
+    alg: "ES256",
+    x5c: [readFileSync(forgedDer).toString("base64"), readFileSync(eeDer).toString("base64")],
+  };
+  const forgedInput = `${b64url(JSON.stringify(forgedHeader))}.${b64url(JSON.stringify(payload))}`;
+  const forgedJWS = `${forgedInput}.${b64url(
+    crypto.sign("sha256", Buffer.from(forgedInput), {
+      key: readFileSync(forgedKey),
+      dsaEncoding: "ieee-p1363",
+    }),
+  )}`;
+  expectThrow(
+    "non-CA issuer cannot mint a signing leaf",
+    () => verifyAppleJWS(forgedJWS, options),
+    "issuer_not_a_ca",
   );
 } finally {
   rmSync(dir, { recursive: true, force: true });

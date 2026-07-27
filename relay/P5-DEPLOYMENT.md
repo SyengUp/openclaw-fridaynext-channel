@@ -123,6 +123,21 @@ GW_RELAY_BOOTSTRAP=1
 GW_FRPS_RESTART=1
 ```
 
+Optional: `OSS_EGRESS_BURST_FACTOR` (default `4`) is the multiple of the monthly attachment cap a
+tunnel may download before `/v1/oss/sign` starts refusing GETs. Downloads stay far more generous
+than uploads — re-fetching paid blobs on a new device is normal — but egress is billed per GB, so
+it is no longer unbounded.
+
+Optional: `CP_EXPIRY_SWEEP_SEC` (default `600`) and `CP_EXPIRY_SWEEP_COOLDOWN_SEC` (default `3600`)
+tune the ENFORCE_GRANTS expiry sweep. The sweep now forces at most ONE frps re-registration per
+subdomain per registration episode and then forgets a subdomain that never came back — an offline
+gateway used to make it restart frps (relay-wide, personal tunnels included) on every tick forever.
+`relay/expiry-sweep.js` holds the decision; `node relay/test-expiry-sweep.mjs` covers it.
+
+`POST /v1/tunnels/reserve` is retired and answers `410 reserve_retired`. Pairing is LAN-only and
+the one-time voucher is minted by the gateway plugin; the endpoint was unauthenticated and wrote
+durable state on every call.
+
 `CP_BOOTSTRAP_ENABLED` and `CP_BOOTSTRAP_TTL_SEC` are retired and ignored by the server. Remove
 them from systemd when convenient; leaving stale values behind cannot reopen a pairing tunnel.
 New pairing records remain `none`/unentitled and create neither a grant nor a public proxy.

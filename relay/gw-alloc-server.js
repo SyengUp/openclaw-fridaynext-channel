@@ -48,6 +48,7 @@ const path = require("node:path");
 const crypto = require("node:crypto");
 const { loadTrustedRoots, verifyAppleJWS } = require("./apple-jws.js");
 const { AppleServerAPIClient } = require("./apple-server-api.js");
+const { planExpirySweep } = require("./expiry-sweep.js");
 const { execFile } = require("node:child_process");
 const { promisify } = require("node:util");
 const execFileP = promisify(execFile);
@@ -210,6 +211,11 @@ const OSS_MAX_OBJECT_BYTES = Number(process.env.OSS_MAX_OBJECT_BYTES || 100 * 10
 // Monthly per-tunnel traffic caps (PRD §10: trial well below paid; paid 3GB).
 const OSS_CAP_TRIAL = Number(process.env.OSS_CAP_TRIAL || 300 * 1024 * 1024);
 const OSS_CAP_PAID = Number(process.env.OSS_CAP_PAID || 3 * 1024 * 1024 * 1024);
+// Downloads are metered against the same monthly counter but allowed to exceed the upload cap —
+// re-downloads are legitimate. This multiple is the hard stop that keeps billed egress bounded.
+const configuredEgressBurst = Number(process.env.OSS_EGRESS_BURST_FACTOR || 4);
+const OSS_EGRESS_BURST_FACTOR =
+  Number.isFinite(configuredEgressBurst) && configuredEgressBurst >= 1 ? configuredEgressBurst : 4;
 
 const DAY = 86_400_000;
 const now = () => Date.now();
@@ -308,9 +314,56 @@ cp.appleReconciliation ||= {};
 cp.trialHistory ||= {};
 cp.bootstrapHistory ||= {};
 cp.gateways ||= {};
-function saveCp() {
+
+// cp-state is written by almost every request (activate, grant issue/renew,每次 oss/sign 计量,
+// attest key store, standby registration, Apple transactions). A full synchronous
+// `JSON.stringify(cp)` + writeFileSync on each of those blocks the SINGLE event loop that also
+// serves the frps NewProxy gate and the 25s standby long-polls — and the cost grows with the
+// state file. Coalesce instead: mark dirty, flush once per tick-window. Anything that reports
+// authoritative money state back to Apple/the operator still uses `saveCpNow()`.
+const CP_SAVE_DEBOUNCE_MS = 1_000;
+let cpDirty = false;
+let cpSaveTimer = null;
+function saveCpNow() {
+  cpDirty = false;
+  if (cpSaveTimer) {
+    clearTimeout(cpSaveTimer);
+    cpSaveTimer = null;
+  }
   saveJson(CP_STATE, cp);
 }
+function saveCp() {
+  cpDirty = true;
+  if (cpSaveTimer) return;
+  cpSaveTimer = setTimeout(() => {
+    cpSaveTimer = null;
+    if (cpDirty) saveCpNow();
+  }, CP_SAVE_DEBOUNCE_MS);
+  cpSaveTimer.unref?.();
+}
+/** Never lose a debounced write to a restart/deploy: flush on every ordinary exit path. */
+function flushCpOnExit(signal) {
+  try {
+    if (cpDirty) saveCpNow();
+  } catch (e) {
+    console.error(`[cp] final state flush failed: ${e.message}`);
+  }
+  if (signal) process.exit(0);
+}
+process.on("exit", () => flushCpOnExit(null));
+for (const signal of ["SIGTERM", "SIGINT"]) process.on(signal, () => flushCpOnExit(signal));
+
+// A crash in ONE control-plane request must not take down the frps authorization gate, the
+// subdomain allocator and the cert signer that share this process. Log loudly, keep serving;
+// state writes are atomic-replace so a half-finished request leaves no torn file.
+process.on("unhandledRejection", (reason) => {
+  console.error(`[cp] unhandled rejection: ${reason?.stack || reason}`);
+  audit("process.unhandled_rejection", { reason: String(reason?.message || reason).slice(0, 500) });
+});
+process.on("uncaughtException", (error) => {
+  console.error(`[cp] uncaught exception: ${error?.stack || error}`);
+  audit("process.uncaught_exception", { reason: String(error?.message || error).slice(0, 500) });
+});
 
 // Fold persisted per-Apple-ID subdomains into the gate's allocated set (see note by `used`).
 for (const sub of Object.values(cp.appleSubs || {})) used.add(sub);
@@ -569,7 +622,7 @@ function normalizeAppleSubscription(subscription) {
       const transaction = cp.appleTransactions[subscription.originalTransactionId];
       if (transaction?.appAccountToken) removeAccountGrants(transaction.appAccountToken, "expired");
     }
-    saveCp();
+    saveCpNow(); // entitlement boundary — never leave this one to the debounce window
     audit("apple.subscription_transition", { from: previousState, to: subscription.state });
   }
 }
@@ -761,7 +814,7 @@ function applyAppleTransaction(payload, notificationType = "CLIENT_SYNC", resolv
   const removedGrants = ["expired", "refunded"].includes(state)
     ? removeAccountGrants(appAccountToken, state)
     : 0;
-  saveCp();
+  saveCpNow(); // money state — durable before we answer Apple or the client
   audit("apple.transaction", {
     notificationType,
     appAccountToken,
@@ -897,7 +950,7 @@ function recordAppleRefundOutcome(result, source) {
   if (updated === history[field]) return;
   history[field] = updated;
   cp.appleRefundHistory[result.appAccountToken] = history;
-  saveCp();
+  saveCpNow();
   audit("apple.refund_outcome_recorded", {
     source,
     notificationType: result.notificationType,
@@ -1008,7 +1061,7 @@ function recordAppleConsumptionResponse(result, decision) {
   ) {
     delete cp.appleConsumptionResponses[notificationUUIDs[index]];
   }
-  saveCp();
+  saveCpNow();
 }
 
 async function respondToAppleConsumptionRequest(result, source) {
@@ -1287,17 +1340,38 @@ function subscriptionResponse(appAccountToken) {
 }
 
 function issueGrant(appAccountToken, tunnelId, deviceId, attested) {
-  const grantId = rid();
   const subscription = cp.subs[appAccountToken];
   normalizeAppleSubscription(subscription);
   // A newly-issued grant must not recreate the old "renew on the eve of expiry, keep 30 days"
   // loophole. Paid/code subscriptions get the same 72h grace as renewGrant; trial does not.
   const entitlementCeiling = grantEntitlementCeiling(subscription);
+  const expiresAt = Math.min(now() + 30 * DAY, entitlementCeiling);
+  // REUSE a live grant for the same (account, tunnel, device) instead of minting a new row every
+  // time. The app re-activates on every cold launch (its activation throttle is process-memory),
+  // so minting unconditionally added one permanent row per launch per user — and `cp.grants` is
+  // scanned linearly by `subdomainHasActiveGrant` on EVERY proxy registration, then serialized
+  // whole on every save. Same id also keeps the app's cached `lastGrantId` valid across launches.
+  const existing = Object.entries(cp.grants).find(
+    ([, g]) =>
+      g.appAccountToken === appAccountToken &&
+      g.tunnelId === tunnelId &&
+      (g.deviceId || "") === (deviceId || "") &&
+      g.expiresAt > now(),
+  );
+  if (existing) {
+    const [existingId, grant] = existing;
+    grant.expiresAt = expiresAt;
+    grant.attested = attested || grant.attested;
+    saveCp();
+    notifyGatewayStandby();
+    return existingId;
+  }
+  const grantId = rid();
   cp.grants[grantId] = {
     appAccountToken,
     tunnelId,
     deviceId,
-    expiresAt: Math.min(now() + 30 * DAY, entitlementCeiling),
+    expiresAt,
     attested,
   };
   saveCp();
@@ -1342,15 +1416,31 @@ function subdomainHasEntitledOwner(sub) {
 // the (ENFORCE_GRANTS-gated) expiry sweep, never routinely.
 // ---------------------------------------------------------------------------
 const FRPS_RESTART_ENABLED = process.env.GW_FRPS_RESTART !== "0";
+// A restart is a RELAY-WIDE event: every frpc (including the operator's personal tunnels) drops
+// and re-registers. Callers are per-account and can fire in bursts — an Apple reconciliation pass
+// that expires N subscriptions calls this N times, and `entitled()` runs INSIDE the NewProxy gate,
+// so an un-throttled restart can re-trigger itself through the reconnect storm it just caused.
+// Coalesce: collect reasons, restart at most once per FRPS_RESTART_MIN_INTERVAL_MS, and always
+// wait out a short window first so a burst becomes one restart.
+const FRPS_RESTART_MIN_INTERVAL_MS = 60_000;
+const FRPS_RESTART_COALESCE_MS = 2_000;
 let lastFrpsRestartAt = 0;
-function forceProxyReregistration(reason) {
-  if (!FRPS_RESTART_ENABLED) {
-    audit("frps.restart.skipped", { reason, why: "GW_FRPS_RESTART=0" });
-    return;
-  }
+let pendingRestartReasons = new Set();
+let frpsRestartTimer = null;
+function runCoalescedFrpsRestart() {
+  frpsRestartTimer = null;
+  const reasons = [...pendingRestartReasons];
+  pendingRestartReasons = new Set();
+  if (!reasons.length) return;
   lastFrpsRestartAt = now();
+  const reason = reasons.length === 1 ? reasons[0] : `${reasons.length} events: ${reasons.join(",").slice(0, 300)}`;
   execFile("systemctl", ["restart", "frps"], (err) => {
-    audit("frps.restart", { reason, ok: !err, err: err ? String(err.message || err) : undefined });
+    audit("frps.restart", {
+      reason,
+      coalesced: reasons.length,
+      ok: !err,
+      err: err ? String(err.message || err) : undefined,
+    });
     if (err) console.error(`[enforce] frps restart failed: ${err.message}`);
     else
       console.log(
@@ -1358,22 +1448,53 @@ function forceProxyReregistration(reason) {
       );
   });
 }
+function forceProxyReregistration(reason) {
+  if (!FRPS_RESTART_ENABLED) {
+    audit("frps.restart.skipped", { reason, why: "GW_FRPS_RESTART=0" });
+    return;
+  }
+  pendingRestartReasons.add(reason);
+  if (frpsRestartTimer) return; // already scheduled — this reason rides along
+  const sinceLast = now() - lastFrpsRestartAt;
+  const wait = Math.max(FRPS_RESTART_COALESCE_MS, FRPS_RESTART_MIN_INTERVAL_MS - sinceLast);
+  audit("frps.restart.scheduled", { reason, inMs: wait });
+  frpsRestartTimer = setTimeout(runCoalescedFrpsRestart, wait);
+  frpsRestartTimer.unref?.();
+}
 
-// Live registrations the gate has allowed since boot (sub → last NewProxy ts). Feeds the
+// Live registrations the gate has allowed since boot (sub → {allowedAt, forcedAt}). Feeds the
 // expiry sweep: a sub that registered while granted but whose grant/entitlement has since
 // lapsed keeps serving until frpc reconnects — the sweep forces that re-registration.
 const gateAllowedSubs = new Map();
-const EXPIRY_SWEEP_INTERVAL_MS = 10 * 60_000;
-const EXPIRY_SWEEP_RESTART_COOLDOWN_MS = 60 * 60_000; // at most one sweep restart per hour
+const configuredSweepSec = Number(process.env.CP_EXPIRY_SWEEP_SEC || 600);
+const EXPIRY_SWEEP_INTERVAL_MS =
+  Number.isFinite(configuredSweepSec) && configuredSweepSec >= 5 ? configuredSweepSec * 1000 : 600_000;
+const configuredSweepCooldownSec = Number(process.env.CP_EXPIRY_SWEEP_COOLDOWN_SEC || 3600);
+const EXPIRY_SWEEP_RESTART_COOLDOWN_MS =
+  Number.isFinite(configuredSweepCooldownSec) && configuredSweepCooldownSec >= 0
+    ? configuredSweepCooldownSec * 1000
+    : 3600_000; // at most one sweep restart per hour
 if (ENFORCE_GRANTS) {
   const sweep = setInterval(() => {
-    const stale = [...gateAllowedSubs.keys()].filter(
-      (sub) => !subdomainHasActiveGrant(sub) && !subdomainHasEntitledOwner(sub),
-    );
-    if (!stale.length) return;
-    if (now() - lastFrpsRestartAt < EXPIRY_SWEEP_RESTART_COOLDOWN_MS) return;
-    audit("enforce.sweep", { stale });
-    forceProxyReregistration(`expiry-sweep:${stale.join(",")}`);
+    const { forget, kick, restart } = planExpirySweep({
+      entries: gateAllowedSubs,
+      isActive: (sub) => subdomainHasActiveGrant(sub) || subdomainHasEntitledOwner(sub),
+      now: now(),
+      lastRestartAt: lastFrpsRestartAt,
+      cooldownMs: EXPIRY_SWEEP_RESTART_COOLDOWN_MS,
+    });
+    for (const sub of forget) {
+      gateAllowedSubs.delete(sub);
+      audit("enforce.sweep.forgot_offline", { sub });
+    }
+    if (!restart) return;
+    const kickedAt = now();
+    for (const sub of kick) {
+      const seen = gateAllowedSubs.get(sub);
+      if (seen) seen.forcedAt = kickedAt;
+    }
+    audit("enforce.sweep", { stale: kick });
+    forceProxyReregistration(`expiry-sweep:${kick.join(",")}`);
   }, EXPIRY_SWEEP_INTERVAL_MS);
   sweep.unref?.();
 }
@@ -1431,15 +1552,39 @@ function ossConfigured() {
   );
 }
 
-/** Monthly cap for a tunnel: paid tier if ANY entitled non-trial sub owns a grant on it. */
+/** States that get the PAID attachment quota. Under paid-only pairing an Apple `trial` is an
+ * introductory offer on a real auto-renewing subscription — a customer who WILL be billed, not a
+ * freeloader — so capping their first two weeks at the trial quota just makes a paying user hit
+ * 429s. `bootstrap` (legacy short pairing window) stays on the small quota. */
+const OSS_PAID_SUBSCRIPTION_STATES = new Set(["active", "trial", "grace"]);
+
+/** Monthly cap for a tunnel: paid tier if ANY entitled paid-state sub owns a grant on it. */
 function ossCapFor(sub) {
   for (const g of Object.values(cp.grants)) {
     const t = cp.tunnels[g.tunnelId];
     if (!t || t.subdomain !== sub || g.expiresAt <= now()) continue;
     const s = cp.subs[g.appAccountToken];
-    if (s && s.state === "active" && (!s.expiresAt || s.expiresAt > now())) return OSS_CAP_PAID;
+    if (s && OSS_PAID_SUBSCRIPTION_STATES.has(s.state) && (!s.expiresAt || s.expiresAt > now())) {
+      return OSS_CAP_PAID;
+    }
   }
   return OSS_CAP_TRIAL;
+}
+
+/** The cap a GATEWAY-leg request may spend against. The plugin authenticates with `gatewayKey`
+ * only, so it can't say which Apple ID an outbound attachment belongs to; metering therefore
+ * lands on the gateway's base subdomain. Take the most generous cap among that gateway's
+ * subdomains so a second, paying Apple ID isn't limited by the base owner's smaller tier.
+ * (Attribution itself stays on the base sub — a真 per-Apple-ID split needs the plugin to learn
+ * the serving subdomain of the request, tracked separately.) */
+function ossCapForGateway(gatewayKey, baseSub) {
+  let cap = ossCapFor(baseSub);
+  const prefix = `${gatewayKey}:`;
+  for (const [mapKey, sub] of Object.entries(cp.appleSubs)) {
+    if (!mapKey.startsWith(prefix)) continue;
+    cap = Math.max(cap, ossCapFor(sub));
+  }
+  return cap;
 }
 
 /** Sign-time traffic accounting (both directions count against the tunnel's month). */
@@ -1497,8 +1642,9 @@ function ossPresign(method, objectKey, contentType) {
  *  Returns { sub } or { error: [status, code] }. */
 function ossResolveTunnel(b) {
   if (typeof b.gatewayKey === "string" && /^[a-f0-9]{16,128}$/i.test(b.gatewayKey)) {
-    const sub = registry[b.gatewayKey.toLowerCase()];
-    return sub ? { sub } : { error: [404, "gateway_not_allocated"] };
+    const gatewayKey = b.gatewayKey.toLowerCase();
+    const sub = registry[gatewayKey];
+    return sub ? { sub, gatewayKey } : { error: [404, "gateway_not_allocated"] };
   }
   const g = cp.grants[b.grantId];
   if (!g || g.appAccountToken !== b.appAccountToken) return { error: [404, "grant_not_found"] };
@@ -1663,6 +1809,21 @@ const frpGate = http.createServer((req, res) => {
     if (body.length > 262_144) req.destroy();
   });
   req.on("end", () => {
+    try {
+      gateDecision(body, reply);
+    } catch (error) {
+      // A throw here (disk full during a lazy entitlement write, unexpected state shape, …)
+      // would otherwise leave frps waiting for an answer it never gets. Fail OPEN and shout: a
+      // gate bug hits every registration at once, so failing closed means a total relay outage,
+      // while failing open only leaves a narrow window in an anti-abuse check.
+      const detail = String(error?.message || error).slice(0, 500);
+      console.error(`[frp-gate] decision failed, allowing: ${error?.stack || detail}`);
+      audit("gate.error_fail_open", { reason: detail });
+      reply({ reject: false, unchange: true });
+    }
+  });
+
+  function gateDecision(body, reply) {
     let msg;
     try {
       msg = JSON.parse(body);
@@ -1738,7 +1899,9 @@ const frpGate = http.createServer((req, res) => {
       return reply({ reject: true, reject_reason: "no active grant (subscription expired?)" });
     }
 
-    gateAllowedSubs.set(effectiveSub, now()); // feeds the ENFORCE_GRANTS expiry sweep
+    // Feeds the ENFORCE_GRANTS expiry sweep. A fresh registration clears any earlier "we already
+    // kicked this one" mark, so a returning gateway is eligible to be kicked again later.
+    gateAllowedSubs.set(effectiveSub, { allowedAt: now(), forcedAt: 0 });
 
     // Accept + inject a server-enforced bandwidth cap. Echo the received content
     // verbatim so frp re-parses a well-formed config, overriding only the cap.
@@ -1748,7 +1911,7 @@ const frpGate = http.createServer((req, res) => {
       `[frp-gate] allow proxy=${content.proxy_name} sub=${sub || domains.join(",")} bw=${BW_LIMIT}`,
     );
     return reply({ reject: false, unchange: false, content });
-  });
+  }
 });
 frpGate.listen(FRP_GATE_PORT, HOST, () =>
   console.log(`gw-alloc (frp-gate) on ${HOST}:${FRP_GATE_PORT}`),
@@ -1772,11 +1935,7 @@ function readBody(req, limit = 262_144) {
   });
 }
 
-const cpServer = http.createServer(async (req, res) => {
-  const j = (code, obj) => {
-    res.writeHead(code, { "content-type": "application/json" });
-    res.end(JSON.stringify(obj));
-  };
+async function handleControlPlaneRequest(req, res, j) {
   const url = new URL(req.url, "http://localhost");
   const p = url.pathname;
 
@@ -1875,7 +2034,7 @@ const cpServer = http.createServer(async (req, res) => {
     const sub = bareSubdomain(b.subdomain);
     if (!sub) return j(400, { error: "bad_subdomain" });
     if (!cp.revoked.includes(sub)) cp.revoked.push(sub);
-    saveCp();
+    saveCpNow();
     notifyGatewayStandby();
     audit("admin.revoke", { subdomain: sub });
     // Cut the LIVE tunnel too — without this, revocation only bites at the proxy's next
@@ -1886,14 +2045,14 @@ const cpServer = http.createServer(async (req, res) => {
   if (p === "/v1/admin/unrevoke") {
     const sub = bareSubdomain(b.subdomain);
     cp.revoked = cp.revoked.filter((s) => s !== sub);
-    saveCp();
+    saveCpNow();
     notifyGatewayStandby();
     audit("admin.unrevoke", { subdomain: sub });
     return j(200, { ok: true, revoked: cp.revoked });
   }
   if (p === "/v1/admin/killswitch") {
     cp.killswitch = b.on === true;
-    saveCp();
+    saveCpNow();
     notifyGatewayStandby();
     audit("admin.killswitch", { on: cp.killswitch });
     // Engaging the killswitch must stop abuse NOW, not at the abuser's next reconnect.
@@ -1912,7 +2071,7 @@ const cpServer = http.createServer(async (req, res) => {
         clamped++;
       }
     }
-    saveCp();
+    saveCpNow();
     audit("admin.free-test-clamp", { cutoff, clamped });
     return j(200, { ok: true, clamped, cutoff });
   }
@@ -2050,20 +2209,12 @@ const cpServer = http.createServer(async (req, res) => {
     return j(200, { nonce, ttlSec: 300 });
   }
 
-  // D12 one-time pairing ticket. (The plugin-side QR flow adopts this later; the
-  // endpoint is live so the app-side reserve path can be built against production.)
-  if (p === "/v1/tunnels/reserve") {
-    const reservationId = rid();
-    const qrTicket = rid(16);
-    cp.reservations[reservationId] = {
-      qrTicket,
-      expiresAt: now() + 10 * 60_000,
-      gatewayId: b.gatewayId || rid(6),
-    };
-    saveCp();
-    audit("reserve", { reservationId });
-    return j(200, { reservationId, qrTicket, ttlSec: 600, nodes: NODES });
-  }
+  // `/v1/tunnels/reserve` is RETIRED. Pairing is LAN-only and the one-time voucher is minted by
+  // the gateway plugin (D12), so nothing has called this since the paid-only pairing flow landed.
+  // It was unauthenticated AND wrote durable state, i.e. a free way for a stranger to grow
+  // cp-state and force a state write per request. The legacy non-seamless activate branch below
+  // still reads `cp.reservations`, so pre-existing rows keep working until they age out.
+  if (p === "/v1/tunnels/reserve") return j(410, { error: "reserve_retired" });
 
   // D3+D31+D33 activate: verify attest → check entitlement → CLAIM the gateway's
   // already-allocated subdomain → issue grant.
@@ -2274,12 +2425,13 @@ const cpServer = http.createServer(async (req, res) => {
     if (!objId) return j(400, { error: "bad_object_id" });
     const objectKey = `att/${sub}/${objId}`;
 
+    const cap = resolved.gatewayKey ? ossCapForGateway(resolved.gatewayKey, sub) : ossCapFor(sub);
+
     if (op === "put") {
       const size = Number(b.size || 0);
       if (!Number.isFinite(size) || size <= 0) return j(400, { error: "bad_size" });
       if (size > OSS_MAX_OBJECT_BYTES)
         return j(413, { error: "object_too_large", maxBytes: OSS_MAX_OBJECT_BYTES });
-      const cap = ossCapFor(sub);
       const usedBytes = ossUsedBytes(sub);
       if (usedBytes + size > cap) {
         return j(429, { error: "oss_quota_exceeded", cap, used: usedBytes });
@@ -2289,7 +2441,16 @@ const cpServer = http.createServer(async (req, res) => {
       audit("oss.sign", { sub, op, objId, size, monthBytes: total });
       return j(200, { objectKey, ...signed, quota: { cap, used: total } });
     }
-    // get: metered too (egress), but never blocked — a paid blob must stay retrievable.
+    // get: egress is metered and stays generous — a paid blob must remain retrievable well past
+    // the upload cap (re-downloads on new devices, history scrollback). But "never blocked" made
+    // egress unbounded, and OSS egress is billed per GB: one grant re-fetching the same object in
+    // a loop is real money with no ceiling. Allow a multiple of the tier cap, then refuse.
+    const egressCeiling = cap * OSS_EGRESS_BURST_FACTOR;
+    const usedBytes = ossUsedBytes(sub);
+    if (usedBytes >= egressCeiling) {
+      audit("oss.egress_ceiling", { sub, used: usedBytes, ceiling: egressCeiling });
+      return j(429, { error: "oss_quota_exceeded", cap: egressCeiling, used: usedBytes });
+    }
     const size = Math.max(0, Number(b.size || 0));
     if (size) ossCharge(sub, size);
     const signed = ossPresign("GET", objectKey, "");
@@ -2313,6 +2474,25 @@ const cpServer = http.createServer(async (req, res) => {
   }
 
   return j(404, { error: "not_found" });
+}
+
+// One request must never be able to kill this process: the frps NewProxy gate, the subdomain
+// allocator and the cert signer all live here, so an unhandled throw in a /v1 handler would take
+// tunnel authorization down with it. Answer 500, audit, keep serving.
+const cpServer = http.createServer(async (req, res) => {
+  const j = (code, obj) => {
+    if (res.writableEnded || res.headersSent) return;
+    res.writeHead(code, { "content-type": "application/json" });
+    res.end(JSON.stringify(obj));
+  };
+  try {
+    await handleControlPlaneRequest(req, res, j);
+  } catch (error) {
+    const detail = String(error?.message || error).slice(0, 500);
+    console.error(`[cp] request failed (${req.method} ${req.url}): ${error?.stack || detail}`);
+    audit("cp.request_failed", { method: req.method, path: req.url, reason: detail });
+    j(500, { error: "internal_error" });
+  }
 });
 cpServer.listen(CP_PORT, HOST, () =>
   console.log(

@@ -55,6 +55,9 @@ execFileSync("openssl", [
   "/CN=Test Apple Root",
   "-days",
   "30",
+  // Real Apple roots are CAs; verifyChain now refuses non-CA issuers, so the fixture must say so.
+  "-addext",
+  "basicConstraints=critical,CA:true",
   "-out",
   appleRootPem,
 ]);
@@ -382,6 +385,10 @@ try {
     },
   });
   check("FQDN subdomain 归一化 + 隧道复用", r.status === 200 && r.json.tunnelId === TUNNEL);
+  // The app re-activates on every cold launch (its throttle is process memory). Minting a new
+  // grant row each time made cp.grants grow forever — and it is scanned linearly on EVERY frps
+  // NewProxy call and serialized whole on every save.
+  check("同设备重复激活复用同一 grant(不再每次铸新行)", r.json.grantId === GRANT);
 
   console.log("— 配对不制造权益 —");
   r = await req(CP, "/v1/subscriptions/verify", { body: { appAccountToken: U1 } });
@@ -498,23 +505,11 @@ try {
   });
   check("另一 AppleID claim 同网关不受 U1 配额影响", r.status === 200);
 
-  console.log("— reserve 路径 —");
+  console.log("— reserve 路径已退役 —");
+  // Unauthenticated AND state-writing, with zero callers since pairing went LAN-only: a stranger
+  // could grow cp-state and force a full state write per request.
   r = await req(CP, "/v1/tunnels/reserve", { body: { gatewayId: "gw-rsv" } });
-  check(
-    "reserve ok",
-    r.status === 200 && r.json.ttlSec === 600 && typeof r.json.reservationId === "string",
-  );
-  const RSV = r.json.reservationId;
-  r = await req(CP, "/v1/tunnels/activate", {
-    body: {
-      reservationId: RSV,
-      appAccountToken: U2,
-      deviceId: DEV,
-      subdomain: subs[3],
-      gatewayKey: keyForSub.get(subs[3]),
-    },
-  });
-  check("reservation activate ok", r.status === 200);
+  check("reserve 端点已退役", r.status === 410 && r.json.error === "reserve_retired");
   r = await req(CP, "/v1/tunnels/activate", {
     body: { reservationId: "nope", appAccountToken: U2, deviceId: DEV, subdomain: subs[3] },
   });

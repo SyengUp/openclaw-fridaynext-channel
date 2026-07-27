@@ -43,12 +43,16 @@ function verifyChain(chain, roots, timestamp) {
     if (!validAt(cert, timestamp)) throw new Error("certificate_not_valid_at_signed_date");
   }
   for (let i = 0; i < chain.length - 1; i++) {
+    // An issuer must actually be a CA. Without this, ANY end-entity certificate that chains to an
+    // Apple root (every Apple developer certificate does) could be presented as the "intermediate"
+    // that signed an attacker-generated leaf — signature math alone would accept it.
+    if (!chain[i + 1].ca) throw new Error("issuer_not_a_ca");
     if (!chain[i].verify(chain[i + 1].publicKey)) throw new Error("invalid_certificate_chain");
   }
   const tail = chain[chain.length - 1];
   const anchored = roots.some((root) => {
     if (tail.fingerprint256 === root.fingerprint256) return true;
-    return validAt(root, timestamp) && tail.verify(root.publicKey);
+    return validAt(root, timestamp) && root.ca && tail.verify(root.publicKey);
   });
   if (!anchored) throw new Error("untrusted_certificate_chain");
 }
@@ -68,6 +72,12 @@ function verifyAppleJWS(jws, options) {
   const chain = header.x5c.map((der) => certificate(Buffer.from(der, "base64")));
   const signedAt = Number(payload.signedDate || options.now || Date.now());
   if (!Number.isFinite(signedAt)) throw new Error("invalid_signed_date");
+  // `signedDate` is attacker-supplied and is what certificate validity is checked against, so a
+  // far-future value would let an expired (or not-yet-valid) certificate pass forever. Apple
+  // stamps it at signing time; allow only clock skew ahead of us. Past dates stay permissive —
+  // Notification History legitimately replays old, correctly-signed notifications.
+  const skewLimit = (options.now || Date.now()) + (options.maxFutureSkewMs ?? 10 * 60_000);
+  if (signedAt > skewLimit) throw new Error("signed_date_in_future");
   verifyChain(chain, options.trustedRoots || [], signedAt);
   if (options.requireAppleExtension !== false && !chain[0].raw.includes(APPLE_APP_STORE_JWS_OID)) {
     throw new Error("wrong_leaf_certificate_purpose");
