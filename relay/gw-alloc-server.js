@@ -120,6 +120,12 @@ const ATTEST_REQUIRE = process.env.CP_ATTEST_REQUIRE === "1";
 // activation is rolled out — otherwise never-activated but legitimately-paired
 // gateways (pure QR flow) would be cut off. Flip with F.
 const ENFORCE_GRANTS = process.env.CP_ENFORCE_GRANTS === "1";
+// Accept App Attest blobs from the DEVELOPMENT environment (dev-signed / re-signed builds).
+// Default 1 keeps existing installs working; set CP_ATTEST_ALLOW_DEV=0 once App Store builds
+// are confirmed to produce production attestations, so a re-signed build can no longer claim
+// a tunnel. Independent of CP_ATTEST_REQUIRE: that one decides whether an attestation is
+// REQUIRED, this one decides which environments COUNT as valid.
+const ATTEST_ALLOW_DEV = process.env.CP_ATTEST_ALLOW_DEV !== "0";
 const TUNNEL_CAP = Number(process.env.CP_TUNNEL_CAP || 3); // D31 per Apple ID
 const NODES = (process.env.CP_NODES || "bj").split(",");
 const APP_ATTEST_TEAM_ID = process.env.CP_ATTEST_TEAM_ID || "LQF97XWK5A";
@@ -558,7 +564,7 @@ async function verifyActivationAttest(att, gatewayId, deviceId) {
         keyId: att.keyId,
         bundleIdentifier: APP_ATTEST_BUNDLE_ID,
         teamIdentifier: APP_ATTEST_TEAM_ID,
-        allowDevelopmentEnvironment: true, // dev-signed installs keep working (see security todos)
+        allowDevelopmentEnvironment: ATTEST_ALLOW_DEV,
       });
       cp.attestKeys[att.keyId] = {
         publicKey: result.publicKey,

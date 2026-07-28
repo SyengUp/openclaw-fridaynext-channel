@@ -123,6 +123,13 @@ GW_RELAY_BOOTSTRAP=1
 GW_FRPS_RESTART=1
 ```
 
+Optional: `CP_ATTEST_ALLOW_DEV` (default `1`) decides whether App Attest blobs from the
+**development** environment count as valid. Set `0` once App Store builds are confirmed to produce
+production attestations, so a re-signed build can no longer claim a tunnel. This is orthogonal to
+`CP_ATTEST_REQUIRE`: that one decides whether an attestation is *required*, this one decides which
+environments *count*. Setting `0` also blocks Debug builds (their entitlement is `development`), so
+develop over the LAN when it is on.
+
 Optional: `OSS_EGRESS_BURST_FACTOR` (default `4`) is the multiple of the monthly attachment cap a
 tunnel may download before `/v1/oss/sign` starts refusing GETs. Downloads stay far more generous
 than uploads — re-fetching paid blobs on a new device is normal — but egress is billed per GB, so
