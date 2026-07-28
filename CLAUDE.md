@@ -4,6 +4,11 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Guidance for working in this repository (OpenClaw `friday-next` channel plugin).
 
+**中继侧代码不在这个仓库。** 控制面（`gw-alloc`）、部署配置与运维脚本已于 2026-07-28 拆到
+同级的 `friday-tunnel-relay/`（原 `relay/` 子目录）。两者边界：这个仓库装在**用户自己的
+网关**上、随 npm 分发；中继代码只跑在**运营者的服务器**上、从不进 npm 包。改动中继时去那个
+仓库，不要在这里找。
+
 ## Commands
 
 ```bash

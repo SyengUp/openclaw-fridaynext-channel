@@ -7,7 +7,8 @@
  * separate key per server, but the file still needs a ceiling: nothing else stops a buggy or
  * hostile client from minting keys forever.
  *
- * Mirrors `relay/attest-key-prune.js` — same two rules, both deliberately conservative, because
+ * Mirrors `attest-key-prune.js` in the `friday-tunnel-relay` repo — same two rules, both
+ * deliberately conservative, because
  * dropping a LIVE key is not fatal (the client re-attests) but costs a real Apple round trip:
  *
  *   1. dead      — signCount 0 (never asserted after attestation) and older than `deadAfterMs`.
