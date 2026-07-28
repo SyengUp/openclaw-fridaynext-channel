@@ -12,6 +12,7 @@
  */
 import { createServer, request as httpRequest, type Server } from "node:http";
 import { connect as netConnect } from "node:net";
+import { attestGateDecision, ATTEST_REJECTION_BODY } from "../attest/attest-gate.js";
 
 // Trusted "this request arrived via the public relay" marker. EVERY public request
 // must traverse this proxy (frpc forwards only here), so stamping it here — after
@@ -21,11 +22,16 @@ import { connect as netConnect } from "node:net";
 const PUBLIC_MARKER = "x-fridaynext-public";
 
 // Everything the app needs over the public relay; nothing else reaches core.
-//   /friday-next/*        REST + SSE (attest-gated by the plugin)
-//   /friday-next-admin/*  session delete (gateway-authed)
-//   /gateway              node WebSocket (device-authed handshake)
-//   /__openclaw__/*       canvas + a2ui surface loaded by the in-app WKWebView
-//                         (core-auth-gated; the app attaches a Bearer token)
+//   /friday-next/*        REST + SSE (attest-gated by the plugin, downstream)
+//   /friday-next-admin/*  session delete (gateway-authed + attest-gated by its handler)
+//   /gateway              node WebSocket (device-authed handshake) — attest-gated HERE
+//   /__openclaw__/*       canvas + a2ui surface loaded by the in-app WKWebView — attest-gated HERE
+//
+// The last two are core-owned routes: the plugin registers no handler for them, so its gate
+// never sees them and this proxy is the only place they can be gated at all. Before that gate
+// existed, a leaked gateway bearer reached the node WebSocket and the whole canvas surface from
+// the public internet — and canvas sub-resources carried no credential whatsoever, because
+// WebKit does not propagate the top-level navigation's headers to them (hence the cookie).
 const ALLOW = [
   /^\/friday-next(\/|$)/,
   /^\/friday-next-admin(\/|$)/,
@@ -70,12 +76,48 @@ export function allowed(url: string): boolean {
   return ALLOW.some((re) => re.test(p));
 }
 
-export function startFilterProxy(listenPort: number, corePort: number, log: (m: string) => void): Server {
+/** App Attest enforcement for the core-owned surfaces, injected so this module stays free of
+ * `attest-store`'s module-level state and disk IO (and so it can be tested without either). */
+export type ProxyAttestGate = {
+  /** `appAttest.gatePublicSurfaces` — read per request so flipping config needs no restart. */
+  enabled(): boolean;
+  verify(token: string): boolean;
+};
+
+export function startFilterProxy(
+  listenPort: number,
+  corePort: number,
+  log: (m: string) => void,
+  gate?: ProxyAttestGate,
+): Server {
+  /** Everything reaching this proxy arrived via the relay, so `isPublic` is true by construction. */
+  const rejectsAttest = (req: {
+    url?: string;
+    headers: Record<string, string | string[] | undefined>;
+  }): boolean => {
+    if (!gate?.enabled()) return false;
+    return (
+      attestGateDecision({
+        pathname: normalizedPath(req.url ?? "/"),
+        headers: req.headers,
+        isPublic: true,
+        required: true,
+        scope: "proxy",
+        verify: (t) => gate.verify(t),
+      }) === "reject"
+    );
+  };
+
   const server = createServer((req, res) => {
     const url = req.url ?? "/";
     if (!allowed(url)) {
       res.writeHead(404, { "content-type": "text/plain" });
       res.end("not found");
+      return;
+    }
+    if (rejectsAttest(req)) {
+      res.writeHead(403, { "content-type": "application/json" });
+      res.end(JSON.stringify(ATTEST_REJECTION_BODY));
       return;
     }
     // Overwrite any client-supplied marker with our trusted one (Node lowercases
@@ -103,6 +145,14 @@ export function startFilterProxy(listenPort: number, corePort: number, log: (m: 
       socket.destroy();
       return;
     }
+    if (rejectsAttest(req)) {
+      // Answer before upgrading — nothing has been written to the client socket yet. A bare
+      // destroy() (what a denied path gets) is an unexplained TCP reset the app would retry
+      // forever; core answers its own unauthorized upgrades the same write-then-close way.
+      socket.write("HTTP/1.1 403 Forbidden\r\nConnection: close\r\nContent-Length: 0\r\n\r\n");
+      socket.destroy();
+      return;
+    }
     const up = netConnect(corePort, "127.0.0.1", () => {
       up.write(`${req.method} ${url} HTTP/1.1\r\n`);
       for (let i = 0; i < req.rawHeaders.length; i += 2) {
@@ -116,8 +166,23 @@ export function startFilterProxy(listenPort: number, corePort: number, log: (m: 
       socket.pipe(up);
       up.pipe(socket);
     });
-    up.on("error", () => socket.destroy());
-    socket.on("error", () => up.destroy());
+    // Tie the two sockets' lifetimes — for a tunnelled WebSocket a half-open direction is
+    // meaningless, so EOF from either side ends both.
+    //
+    // Without the `end` hooks the pair leaked: the app going away (FIN) made `pipe` end only the
+    // WRITE side upstream; core keeps its half open, so this socket never became "closed", the
+    // http server kept counting it, and `filterServer.close()` on standby/stop never completed —
+    // leaving `corePort+1` bound so the next activation fought EADDRINUSE against its own corpse.
+    const closeBoth = (): void => {
+      socket.destroy();
+      up.destroy();
+    };
+    up.on("error", closeBoth);
+    socket.on("error", closeBoth);
+    up.on("end", closeBoth);
+    socket.on("end", closeBoth);
+    up.on("close", closeBoth);
+    socket.on("close", closeBoth);
   });
 
   // Without a listener, a listen failure (EADDRINUSE on the hardcoded corePort+1, …) throws
@@ -136,7 +201,9 @@ export function startFilterProxy(listenPort: number, corePort: number, log: (m: 
     server.listen(listenPort, "127.0.0.1");
   };
   server.on("error", (err) => {
-    log(`public surface filter error: ${err.message} — rebinding in ${Math.round(retryDelayMs / 1000)}s`);
+    log(
+      `public surface filter error: ${err.message} — rebinding in ${Math.round(retryDelayMs / 1000)}s`,
+    );
     if (closed || retryTimer) return;
     retryTimer = setTimeout(() => {
       retryTimer = null;

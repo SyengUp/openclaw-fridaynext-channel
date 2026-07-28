@@ -30,6 +30,10 @@ import { homedir, platform, arch, networkInterfaces } from "node:os";
 import { join } from "node:path";
 import type { Server } from "node:http";
 import { startFilterProxy } from "./filter-proxy.js";
+import { verifySession } from "../attest/attest-store.js";
+import { resolveFridayNextConfig } from "../config.js";
+import { getHostOpenClawConfigSnapshot } from "../host-config.js";
+import { getFridayNextRuntime } from "../runtime.js";
 
 const FRP_VERSION = "0.69.1";
 const FRP_SHA256: Record<string, string> = {
@@ -1056,7 +1060,14 @@ export async function reconcileServedSubdomains(
   // Friday surface. Serialisation prevents overlapping long-poll responses from double-spawning.
   try {
     await ensureBinary(cfg.controlPlaneUrl, log);
-    if (!filterServer) filterServer = startFilterProxy(filterPort(cfg.corePort), cfg.corePort, log);
+    if (!filterServer) {
+      filterServer = startFilterProxy(filterPort(cfg.corePort), cfg.corePort, log, {
+        enabled: () =>
+          resolveFridayNextConfig(getHostOpenClawConfigSnapshot(getFridayNextRuntime().config))
+            .appAttest.gatePublicSurfaces,
+        verify: (t) => verifySession(t, Date.now()),
+      });
+    }
   } catch (e) {
     log(
       `FridayTunnel activation preparation failed: ${e instanceof Error ? e.message : String(e)}`,

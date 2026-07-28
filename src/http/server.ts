@@ -37,6 +37,7 @@ import {
   handleAttestRefresh,
 } from "./handlers/attest.js";
 import { verifySession } from "../attest/attest-store.js";
+import { attestGateDecision, ATTEST_REJECTION_BODY } from "../attest/attest-gate.js";
 import { handleSessionDelete } from "./handlers/session-delete.js";
 import { applyCorsHeaders } from "./middleware/cors.js";
 import { resolveFridayNextConfig } from "../config.js";
@@ -44,24 +45,8 @@ import { getHostOpenClawConfigSnapshot } from "../host-config.js";
 import { getFridayNextRuntime } from "../runtime.js";
 import { sseEmitter } from "../sse/emitter.js";
 
-/** Paths exempt from the App Attest gate: the attest bootstrap itself, health, and
- * owner-side plugin/pairing management (Bearer-authed, used before/without an app
- * session). Everything else requires a valid session token when attest is on. */
-function isAttestExempt(pathname: string): boolean {
-  return (
-    pathname.startsWith("/friday-next/attest/") ||
-    pathname === "/friday-next/health" ||
-    pathname === "/friday-next/status" || // server-side install-script connectivity probe
-    pathname === "/friday-next/plugin/info" ||
-    // NOTE: plugin/upgrade is deliberately NOT exempt. It is called from the app's
-    // connection page inside a normally-attested session — unlike pair/claim it has no
-    // "must be reachable pre-token" necessity, and exempting it let a leaked bearer
-    // trigger npm installs + gateway restarts from the public internet.
-    pathname === "/friday-next/public-access/pairing" ||
-    pathname === "/friday-next/pair/claim" // D12 voucher claim — pre-token, voucher IS the credential
-  );
-}
-
+// The gate's decision (and its exemption table) lives in attest/attest-gate.ts — shared with
+// session-delete.ts's sibling-prefix copy and the filter proxy's core-surface gate.
 // isPublicRequest moved to middleware/public-surface.ts (shared with the SSE handler's
 // per-connection viaPublic tracking for the OSS side-channel divert).
 
@@ -84,15 +69,19 @@ async function handleFridayNextRoute(req: IncomingMessage, res: ServerResponse):
   const attestCfg = resolveFridayNextConfig(
     getHostOpenClawConfigSnapshot(getFridayNextRuntime().config),
   );
-  if (attestCfg.appAttest.required && isPublicRequest(req) && !isAttestExempt(pathname)) {
-    const sess = req.headers["x-fridaynext-attest"];
-    const token = Array.isArray(sess) ? sess[0] : sess;
-    if (!token || !verifySession(token, Date.now())) {
-      res.statusCode = 403;
-      res.setHeader("Content-Type", "application/json");
-      res.end(JSON.stringify({ error: "app attestation required", code: "attest_required" }));
-      return true;
-    }
+  const gate = attestGateDecision({
+    pathname,
+    headers: req.headers,
+    isPublic: isPublicRequest(req),
+    required: attestCfg.appAttest.required,
+    scope: "plugin",
+    verify: (t) => verifySession(t, Date.now()),
+  });
+  if (gate === "reject") {
+    res.statusCode = 403;
+    res.setHeader("Content-Type", "application/json");
+    res.end(JSON.stringify(ATTEST_REJECTION_BODY));
+    return true;
   }
 
   // Route: GET /friday-next/attest/challenge

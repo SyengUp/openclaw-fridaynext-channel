@@ -24,6 +24,7 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import { dispatchGatewayMethod } from "openclaw/plugin-sdk/gateway-method-runtime";
 import { isPublicRequest } from "../middleware/public-surface.js";
 import { verifySession } from "../../attest/attest-store.js";
+import { attestGateDecision, ATTEST_REJECTION_BODY } from "../../attest/attest-gate.js";
 import { resolveFridayNextConfig } from "../../config.js";
 import { getHostOpenClawConfigSnapshot } from "../../host-config.js";
 import { getFridayNextRuntime } from "../../runtime.js";
@@ -71,13 +72,17 @@ export async function handleSessionDelete(
     const attestCfg = resolveFridayNextConfig(
       getHostOpenClawConfigSnapshot(getFridayNextRuntime().config),
     );
-    if (attestCfg.appAttest.required) {
-      const sess = req.headers["x-fridaynext-attest"];
-      const token = Array.isArray(sess) ? sess[0] : sess;
-      if (!token || !verifySession(token, Date.now())) {
-        return json(res, 403, { error: "app attestation required", code: "attest_required" });
-      }
-    }
+    const gate = attestGateDecision({
+      // Not under the `/friday-next` prefix, but the plugin scope is still the right one: this is
+      // an app-facing REST route, header-only, with no place in the pre-token exemption table.
+      pathname: "/friday-next-admin/sessions",
+      headers: req.headers,
+      isPublic: true,
+      required: attestCfg.appAttest.required,
+      scope: "plugin",
+      verify: (t) => verifySession(t, Date.now()),
+    });
+    if (gate === "reject") return json(res, 403, { ...ATTEST_REJECTION_BODY });
   }
 
   const url = new URL(req.url ?? "/", "http://localhost");

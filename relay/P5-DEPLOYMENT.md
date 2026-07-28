@@ -164,6 +164,37 @@ already-issued short grant; this build never creates a new one. `CP_FREE_TEST` a
 frps material needed by a gateway. The authoritative boundaries remain
 `/v1/gateway/standby`'s entitlement-only desired set plus the frps `NewProxy` plugin.
 
+## Public-surface App Attest gate
+
+Gateway-side config, `channels.friday-next.appAttest`:
+
+| Key | Default | Effect |
+| --- | --- | --- |
+| `required` | `true` | Gate `/friday-next/*` and `/friday-next-admin/*` on a valid session token. Public surface only — LAN never carries the proxy's marker and is never gated. |
+| `gatePublicSurfaces` | `true` | Also gate `/gateway` (node WebSocket) and `/__openclaw__/*` (canvas) **in the filter proxy**. |
+| `allowDevelopment` | `true` | Accept development-environment attestations. Keep `true` while distributing ad-hoc/TestFlight builds; tightening it before App Store distribution locks out your own devices. |
+
+`gatePublicSurfaces` closes a real hole: those two paths are core-owned, so the plugin registers no
+handler for them and its own gate never sees them. Until this landed, a leaked gateway bearer
+reached the node WebSocket and the whole canvas surface from the public internet, and canvas
+sub-resources carried no credential at all — WebKit does not propagate a top-level navigation's
+headers to the JS/CSS/XHR the page then issues. The app therefore presents the token two ways: an
+`X-FridayNext-Attest` header on the WebSocket upgrade, and an `fn_attest` cookie (Secure, HttpOnly,
+host-scoped) for canvas. The cookie is accepted for `/__openclaw__/*` only, so it can never stand
+in as a credential for the REST API or the node WebSocket.
+
+The proxy deliberately does NOT gate `/friday-next/*`: the plugin gates those downstream and owns
+the exemption table (`/attest/*`, `/pair/claim`, `/health`, …). Re-gating them here would make
+pairing impossible, since those endpoints are pre-token by construction.
+
+**This requires an app build that sends both carriers.** A gateway on this plugin version with an
+older app loses canvas, location and the node WebSocket over the public path — chat keeps working.
+Set `gatePublicSurfaces: false` to fall back to bearer-only on those two paths.
+
+`src/attest/attest-gate.ts` holds the decision (shared by all three call sites);
+`src/attest/attest-gate.test.ts` and `src/public-access/filter-proxy.boot.test.ts` cover it, the
+latter by booting the real proxy against a stub core.
+
 ## Launch verification
 
 1. Configure the Free / 2 Weeks introductory offer in App Store Connect.

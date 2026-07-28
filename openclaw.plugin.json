@@ -123,6 +123,9 @@
               },
               "allowDevelopment": {
                 "type": "boolean"
+              },
+              "gatePublicSurfaces": {
+                "type": "boolean"
               }
             }
           }

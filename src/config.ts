@@ -25,6 +25,11 @@ export type AppAttestConfigResolved = {
   bundleId: string;
   /** Accept development-environment attestations (ad-hoc / TestFlight dev builds). */
   allowDevelopment: boolean;
+  /** Also gate the two CORE-owned public surfaces the plugin's own gate can never see:
+   * `/gateway` (node WebSocket) and `/__openclaw__/*` (canvas). Enforced in the filter proxy.
+   * Requires an app build that sends the attest header on the node WS and plants the canvas
+   * cookie; set false to fall back to bearer-only on those two paths. */
+  gatePublicSurfaces: boolean;
 };
 
 /** Public access (FridayNext 云) — resolved from `channels.friday-next.publicAccess`. */
@@ -121,6 +126,7 @@ export function resolveFridayNextConfig(cfg: unknown): FridayNextConfig {
       teamId: asString(aa.teamId, "LQF97XWK5A"),
       bundleId: asString(aa.bundleId, "SyengUp.FridayNext"),
       allowDevelopment: asBool(aa.allowDevelopment, true),
+      gatePublicSurfaces: asBool(aa.gatePublicSurfaces, true),
     },
   };
 }
