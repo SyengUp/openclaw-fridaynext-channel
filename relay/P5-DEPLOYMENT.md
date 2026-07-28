@@ -8,7 +8,7 @@
 ## App Store Connect
 
 - Auto-renewable subscription product ID: `SyengUp.FridayNext.Tunnel.yearly`
-- One yearly product only; mainland China target price is ¥38/year.
+- One yearly product only; mainland China target price is ¥68/year (raised from ¥38 on 2026-07-28).
 - Configure an introductory offer on this product: **Free / 2 Weeks**.
 - Configure App Store Server Notifications v2 production and sandbox URL as
   `https://friday.syengup.host/v1/apple/webhook`.
