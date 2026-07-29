@@ -28,11 +28,16 @@ declare module "openclaw/plugin-sdk/device-bootstrap" {
     publicKey: string;
     displayName?: string;
     platform?: string;
+    /** `"node"` for an app's node socket; the node then lives in the DEVICE store, not `nodes/`. */
+    role?: string;
+    roles?: string[];
     ts: number;
   }
   interface PairedDevice {
     deviceId: string;
     approvedAtMs: number;
+    role?: string;
+    roles?: string[];
   }
   interface DevicePairingList {
     pending: DevicePairingPendingRequest[];

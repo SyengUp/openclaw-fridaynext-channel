@@ -1,5 +1,6 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { extractBearerToken } from "../middleware/auth.js";
+import { listDevicePairing, approveDevicePairing } from "openclaw/plugin-sdk/device-bootstrap";
 import { loadNodePairingModule } from "../../agent/node-pairing-bridge.js";
 import { createFridayNextLogger } from "../../logging.js";
 import { PLUGIN_VERSION } from "../../version.js";
@@ -203,9 +204,89 @@ async function checkNodePairing(
     return { status: "pending", detail: "Node is pending approval", nodePaired: false };
   }
 
-  return {
-    status: "not_found",
-    detail: `Node ${normalizedNodeId} not registered`,
-    nodePaired: false,
-  };
+  // Not in the node-pairing store — look in the DEVICE store before giving up.
+  //
+  // An iOS node connects as a *device* with `role: "node"`, so its first-ever pairing request
+  // lands in `devices/pending.json`; `nodes/` is not even created until something is approved
+  // there. Reporting `not_found` on that basis strands every fresh install: the app's node
+  // socket is refused pre-handshake, the refusal is what would have created the entry, and
+  // both the app- and plugin-side repair paths only act on `pending`. Chat still works over
+  // HTTP, so the user sees a working app with silently dead canvas and location.
+  return await checkNodePairingViaDeviceStore(normalizedNodeId, selfHeal, result, log);
+}
+
+/** Node-role device fallback for `checkNodePairing` — see the call site for why this exists. */
+async function checkNodePairingViaDeviceStore(
+  normalizedNodeId: string,
+  selfHeal: boolean,
+  result: HealthCheckResult,
+  log: ReturnType<typeof createFridayNextLogger>,
+): Promise<HealthComponentStatus> {
+  let devices;
+  try {
+    devices = await listDevicePairing();
+  } catch (err) {
+    log.error(`listDevicePairing failed: ${err instanceof Error ? err.message : String(err)}`);
+    return {
+      status: "not_found",
+      detail: `Node ${normalizedNodeId} not registered`,
+      nodePaired: false,
+    };
+  }
+
+  const sameId = (id: unknown) => String(id ?? "").trim().toUpperCase() === normalizedNodeId;
+  const isNodeRole = (entry: { role?: string; roles?: string[] }) =>
+    entry.role === "node" || (entry.roles ?? []).includes("node");
+
+  if ((devices.paired ?? []).some((entry) => sameId(entry.deviceId) && isNodeRole(entry))) {
+    return { status: "ok", detail: "Node paired as a node-role device", nodePaired: true };
+  }
+
+  const pending = (devices.pending ?? []).find(
+    (entry) => sameId(entry.deviceId) && isNodeRole(entry),
+  );
+  if (!pending) {
+    return {
+      status: "not_found",
+      detail: `Node ${normalizedNodeId} not registered`,
+      nodePaired: false,
+    };
+  }
+
+  if (!selfHeal) {
+    return { status: "pending", detail: "Node is pending approval", nodePaired: false };
+  }
+
+  try {
+    const approved = await approveDevicePairing(pending.requestId, {
+      callerScopes: ["operator.admin", "operator.pairing", "operator.read", "operator.write"],
+    });
+    const succeeded = approved != null && (approved as { status?: string }).status !== "forbidden";
+    (result.repairActions ??= []).push({
+      component: "nodePairing",
+      action: "approveDevicePairing",
+      result: succeeded ? "ok" : "failed",
+      detail: succeeded
+        ? `Auto-approved node-role device ${normalizedNodeId}`
+        : `approveDevicePairing returned status=${(approved as { status?: string })?.status ?? "null"}`,
+    });
+    if (succeeded) {
+      log.info(`Auto-approved node-role device ${normalizedNodeId}`);
+      return {
+        status: "ok",
+        detail: "Node was pending as a node-role device, auto-approved",
+        nodePaired: true,
+      };
+    }
+  } catch (err) {
+    log.error(`approveDevicePairing failed: ${err instanceof Error ? err.message : String(err)}`);
+    (result.repairActions ??= []).push({
+      component: "nodePairing",
+      action: "approveDevicePairing",
+      result: "failed",
+      detail: err instanceof Error ? err.message : String(err),
+    });
+  }
+
+  return { status: "degraded", detail: "Node pending but auto-approve failed", nodePaired: false };
 }

@@ -42,6 +42,7 @@ const STRINGS = {
     detailRestartHint: "20-30 秒",
     detailRestartSlow: "较慢，继续校验",
     detailRestartUnconfirmed: "未确认，继续校验",
+    detailRestartNoService: "无网关服务（需手动启动）",
     detailRetry: (i, n) => `重试 ${i}/${n}`,
     detailTunnelWait: "最长等待 5 分钟",
 
@@ -63,6 +64,7 @@ const STRINGS = {
     failReadConfigHint: "确认 OpenClaw 已安装并至少运行过一次",
     failWriteConfig: (p) => `无法写入 ${p}`,
     failGateway: "网关未就绪，安装未完成",
+    failGatewayNoService: "插件已安装、配置已写入；此环境无网关服务（无 systemd），请先前台启动网关，再重跑本安装完成校验",
 
     reasonNotOk: "插件返回 ok=false",
     reasonAuth: "令牌不匹配（gateway.auth.token）",
@@ -81,6 +83,7 @@ const STRINGS = {
     detailRestartHint: "20-30s",
     detailRestartSlow: "slow, verifying",
     detailRestartUnconfirmed: "unconfirmed, verifying",
+    detailRestartNoService: "no gateway service (manual start required)",
     detailRetry: (i, n) => `retry ${i}/${n}`,
     detailTunnelWait: "waiting up to 5 min",
 
@@ -103,6 +106,8 @@ const STRINGS = {
     failReadConfigHint: "make sure OpenClaw is installed and has run at least once",
     failWriteConfig: (p) => `cannot write ${p}`,
     failGateway: "gateway not ready — install incomplete",
+    failGatewayNoService:
+      "plugin installed and configured; no gateway service on this host (no systemd) — start the gateway in the foreground, then re-run this installer to finish verification",
 
     reasonNotOk: "plugin returned ok=false",
     reasonAuth: "token mismatch (gateway.auth.token)",

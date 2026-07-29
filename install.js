@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import { execSync } from "node:child_process";
+import { createSocket as dgramCreateSocket } from "node:dgram";
 import { existsSync, readFileSync, writeFileSync, rmSync } from "node:fs";
 import { homedir, networkInterfaces } from "node:os";
 import { join } from "node:path";
@@ -322,32 +323,81 @@ if (configChanged) {
 
 const restartStep = ui.step(T.stepRestart);
 restartStep.detail(T.detailRestartHint);
+// True when `gateway restart` reported there is no managed service to restart (containers,
+// hosts without systemd/launchd). The plugin install itself succeeded in that case — only the
+// gateway process needs a manual foreground start — so a later verify timeout must say THAT
+// instead of the misleading "Installation FAILED".
+let gatewayServiceUnavailable = false;
+const SERVICE_UNAVAILABLE_RE =
+  /service disabled|systemd user services are unavailable|run the gateway in the foreground/i;
 try {
   // A full gateway restart commonly takes 20s+ on a fresh boot; give it plenty of room
   // so we don't kill it mid-restart and report a false failure.
-  execSync(`${openclawCmd} gateway restart`, {
+  const restartOut = execSync(`${openclawCmd} gateway restart`, {
     encoding: "utf8",
     stdio: "pipe",
     timeout: 90000,
   });
-  restartStep.ok("");
+  // The core exits 0 while explaining there is no service — read what it said.
+  gatewayServiceUnavailable = SERVICE_UNAVAILABLE_RE.test(restartOut ?? "");
+  restartStep.ok(gatewayServiceUnavailable ? T.detailRestartNoService : "");
 } catch (e) {
-  // ETIMEDOUT/SIGTERM here usually means the restart is simply slow, not broken —
-  // the verify step below is the real gate either way, so never fail hard here.
-  const slow = e.code === "ETIMEDOUT" || e.signal === "SIGTERM";
-  restartStep.ok(slow ? T.detailRestartSlow : T.detailRestartUnconfirmed);
+  gatewayServiceUnavailable = SERVICE_UNAVAILABLE_RE.test(
+    `${e.stdout ?? ""}\n${e.stderr ?? ""}`,
+  );
+  if (gatewayServiceUnavailable) {
+    restartStep.ok(T.detailRestartNoService);
+  } else {
+    // ETIMEDOUT/SIGTERM here usually means the restart is simply slow, not broken —
+    // the verify step below is the real gate either way, so never fail hard here.
+    const slow = e.code === "ETIMEDOUT" || e.signal === "SIGTERM";
+    restartStep.ok(slow ? T.detailRestartSlow : T.detailRestartUnconfirmed);
+  }
 }
 
 // --------------- verify ---------------
 
-function getLanIp() {
+// Interfaces whose address other LAN machines cannot reach (container bridges, VM adapters,
+// VPN tunnels). Advertising one of those as the gateway URL bricks pairing — the app tries
+// only the LAN address for the voucher exchange. Must stay in lockstep with frpc-manager.ts.
+const VIRTUAL_IFACE_NAME = /^(docker|br-|bridge|virbr|veth|vmenet|vnic|utun|tun|tap|tailscale|zt|wg|anpi|llw|awdl|feth)/i;
+
+async function getLanIp() {
+  // Preferred: kernel routing-table query. UDP connect() binds the source address the default
+  // route would use without sending any packet — correct on multi-NIC hosts, works offline
+  // and behind CGNAT. 223.5.5.5 (AliDNS) keeps even an escalated query routable in mainland
+  // China. Fallback: interface enumeration with virtual adapters filtered out.
+  const routed = await new Promise((resolve) => {
+    try {
+      const socket = dgramCreateSocket("udp4");
+      const done = (ip) => {
+        socket.close();
+        resolve(ip && ip !== "0.0.0.0" ? ip : null);
+      };
+      socket.on("error", () => done(null));
+      socket.connect(53, "223.5.5.5", () => {
+        try {
+          done(socket.address().address);
+        } catch {
+          done(null);
+        }
+      });
+    } catch {
+      resolve(null);
+    }
+  });
+  if (routed) return routed;
+
   const nets = networkInterfaces();
+  let firstNonInternal = null;
   for (const name of Object.keys(nets)) {
     for (const net of nets[name]) {
-      if (net.family === "IPv4" && !net.internal) return net.address;
+      if (net.family !== "IPv4" || net.internal) continue;
+      firstNonInternal ??= net.address;
+      if (!VIRTUAL_IFACE_NAME.test(name)) return net.address;
     }
   }
-  return "127.0.0.1";
+  return firstNonInternal ?? "127.0.0.1";
 }
 
 try {
@@ -361,7 +411,7 @@ const gatewayToken = config.gateway?.auth?.token || "(not set)";
 const bindMode = config.gateway?.bind || "localhost";
 
 const gatewayUrl =
-  bindMode === "lan" ? `http://${getLanIp()}:${gatewayPort}` : `http://127.0.0.1:${gatewayPort}`;
+  bindMode === "lan" ? `http://${await getLanIp()}:${gatewayPort}` : `http://127.0.0.1:${gatewayPort}`;
 
 // Always verify against loopback: the gateway binds 0.0.0.0 so it's reachable here,
 // and this avoids false negatives from LAN/NAT routing of the advertised IP.
@@ -417,13 +467,25 @@ async function verifyGateway(url, token, retries = 30) {
 }
 
 const verifyStep = ui.step(T.stepVerify);
-const verified = await verifyGateway(verifyUrl, gatewayToken);
+// No managed service → nobody is going to start the gateway for us; a running foreground
+// gateway answers on the first few probes, so don't sit through the full 30s timeout.
+const verified = await verifyGateway(verifyUrl, gatewayToken, gatewayServiceUnavailable ? 5 : 30);
 
 // Hard gate: if the gateway didn't verify, the install did NOT succeed — stop here
 // with a non-zero exit and never print the QR block, so a failure can't look like
 // a success.
 if (!verified.ok) {
   verifyStep.fail(verified.reason);
+  // Containers / hosts without systemd: the plugin IS installed and configured; only the
+  // gateway process isn't running (and can't be, as a service). Saying "Installation FAILED"
+  // here sends the user chasing a phantom install problem — tell them the one real next step.
+  if (gatewayServiceUnavailable) {
+    die(
+      T.failGatewayNoService,
+      "openclaw gateway run",
+      "npx -y @syengup/friday-channel-next",
+    );
+  }
   die(
     T.failGateway,
     "openclaw gateway status",

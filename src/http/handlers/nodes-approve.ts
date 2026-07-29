@@ -1,6 +1,7 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { readJsonBody } from "../middleware/body.js";
 import { extractBearerToken } from "../middleware/auth.js";
+import { listDevicePairing, approveDevicePairing } from "openclaw/plugin-sdk/device-bootstrap";
 import { createFridayNextLogger } from "../../logging.js";
 import { loadNodePairingModule } from "../../agent/node-pairing-bridge.js";
 
@@ -158,12 +159,101 @@ export async function handleNodesApprove(
     }
   }
 
+  // Nothing in the node-pairing store — try the DEVICE store before 404ing.
+  //
+  // An iOS node connects as a device with `role: "node"`, so a first-ever pairing request lands
+  // in `devices/pending.json` and never reaches `nodes/`. Without this fallback the app's own
+  // recovery call gets a 404 and the node can never pair: canvas and location stay dead while
+  // chat works over HTTP, with nothing surfaced to the user.
+  if (await approveNodeRoleDevice(normalizedNodeId, res, log)) return true;
+
   res.statusCode = 404;
   res.setHeader("Content-Type", "application/json");
   res.end(
     JSON.stringify({
       error: "No pending node found for this nodeId",
       nodeId: normalizedNodeId,
+    }),
+  );
+  return true;
+}
+
+/**
+ * Approve a node-role entry sitting in the DEVICE pairing store.
+ * Returns true when it has written a response.
+ */
+async function approveNodeRoleDevice(
+  normalizedNodeId: string,
+  res: ServerResponse,
+  log: ReturnType<typeof createFridayNextLogger>,
+): Promise<boolean> {
+  let devices;
+  try {
+    devices = await listDevicePairing();
+  } catch (err) {
+    log.error(`listDevicePairing failed: ${err instanceof Error ? err.message : String(err)}`);
+    return false;
+  }
+
+  const sameId = (id: unknown) => String(id ?? "").trim().toUpperCase() === normalizedNodeId;
+  const isNodeRole = (entry: { role?: string; roles?: string[] }) =>
+    entry.role === "node" || (entry.roles ?? []).includes("node");
+
+  const pairedDevice = (devices.paired ?? []).find(
+    (entry) => sameId(entry.deviceId) && isNodeRole(entry),
+  );
+  if (pairedDevice) {
+    res.statusCode = 200;
+    res.setHeader("Content-Type", "application/json");
+    res.end(
+      JSON.stringify({ ok: true, nodeId: normalizedNodeId, alreadyApproved: true, viaDevice: true }),
+    );
+    return true;
+  }
+
+  const pending = (devices.pending ?? []).find(
+    (entry) => sameId(entry.deviceId) && isNodeRole(entry),
+  );
+  if (!pending) return false;
+
+  log.info(`approving node-role device nodeId=${normalizedNodeId} requestId=${pending.requestId}`);
+  let approved;
+  try {
+    approved = await approveDevicePairing(pending.requestId, {
+      callerScopes: ["operator.admin", "operator.pairing", "operator.read", "operator.write"],
+    });
+  } catch (err) {
+    log.error(`approveDevicePairing failed: ${err instanceof Error ? err.message : String(err)}`);
+    res.statusCode = 502;
+    res.setHeader("Content-Type", "application/json");
+    res.end(
+      JSON.stringify({
+        error: "Node approval failed",
+        detail: err instanceof Error ? err.message : "Unknown error",
+      }),
+    );
+    return true;
+  }
+
+  if (approved != null && (approved as { status?: string }).status === "forbidden") {
+    res.statusCode = 403;
+    res.setHeader("Content-Type", "application/json");
+    res.end(
+      JSON.stringify({
+        error: `Node approval forbidden: ${(approved as { missingScope?: string }).missingScope ?? "unknown"}`,
+      }),
+    );
+    return true;
+  }
+
+  res.statusCode = 200;
+  res.setHeader("Content-Type", "application/json");
+  res.end(
+    JSON.stringify({
+      ok: true,
+      nodeId: normalizedNodeId,
+      requestId: pending.requestId,
+      viaDevice: true,
     }),
   );
   return true;

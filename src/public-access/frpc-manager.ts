@@ -14,6 +14,7 @@
  * operator hard stop. All state lives under `~/.openclaw/friday-next/public-access/`.
  */
 import { execFile, execFileSync, spawn, type ChildProcess } from "node:child_process";
+import { createSocket } from "node:dgram";
 import { request as httpsRequest } from "node:https";
 import {
   existsSync,
@@ -271,14 +272,63 @@ function frpcPath(): string {
   return join(DATA_DIR, "frpc");
 }
 
-function getLanIp(): string {
-  const ifaces = networkInterfaces();
+/**
+ * Interfaces that answer with an address other machines on the LAN cannot reach — container
+ * bridges, VM host adapters, VPN/overlay tunnels. Picking one of these as the advertised
+ * `lanUrl` bricks pairing outright: `PairingVoucherClaim` tries ONLY the LAN address, so the
+ * voucher exchange dies and the user reads it as "can't connect".
+ */
+const VIRTUAL_IFACE_NAME = /^(docker|br-|bridge|virbr|veth|vmenet|vnic|utun|tun|tap|tailscale|zt|wg|anpi|llw|awdl|feth)/i;
+
+/**
+ * Pick the LAN IP from an interface enumeration, skipping virtual adapters. Pure — exported
+ * for tests. Falls back to the first non-internal IPv4 (old behavior) when everything looks
+ * virtual, because a wrong-subnet answer still beats no answer at all.
+ */
+export function pickLanIpFromInterfaces(
+  ifaces: ReturnType<typeof networkInterfaces>,
+): string | null {
+  let firstNonInternal: string | null = null;
   for (const name of Object.keys(ifaces)) {
     for (const net of ifaces[name] ?? []) {
-      if (net.family === "IPv4" && !net.internal) return net.address;
+      if (net.family !== "IPv4" || net.internal) continue;
+      firstNonInternal ??= net.address;
+      if (!VIRTUAL_IFACE_NAME.test(name)) return net.address;
     }
   }
-  return "127.0.0.1";
+  return firstNonInternal;
+}
+
+/**
+ * The machine's outbound LAN IP via a kernel routing-table query: UDP `connect()` binds the
+ * socket to whatever source address the default route would use, WITHOUT sending a single
+ * packet — works offline, behind CGNAT, and needs no reply from the probe address. This is
+ * the only reliable answer on multi-NIC hosts (Docker bridges, VM adapters, VPNs), where
+ * "first enumerated interface" is a coin toss. 223.5.5.5 (AliDNS) rather than 8.8.8.8 so
+ * that even a network stack that somehow escalates the query to real traffic stays routable
+ * from mainland China. Falls back to enumeration with virtual adapters filtered out.
+ */
+function getLanIp(): Promise<string> {
+  return new Promise((resolve) => {
+    const fallback = () => resolve(pickLanIpFromInterfaces(networkInterfaces()) ?? "127.0.0.1");
+    try {
+      const socket = createSocket("udp4");
+      const done = (ip: string | null) => {
+        socket.close();
+        ip && ip !== "0.0.0.0" ? resolve(ip) : fallback();
+      };
+      socket.on("error", () => done(null));
+      socket.connect(53, "223.5.5.5", () => {
+        try {
+          done(socket.address().address);
+        } catch {
+          done(null);
+        }
+      });
+    } catch {
+      fallback();
+    }
+  });
 }
 
 const execFileAsync = promisify(execFile);
@@ -972,7 +1022,7 @@ export async function startPublicAccess(
 
   cachedPairing = {
     v: 2, // superset schema with a one-time pairing voucher minted per fetch (D12)
-    lanUrl: `http://${getLanIp()}:${cfg.corePort}`,
+    lanUrl: `http://${await getLanIp()}:${cfg.corePort}`,
     publicUrl: `https://${cn}`,
     fingerprint,
     token: cfg.authToken,

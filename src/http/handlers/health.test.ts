@@ -4,9 +4,17 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import { setMockRuntime } from "../../test-support/mock-runtime.js";
 import { __setMockNodePairingForTests } from "../../agent/node-pairing-bridge.js";
 
-const { mockListNodePairing, mockApproveNodePairing } = vi.hoisted(() => ({
-  mockListNodePairing: vi.fn(),
-  mockApproveNodePairing: vi.fn(),
+const { mockListNodePairing, mockApproveNodePairing, mockListDevices, mockApproveDevice } =
+  vi.hoisted(() => ({
+    mockListNodePairing: vi.fn(),
+    mockApproveNodePairing: vi.fn(),
+    mockListDevices: vi.fn(),
+    mockApproveDevice: vi.fn(),
+  }));
+
+vi.mock("openclaw/plugin-sdk/device-bootstrap", () => ({
+  listDevicePairing: mockListDevices,
+  approveDevicePairing: mockApproveDevice,
 }));
 
 import { handleHealth } from "./health.js";
@@ -45,6 +53,8 @@ describe("handleHealth", () => {
     });
     mockListNodePairing.mockResolvedValue({ pending: [], paired: [] });
     mockApproveNodePairing.mockResolvedValue({ requestId: REQUEST_ID, node: { nodeId: NODE_ID } });
+    mockListDevices.mockResolvedValue({ pending: [], paired: [] });
+    mockApproveDevice.mockResolvedValue({ status: "approved", requestId: REQUEST_ID });
   });
 
   // --- Method & Auth ---
@@ -282,5 +292,93 @@ describe("handleHealth", () => {
     expect(body.ok).toBe(true);
     expect(body.devicePairing).toBeUndefined();
     expect(body.nodePairing.status).toBe("ok");
+  });
+
+  // --- node-role device fallback (first-pairing deadlock) ---
+  //
+  // A fresh iOS install registers its node as a DEVICE with role "node", so `nodes/` is empty
+  // and the node-pairing store alone reports not_found. That used to strand the node forever:
+  // refused pre-handshake, never queued as pending, so no repair path fired and canvas/location
+  // stayed silently dead while chat worked.
+
+  it("auto-approves a node-role device pending in the DEVICE store", async () => {
+    mockListNodePairing.mockResolvedValueOnce({ pending: [], paired: [] });
+    mockListDevices.mockResolvedValueOnce({
+      pending: [{ requestId: REQUEST_ID, deviceId: NODE_ID, role: "node", roles: ["node"], ts: 1 }],
+      paired: [],
+    });
+
+    const req = mockReq(
+      "GET",
+      `/friday-next/health?nodeDeviceId=${NODE_ID}&selfHeal=true`,
+      { authorization: "Bearer test-token" },
+    );
+    const res = new MockRes() as unknown as ServerResponse;
+    await handleHealth(req, res);
+
+    expect(mockApproveDevice).toHaveBeenCalledWith(REQUEST_ID, expect.anything());
+    const body = JSON.parse((res as unknown as MockRes).body);
+    expect(body.nodePairing.status).toBe("ok");
+    expect(body.nodePairing.nodePaired).toBe(true);
+    expect(body.repairActions).toContainEqual(
+      expect.objectContaining({ action: "approveDevicePairing", result: "ok" }),
+    );
+  });
+
+  it("reports pending without approving a node-role device when selfHeal is off", async () => {
+    mockListNodePairing.mockResolvedValueOnce({ pending: [], paired: [] });
+    mockListDevices.mockResolvedValueOnce({
+      pending: [{ requestId: REQUEST_ID, deviceId: NODE_ID, role: "node", roles: ["node"], ts: 1 }],
+      paired: [],
+    });
+
+    const req = mockReq("GET", `/friday-next/health?nodeDeviceId=${NODE_ID}`, {
+      authorization: "Bearer test-token",
+    });
+    const res = new MockRes() as unknown as ServerResponse;
+    await handleHealth(req, res);
+
+    expect(mockApproveDevice).not.toHaveBeenCalled();
+    expect(JSON.parse((res as unknown as MockRes).body).nodePairing.status).toBe("pending");
+  });
+
+  it("reports ok for a node-role device already paired in the DEVICE store", async () => {
+    mockListNodePairing.mockResolvedValueOnce({ pending: [], paired: [] });
+    mockListDevices.mockResolvedValueOnce({
+      pending: [],
+      paired: [{ deviceId: NODE_ID, approvedAtMs: 1, role: "node", roles: ["node"] }],
+    });
+
+    const req = mockReq("GET", `/friday-next/health?nodeDeviceId=${NODE_ID}`, {
+      authorization: "Bearer test-token",
+    });
+    const res = new MockRes() as unknown as ServerResponse;
+    await handleHealth(req, res);
+
+    expect(mockApproveDevice).not.toHaveBeenCalled();
+    const body = JSON.parse((res as unknown as MockRes).body);
+    expect(body.nodePairing.status).toBe("ok");
+    expect(body.nodePairing.nodePaired).toBe(true);
+  });
+
+  it("still reports not_found when the device entry is not a node role", async () => {
+    mockListNodePairing.mockResolvedValueOnce({ pending: [], paired: [] });
+    mockListDevices.mockResolvedValueOnce({
+      pending: [
+        { requestId: REQUEST_ID, deviceId: NODE_ID, role: "operator", roles: ["operator"], ts: 1 },
+      ],
+      paired: [],
+    });
+
+    const req = mockReq(
+      "GET",
+      `/friday-next/health?nodeDeviceId=${NODE_ID}&selfHeal=true`,
+      { authorization: "Bearer test-token" },
+    );
+    const res = new MockRes() as unknown as ServerResponse;
+    await handleHealth(req, res);
+
+    expect(mockApproveDevice).not.toHaveBeenCalled();
+    expect(JSON.parse((res as unknown as MockRes).body).nodePairing.status).toBe("not_found");
   });
 });
