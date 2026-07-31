@@ -1,5 +1,7 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { getFridayAgentForwardRuntime } from "../../agent-forward-runtime.js";
+import { normalizeAgentId } from "../../agent-id.js";
+import { resolveModelRuntime } from "../../model-runtime.js";
 import { splitModelRef } from "../../session/session-manager.js";
 import { resolveModelThinking, type ThinkingLevelOption } from "../../thinking-levels.js";
 import { extractBearerToken } from "../middleware/auth.js";
@@ -15,6 +17,12 @@ export interface FridayModelEntry {
   thinkingLevels?: ThinkingLevelOption[];
   /** Provider/model default thinking level, when the gateway reports one. */
   thinkingDefault?: string;
+  /**
+   * Harness that executes this model: `openclaw` (the embedded runtime) or a registered harness id
+   * such as `codex` / `claude-cli`. Always set — an absent field means the gateway predates this
+   * field, which clients must not read as "embedded".
+   */
+  runtime?: string;
 }
 
 interface ResolvedModels {
@@ -22,7 +30,7 @@ interface ResolvedModels {
   defaultModel: string;
 }
 
-function resolveConfiguredModels(): ResolvedModels {
+function resolveConfiguredModels(agentId?: string): ResolvedModels {
   const rt = getFridayAgentForwardRuntime();
   if (!rt) return { models: [], defaultModel: "" };
   const cfg = rt.getConfig() as Record<string, unknown>;
@@ -96,9 +104,11 @@ function resolveConfiguredModels(): ResolvedModels {
 
   for (const entry of entries) {
     const split = splitModelRef(entry.id);
-    const thinking = resolveModelThinking(entry.provider || split.provider, split.modelId);
+    const provider = entry.provider || split.provider;
+    const thinking = resolveModelThinking(provider, split.modelId);
     entry.thinkingLevels = thinking.levels;
     if (thinking.default) entry.thinkingDefault = thinking.default;
+    entry.runtime = resolveModelRuntime({ cfg, provider, modelId: split.modelId, agentId }).id;
   }
 
   return { models: entries, defaultModel };
@@ -157,7 +167,11 @@ export async function handleModelsList(
     return true;
   }
 
-  const { models, defaultModel } = resolveConfiguredModels();
+  // `?agentId=` scopes per-model runtime resolution to that agent's `models` overrides; without it
+  // resolution falls back to `agents.defaults` + the model catalog.
+  const rawAgentId = new URL(req.url ?? "", "http://localhost").searchParams.get("agentId");
+  const agentId = rawAgentId?.trim() ? normalizeAgentId(rawAgentId) : undefined;
+  const { models, defaultModel } = resolveConfiguredModels(agentId);
 
   res.statusCode = 200;
   res.setHeader("Content-Type", "application/json");

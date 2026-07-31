@@ -19,8 +19,8 @@ class MockRes extends EventEmitter {
   }
 }
 
-function makeReq(headers: Record<string, string> = {}, method = "GET"): any {
-  return { method, url: "/friday-next/models", headers };
+function makeReq(headers: Record<string, string> = {}, method = "GET", query = ""): any {
+  return { method, url: `/friday-next/models${query}`, headers };
 }
 
 const AUTH = { authorization: "Bearer test-token" };
@@ -110,5 +110,61 @@ describe("handleModelsList thinking levels", () => {
       "high",
     ]);
     expect(model.thinkingDefault).toBeUndefined();
+  });
+});
+
+describe("handleModelsList runtime annotation", () => {
+  beforeEach(() => {
+    setMockRuntime();
+  });
+
+  afterEach(() => {
+    resetFridayAgentForwardRuntimeForTest();
+  });
+
+  it("reports the executing harness for every model", async () => {
+    setRuntime({
+      models: {
+        providers: {
+          deepseek: { baseUrl: "https://api.deepseek.com", models: [{ id: "deepseek-v4-pro" }] },
+        },
+      },
+      agents: {
+        defaults: {
+          model: "deepseek/deepseek-v4-pro",
+          models: { "deepseek/deepseek-v4-pro": {}, "openai/gpt-5.6-sol": {} },
+        },
+      },
+    });
+
+    const res = new MockRes();
+    await handleModelsList(makeReq(AUTH), res as any);
+
+    const body = JSON.parse(res.body);
+    // OpenAI on the official endpoint runs on Codex; DeepSeek stays on the embedded runtime.
+    expect(body.models.find((m: any) => m.id === "openai/gpt-5.6-sol").runtime).toBe("codex");
+    expect(body.models.find((m: any) => m.id === "deepseek/deepseek-v4-pro").runtime).toBe(
+      "openclaw",
+    );
+  });
+
+  it("scopes runtime resolution to ?agentId=", async () => {
+    setRuntime({
+      agents: {
+        list: [
+          { id: "operator", models: { "deepseek/*": { agentRuntime: { id: "claude-cli" } } } },
+        ],
+        defaults: { model: "deepseek/deepseek-v4-pro", models: { "deepseek/deepseek-v4-pro": {} } },
+      },
+    });
+
+    let res = new MockRes();
+    await handleModelsList(makeReq(AUTH, "GET", "?agentId=operator"), res as any);
+    expect(JSON.parse(res.body).models[0].runtime).toBe("claude-cli");
+
+    // Another agent doesn't inherit operator's override — it stays on the embedded runtime.
+    res = new MockRes();
+    await handleModelsList(makeReq(AUTH, "GET", "?agentId=main"), res as any);
+    expect(JSON.parse(res.body).models[0].runtime).toBe("openclaw");
   });
 });
