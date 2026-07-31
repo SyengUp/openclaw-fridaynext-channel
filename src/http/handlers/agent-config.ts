@@ -136,6 +136,29 @@ function coerceModel(raw: unknown): unknown {
   return undefined;
 }
 
+/**
+ * Core's config schema pins `thinkingDefault` to this exact enum
+ * (`zod-schema.agent-runtime.ts` / `zod-schema.agent-defaults.ts`). Writing anything else
+ * produces a config file the gateway can no longer validate on the next load, so reject it
+ * here rather than persisting a value that bricks config parsing.
+ */
+const THINKING_LEVELS = [
+  "off",
+  "minimal",
+  "low",
+  "medium",
+  "high",
+  "xhigh",
+  "adaptive",
+  "max",
+  "ultra",
+] as const;
+
+function coerceThinkingDefault(raw: unknown): string | undefined {
+  const value = readString(raw)?.toLowerCase();
+  return value && (THINKING_LEVELS as readonly string[]).includes(value) ? value : undefined;
+}
+
 function coerceTools(raw: unknown): AgentToolsConfig | undefined {
   return readToolsConfig(raw);
 }
@@ -170,13 +193,20 @@ export async function handleAgentConfig(
   if (!body) return json(res, 400, { error: "Invalid or missing JSON body" });
 
   const model = readPatch(body, "model", coerceModel);
-  const thinkingDefault = readPatch(body, "thinkingDefault", (r) => readString(r));
+  const thinkingDefault = readPatch(body, "thinkingDefault", coerceThinkingDefault);
   const tools = readPatch(body, "tools", coerceTools);
   const skills = readPatch(body, "skills", coerceSkills);
 
   if ("skills" in body && body.skills !== null && !Array.isArray(body.skills)) {
     return json(res, 400, {
       error: "skills must be an array of skill ids, [] to disable all, or null to inherit defaults",
+    });
+  }
+  // Reject an out-of-enum level loudly — `readPatch` would otherwise treat it as "not sent"
+  // and the caller would think the write landed.
+  if ("thinkingDefault" in body && body.thinkingDefault !== null && !thinkingDefault.sent) {
+    return json(res, 400, {
+      error: `thinkingDefault must be one of: ${THINKING_LEVELS.join(", ")}, or null to inherit defaults`,
     });
   }
   if (!model.sent && !thinkingDefault.sent && !tools.sent && !skills.sent) {

@@ -159,6 +159,29 @@ describe("handleAgentConfig", () => {
     expect("model" in (config.agents as any).list[0]).toBe(false);
   });
 
+  it("PUT sets thinkingDefault, clears it with null, and rejects out-of-enum levels", async () => {
+    const config: Record<string, unknown> = {
+      agents: { list: [{ id: "main", thinkingDefault: "low" }] },
+    };
+    setRuntimes(config);
+
+    let res = new MockRes();
+    await handleAgentConfig(makeReq(AUTH, "PUT", { thinkingDefault: "XHigh" }), res as any, "main");
+    expect(res.statusCode).toBe(200);
+    expect((config.agents as any).list[0].thinkingDefault).toBe("xhigh");
+
+    res = new MockRes();
+    await handleAgentConfig(makeReq(AUTH, "PUT", { thinkingDefault: null }), res as any, "main");
+    expect("thinkingDefault" in (config.agents as any).list[0]).toBe(false);
+
+    // 核心 schema 只认九档；写别的值会让配置下次加载过不了校验，必须 400 而不是静默忽略。
+    res = new MockRes();
+    await handleAgentConfig(makeReq(AUTH, "PUT", { thinkingDefault: "turbo" }), res as any, "main");
+    expect(res.statusCode).toBe(400);
+    expect(JSON.parse(res.body).error).toContain("thinkingDefault");
+    expect("thinkingDefault" in (config.agents as any).list[0]).toBe(false);
+  });
+
   it("PUT skills:[] disables all; skills:null clears the field", async () => {
     const config: Record<string, unknown> = { agents: { list: [{ id: "main", skills: ["a"] }] } };
     setRuntimes(config);
