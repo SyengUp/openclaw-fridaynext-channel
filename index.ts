@@ -20,7 +20,14 @@ import {
 } from "./src/friday-session.js";
 import { setFridayAgentForwardRuntime } from "./src/agent-forward-runtime.js";
 import { setUpgradeRuntime } from "./src/upgrade-runtime.js";
-import { noteCronActivity } from "./src/notifications/cron-notification-tracker.js";
+import {
+  noteCronActivity,
+  updateCronDeliveryTarget,
+} from "./src/notifications/cron-notification-tracker.js";
+import {
+  loadCronDeliveryTarget,
+  resolveCronDeliveryFromHook,
+} from "./src/notifications/cron-delivery-lookup.js";
 import { noteHeartbeatActivity } from "./src/notifications/heartbeat-notification-tracker.js";
 import { getOpenClawAgentRunContext } from "./src/agent-run-context-bridge.js";
 import { accumulateRunUsage } from "./src/agent/run-usage-accumulator.js";
@@ -223,15 +230,33 @@ export default defineChannelPluginEntry({
     // offline background push with its originating cron job's NAME. A real `announce`
     // cron delivery reaches the channel outbound with no cron origin (see channel.ts
     // sendText), so we anchor on this first-party lifecycle hook instead.
-    api.on("cron_changed", (event: any) => {
-      if (event?.action !== "started" && event?.action !== "finished") return;
+    api.on("cron_changed", (event: any, ctx?: any) => {
+      const action = event?.action;
+      if (action !== "started" && action !== "finished") return;
+      const jobId = String(event?.jobId ?? "").trim();
+      if (!jobId) return;
       // Best-effort origin agent so the notifications inbox attributes the push to the job's
       // owning agent, not the delivery session's (usually the app's current `main`). Falls back
       // to the session-key derivation when the event doesn't carry it — no regression.
       const cronAgentId = event.job?.agentId ?? event.agentId ?? undefined;
-      noteCronActivity(event.jobId, event.job?.name, cronAgentId);
+      // WHERE the job delivers decides whether it may claim a friday-next push at all. Without it,
+      // any same-minute job wins the correlation by recency alone — that is how 2026-07-31's
+      // "每日科技" push ended up labelled "miloco-home-patrol" (a job that never pushes to the app).
+      const delivery = resolveCronDeliveryFromHook(jobId, event, ctx);
+      noteCronActivity(jobId, event.job?.name, cronAgentId, { action, delivery });
+      // The hook's job snapshot omits `delivery`, so the sync read above is usually "unknown".
+      // Patch it in from the cron store; a run lasts minutes, the disk read milliseconds.
+      if (delivery.deliversToFridayNext === null) {
+        void loadCronDeliveryTarget(jobId)
+          .then((resolved) => {
+            if (resolved.deliversToFridayNext !== null) updateCronDeliveryTarget(jobId, resolved);
+          })
+          .catch(() => {
+            /* best-effort — unknown just means the job stays eligible */
+          });
+      }
       hookLogger.info(
-        `[CRON_CHANGED] action=${event.action} jobId=${event.jobId ?? "(none)"} name=${event.job?.name ?? "(none)"} agent=${cronAgentId ?? "(none)"}`,
+        `[CRON_CHANGED] action=${action} jobId=${jobId} name=${event.job?.name ?? "(none)"} agent=${cronAgentId ?? "(none)"} toFriday=${delivery.deliversToFridayNext ?? "(unknown)"}`,
       );
     });
 

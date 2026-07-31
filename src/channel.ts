@@ -70,6 +70,26 @@ function resolveOutboundSessionKey(
   );
 }
 
+/**
+ * The session key to RECORD on a notification (the live SSE broadcast keeps using the routing key).
+ *
+ * A background push's routing key is not its origin: with no run identity on the outbound ctx,
+ * `resolveOutboundSessionKey` falls back to the device's LAST run-route, which can be arbitrarily
+ * stale — on 2026-07-31 an offline cron push inherited the key of a user chat from 00:26 that
+ * morning. Worse, that stale key can itself be a PREVIOUS cron run's `…:cron:<jobId>…` key, which
+ * the inbox read path would then mistake for this push's job. So for a correlated background push
+ * with no ctx-carried runId we record no key at all and let the verified tracker identity stand
+ * (`fallbackKind` still classifies it). Normal replies and generic offline pushes keep the key —
+ * it's how their agent is attributed.
+ */
+function backgroundPushSourceSessionKey(
+  backgroundKind: string | null,
+  runIdFromCtx: string | undefined,
+  sessionKey: string | undefined,
+): string | undefined {
+  return backgroundKind && !runIdFromCtx ? undefined : sessionKey;
+}
+
 function resolveLocalMediaPath(mediaUrl: string, localRoots?: string[]): string {
   if (path.isAbsolute(mediaUrl)) return mediaUrl;
   const roots = localRoots ?? [process.cwd(), os.tmpdir()];
@@ -298,11 +318,11 @@ export const fridayNextChannelPlugin = createChatChannelPlugin({
       // Cron/heartbeat background pushes are captured REGARDLESS of connection — the inbox is
       // their durable record, so a lost live delivery (SSE flap / backgrounded app) can't drop
       // them. A normal reply is captured only when offline.
-      const bg = resolveBackgroundPushKind();
+      const bg = resolveBackgroundPushKind(deviceId);
       fridayNotificationsStore.append({
         deviceId,
         ts: Date.now(),
-        sourceSessionKey: sessionKey,
+        sourceSessionKey: backgroundPushSourceSessionKey(bg.kind, runIdFromCtx, sessionKey),
         text,
         hasMedia: false,
         fallbackKind: bg.kind ?? (conn ? null : "push"),
@@ -361,11 +381,15 @@ export const fridayNextChannelPlugin = createChatChannelPlugin({
       // Durable notification capture; before any gate. Same offline "push" fallback
       // as sendText — real cron deliveries never carry a `:cron:` session key, so a
       // recently-fired scheduled task lends the push its name.
-      const bgForMedia = resolveBackgroundPushKind();
+      const bgForMedia = resolveBackgroundPushKind(deviceId);
       fridayNotificationsStore.append({
         deviceId,
         ts: Date.now(),
-        sourceSessionKey: sessionKey,
+        sourceSessionKey: backgroundPushSourceSessionKey(
+          bgForMedia.kind,
+          runIdFromCtx,
+          sessionKey,
+        ),
         text: caption,
         hasMedia: true,
         fallbackKind: bgForMedia.kind ?? (sseEmitter.getConnection(deviceId) ? null : "push"),

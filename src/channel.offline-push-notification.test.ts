@@ -33,14 +33,17 @@ const outbound = fridayNextChannelPlugin.outbound as {
   sendText: (ctx: Record<string, unknown>) => Promise<unknown>;
 };
 
-function readNotifications(dir: string, deviceId: string): Array<{ kind: string; text: string }> {
+function readNotifications(
+  dir: string,
+  deviceId: string,
+): Array<{ kind: string; text: string; jobId?: string; jobName?: string }> {
   const file = path.join(dir, `${deviceId.toUpperCase()}.jsonl`);
   if (!fs.existsSync(file)) return [];
   return fs
     .readFileSync(file, "utf8")
     .split(/\r?\n/)
     .filter((l) => l.trim())
-    .map((l) => JSON.parse(l) as { kind: string; text: string });
+    .map((l) => JSON.parse(l) as { kind: string; text: string; jobId?: string; jobName?: string });
 }
 
 describe("friday-next offline push notification capture", () => {
@@ -116,5 +119,25 @@ describe("friday-next offline push notification capture", () => {
     expect(entries).toHaveLength(1);
     expect(entries[0]?.kind).toBe("cron");
     expect(entries[0]?.jobName).toBe("每日趣闻汇总");
+  });
+
+  // Regression (2026-07-31 07:32, device 8DDE95DE…): "每日科技" started at 07:30:00.022 and pushed
+  // at 07:32:48 — but "miloco-home-patrol" started 13ms later, overwrote the single correlation
+  // slot, and the inbox labelled the push with THAT job (which never delivers to the app).
+  it("credits the friday-next cron, not a same-minute job that pushes elsewhere", async () => {
+    const deviceId = "DEV-CONCURRENT-CRON";
+    noteCronActivity("aca31947", "每日科技", null, {
+      action: "started",
+      delivery: { deliversToFridayNext: true, to: null },
+    });
+    noteCronActivity("6cc44ff1", "miloco-home-patrol", null, { action: "started" });
+
+    await outbound.sendText({ to: deviceId, text: "🌿 7月31日科技新闻速览" });
+
+    const entries = readNotifications(notifDir, deviceId);
+    expect(entries).toHaveLength(1);
+    expect(entries[0]?.kind).toBe("cron");
+    expect(entries[0]?.jobName).toBe("每日科技");
+    expect(entries[0]?.jobId).toBe("aca31947");
   });
 });

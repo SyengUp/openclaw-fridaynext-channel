@@ -137,11 +137,15 @@ async function handleSend(ctx: MessageActionCtx): Promise<unknown> {
     const conn = sseEmitter.getConnection(to);
     const willHaveMedia =
       pickStringArray(ctx.params, "mediaUrls").length > 0 || !!inlineBase64 || !!mediaPath;
-    const bg = resolveBackgroundPushKind();
+    const bg = resolveBackgroundPushKind(to);
     fridayNotificationsStore.append({
       deviceId: to,
       ts: Date.now(),
-      sourceSessionKey: ctx.sessionKey ?? sessionKey,
+      // `ctx.sessionKey` is the true origin here. Its fallback (`sessionKey`) is the delivery route
+      // — for a background push that is the device's last run-route, possibly a stale PREVIOUS cron
+      // key the inbox read path would mistake for this push's job — so a correlated background push
+      // records no key rather than a misleading one (its identity comes from the tracker).
+      sourceSessionKey: ctx.sessionKey ?? (bg.kind ? undefined : sessionKey),
       text: text || caption,
       hasMedia: willHaveMedia,
       fallbackKind: bg.kind ?? (conn ? null : "push"),

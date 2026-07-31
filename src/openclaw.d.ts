@@ -211,6 +211,14 @@ declare module "openclaw/plugin-sdk/config-runtime" {
   interface CronJob {
     id: string;
     name: string;
+    agentId?: string;
+    /** Where the job announces its result. Absent for jobs that deliver nothing by themselves
+     *  (their agent turn may still push via the `message` tool). */
+    delivery?: {
+      mode?: string;
+      channel?: string;
+      to?: string;
+    };
   }
   interface CronStoreFile {
     version: number;
