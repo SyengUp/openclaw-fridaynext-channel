@@ -39,6 +39,7 @@ import {
 import { verifySession } from "../attest/attest-store.js";
 import { attestGateDecision, ATTEST_REJECTION_BODY } from "../attest/attest-gate.js";
 import { handleSessionDelete } from "./handlers/session-delete.js";
+import { handleAgentIdentity } from "./handlers/agent-identity.js";
 import { applyCorsHeaders } from "./middleware/cors.js";
 import { resolveFridayNextConfig } from "../config.js";
 import { getHostOpenClawConfigSnapshot } from "../host-config.js";
@@ -273,6 +274,16 @@ export function registerFridayNextHttpRoutes(api: {
   api.registerHttpRoute({
     path: "/friday-next-admin/sessions",
     handler: handleSessionDelete,
+    auth: "gateway",
+    match: "exact",
+    gatewayRuntimeScopeSurface: "trusted-operator",
+  });
+
+  // Agent rename. Same sibling-prefix + trusted-operator reasoning as above:
+  // the canonical `agents.update` method requires `operator.admin`.
+  api.registerHttpRoute({
+    path: "/friday-next-admin/agents/identity",
+    handler: handleAgentIdentity,
     auth: "gateway",
     match: "exact",
     gatewayRuntimeScopeSurface: "trusted-operator",
