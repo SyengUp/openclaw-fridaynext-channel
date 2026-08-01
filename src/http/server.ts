@@ -40,6 +40,7 @@ import { verifySession } from "../attest/attest-store.js";
 import { attestGateDecision, ATTEST_REJECTION_BODY } from "../attest/attest-gate.js";
 import { handleSessionDelete } from "./handlers/session-delete.js";
 import { handleAgentIdentity } from "./handlers/agent-identity.js";
+import { handleCommandsList } from "./handlers/commands-list.js";
 import { applyCorsHeaders } from "./middleware/cors.js";
 import { resolveFridayNextConfig } from "../config.js";
 import { getHostOpenClawConfigSnapshot } from "../host-config.js";
@@ -287,6 +288,18 @@ export function registerFridayNextHttpRoutes(api: {
     auth: "gateway",
     match: "exact",
     gatewayRuntimeScopeSurface: "trusted-operator",
+  });
+
+  // Slash-command catalog for the composer menu. Same sibling-prefix reasoning
+  // (plugin-authed routes get an empty operator scope list, so they can't
+  // dispatch scoped methods), but NO "trusted-operator": `commands.list` only
+  // needs `operator.read`, which the default surface's `operator.write` already
+  // satisfies. Least privilege for a read-only listing.
+  api.registerHttpRoute({
+    path: "/friday-next-admin/commands",
+    handler: handleCommandsList,
+    auth: "gateway",
+    match: "exact",
   });
 
   api.logger.info("Friday Next channel HTTP routes registered at /friday-next/*");

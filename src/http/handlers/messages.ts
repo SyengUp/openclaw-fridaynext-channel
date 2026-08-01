@@ -636,7 +636,22 @@ export async function handleMessages(req: IncomingMessage, res: ServerResponse):
     Provider: "friday-next" as const,
     ChatType: "direct" as const,
     CommandAuthorized: true,
-    CommandSource: isSlashCommand ? ("native" as const) : undefined,
+    // `"text"`, NOT `"native"`. This channel is a TEXT command surface — it never registers
+    // provider-native commands (no `capabilities.nativeCommands`), so a slash command arrives as
+    // ordinary body text.
+    //
+    // Marking it `"native"` (as this did until 2026-08-01) makes `isNativeCommandTurn()` true, which
+    // sends the turn down core's NATIVE SLASH FAST PATH
+    // (auto-reply/reply/get-reply-native-slash-fast-path.ts). That path is built for channels that
+    // answer the invocation themselves (Discord/Telegram interaction replies): it RETURNS the reply
+    // to its caller instead of pushing it through the dispatcher's `deliver` callback. We only
+    // consume `deliver`, so every slash command silently produced nothing — POST 202, then total
+    // silence, not even lifecycle events.
+    //
+    // `"text"` is also safe against the operator kill switch: `shouldHandleTextCommands` short-
+    // circuits true unless `commands.text === false`, and even then only for surfaces that DO
+    // register native commands — which this one doesn't.
+    CommandSource: isSlashCommand ? ("text" as const) : undefined,
   };
 
   const runAgent = async () => {

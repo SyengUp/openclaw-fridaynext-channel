@@ -93,6 +93,48 @@ describe("handleMessages dispatch context", () => {
     expect(capturedCtx!.Surface).toBe("friday-next");
     expect(capturedCtx!.AccountId).toBe("default");
     expect(capturedCtx!.SessionKey).toBe("agent:main:default");
+    expect(capturedCtx!.CommandSource).toBeUndefined();
+  });
+
+  // Regression guard: `"native"` routes the turn into core's native slash FAST PATH, which returns
+  // the reply to its caller instead of pushing it through the dispatcher's `deliver` callback —
+  // the only path this channel consumes. That made every slash command answer with total silence
+  // (202 accepted, zero SSE events). This surface is text-only; it must say so.
+  it("marks slash commands as a TEXT command source, never native", async () => {
+    setFridayNextRuntime({
+      config: { loadConfig: () => ({ gateway: { auth: { token: "tok" } }, channels: {} }) },
+    } as never);
+
+    let capturedCtx: Record<string, unknown> | null = null;
+    const dispatchCalled = new Promise<void>((resolve) => {
+      __setMockFridayDispatchForTests((args: unknown) => {
+        capturedCtx = (args as { ctx?: Record<string, unknown> }).ctx ?? null;
+        resolve();
+        return Promise.resolve();
+      });
+    });
+
+    const req = new PassThrough() as unknown as IncomingMessage;
+    req.method = "POST";
+    req.headers = { authorization: "Bearer tok" };
+    const res = new MockRes() as unknown as ServerResponse;
+    const p = handleMessages(req, res);
+
+    req.end(
+      JSON.stringify({
+        deviceId: "aa11bb22-cc33-dd44-ee55-ff6677889900",
+        text: "/models",
+        sessionKey: "default",
+      }),
+    );
+
+    await p;
+    await dispatchCalled;
+
+    expect(capturedCtx).not.toBeNull();
+    expect(capturedCtx!.CommandSource).toBe("text");
+    expect(capturedCtx!.CommandAuthorized).toBe(true);
+    expect(capturedCtx!.CommandBody).toBe("/models");
   });
 
   it("accepts attachment-only messages (empty text + attachments) and dispatches", async () => {
