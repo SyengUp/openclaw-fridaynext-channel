@@ -17,6 +17,7 @@ import { handleNodesApprove } from "./handlers/nodes-approve.js";
 import { handleApprovalDecision } from "./handlers/approvals.js";
 import { handleSessionsSettings } from "./handlers/sessions-settings.js";
 import { handlePromptCapsules } from "./handlers/prompt-capsules.js";
+import { handleServerName } from "./handlers/server-name.js";
 import { handleModelsList } from "./handlers/models-list.js";
 import { handleAgentsList } from "./handlers/agents-list.js";
 import { handleAgentConfig } from "./handlers/agent-config.js";
@@ -151,6 +152,14 @@ async function handleFridayNextRoute(req: IncomingMessage, res: ServerResponse):
     pathname === "/friday-next/prompt-capsules"
   ) {
     return await handlePromptCapsules(req, res);
+  }
+
+  // Route: GET/PUT /friday-next/server-name (this gateway's display name, shared by all devices)
+  if (
+    (req.method === "GET" || req.method === "PUT") &&
+    pathname === "/friday-next/server-name"
+  ) {
+    return await handleServerName(req, res);
   }
 
   if (req.method === "GET" && pathname === "/friday-next/models") {
