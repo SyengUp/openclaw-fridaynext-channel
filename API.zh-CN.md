@@ -142,6 +142,42 @@ agent 的完整工具目录(核心 + 插件工具，对齐 ControlUI)，供工�
 - `GET /friday-next/agents/{id}/files/{name}` — 返回单文件内容（不存在则 `exists:false`、`content` 为空）。
 - `PUT /friday-next/agents/{id}/files/{name}` — body `{ "content": "..." }`。非白名单或路径穿越名 → `400`；超 256 KiB → `413`。
 
+## 提示词胶囊
+
+App 提示词胶囊的网关端持久副本：删除重装 App（或换第二台设备）后自动恢复。全局一份（所有 agent 共用）。插件 **1.0.16** 起提供。
+
+落盘位置 `~/.openclaw/friday-next/prompt-capsules/capsules.json`。
+
+- `GET /friday-next/prompt-capsules`
+
+  ```json
+  {
+    "ok": true,
+    "storeId": "0f0e…",
+    "revision": 7,
+    "updatedAt": 1730000000000,
+    "capsules": [
+      {
+        "id": "11111111-1111-1111-1111-111111111111",
+        "name": "Canvas",
+        "iconSystemName": "rectangle.on.rectangle.angled",
+        "prompt": "…",
+        "createdAt": 1730000000000,
+        "sortOrder": 0,
+        "updatedAt": 1730000000000
+      }
+    ]
+  }
+  ```
+
+  `storeId` 首次访问时生成、之后永不变——客户端用它标记"同一个数据源"，所以同一网关走局域网 IP 还是公网中继域名都算一份；真换了网关则识别为新对端（只做并集、绝不删本地数据）。全新网关返回 `revision: 0` + 空列表。
+
+- `PUT /friday-next/prompt-capsules` — body `{ "capsules": [...], "baseRevision": 7 }`
+
+  整表替换并自增 `revision`；时间戳为 epoch 毫秒。`baseRevision` 可选，用于乐观并发：与服务端 revision 不一致则拒绝写入，返回 `409 { "ok": false, "conflict": true, "storeId", "revision", "capsules" }`，客户端据此重新合并后重试。不传则为无条件覆盖。
+
+  限制（越界 → `400`）：最多 200 条；每条需非空且唯一的字符串 `id`；`name`/`iconSystemName` ≤ 100 字符；`prompt` ≤ 8000 字符。未知字段丢弃；缺失的 `sortOrder`/`createdAt`/`updatedAt` 由服务端补齐。
+
 ## 已删除接口
 
 - `GET` / `DELETE /friday-next/history` — 已删除，客户端应用 SSE 自行重建上下文。

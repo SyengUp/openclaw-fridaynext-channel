@@ -22,6 +22,7 @@
 - `POST /friday-next/files` · `GET /friday-next/files/:id`
 - `POST /friday-next/cancel` · `GET /friday-next/status` · `GET /friday-next/health`
 - `GET /friday-next/models` · `GET /friday-next/agents` · `GET|PUT /friday-next/sessions/settings`
+- `GET|PUT /friday-next/prompt-capsules`
 - `GET|PUT /friday-next/agents/{id}/config` · `GET|PUT /friday-next/agents/{id}/files[/{name}]` · `GET /friday-next/agents/{id}/tools/catalog`
 - `GET /friday-next/history/sessions` · `GET /friday-next/history/messages` · `GET /friday-next/link-preview`
 - `POST /friday-next/device-approve` · `POST /friday-next/nodes-approve` · `POST /friday-next/approvals/{approvalId}`

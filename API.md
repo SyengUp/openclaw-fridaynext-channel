@@ -454,6 +454,52 @@ Whitelist: `AGENTS.md`, `IDENTITY.md`, `SOUL.md`, `TOOLS.md`, `MEMORY.md`, `USER
 - `GET /friday-next/agents/{id}/files/{name}` — `{ "ok": true, "name": "IDENTITY.md", "exists": true, "content": "..." }` (missing file ⇒ `exists:false`, empty `content`).
 - `PUT /friday-next/agents/{id}/files/{name}` — body `{ "content": "..." }`. Non-whitelist or traversal names ⇒ `400`; content over 256 KiB ⇒ `413`.
 
+## Prompt capsules
+
+Durable, gateway-side mirror of the app's prompt capsules ("提示词胶囊"), so deleting and
+reinstalling the app — or signing in from a second device — restores them. One global list per
+gateway (every agent shares it). Introduced in plugin **1.0.16**.
+
+Stored at `~/.openclaw/friday-next/prompt-capsules/capsules.json`.
+
+- `GET /friday-next/prompt-capsules`
+
+  ```json
+  {
+    "ok": true,
+    "storeId": "0f0e…",
+    "revision": 7,
+    "updatedAt": 1730000000000,
+    "capsules": [
+      {
+        "id": "11111111-1111-1111-1111-111111111111",
+        "name": "Canvas",
+        "iconSystemName": "rectangle.on.rectangle.angled",
+        "prompt": "…",
+        "createdAt": 1730000000000,
+        "sortOrder": 0,
+        "updatedAt": 1730000000000
+      }
+    ]
+  }
+  ```
+
+  `storeId` is minted on first access and never changes — clients key their sync bookkeeping on it,
+  so the same gateway reached over a LAN IP and over the public relay domain is one data source, and
+  a genuinely different gateway is a new peer (union-only merge, never delete). A fresh gateway
+  answers `revision: 0` with an empty list.
+
+- `PUT /friday-next/prompt-capsules` — body `{ "capsules": [...], "baseRevision": 7 }`
+
+  Replaces the whole list and bumps `revision`; timestamps are epoch ms. `baseRevision` is optional
+  optimistic concurrency: when it doesn't match the stored revision the write is refused with
+  `409 { "ok": false, "conflict": true, "storeId", "revision", "capsules" }` so the client can
+  re-merge against the returned state and retry. Omit it for an unconditional replace.
+
+  Limits (violations ⇒ `400`): ≤ 200 capsules; each needs a non-empty unique string `id`;
+  `name` / `iconSystemName` ≤ 100 chars; `prompt` ≤ 8000 chars. Unknown fields are dropped;
+  missing `sortOrder` / `createdAt` / `updatedAt` are filled server-side.
+
 ## Removed endpoints
 
 - `GET` / `DELETE /friday-next/history` — **removed.** Build conversation state from the SSE stream on the client.
