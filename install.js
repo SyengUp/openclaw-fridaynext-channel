@@ -236,19 +236,25 @@ if (!config.plugins.entries["friday-next"].hooks.allowConversationAccess) {
   configChanged = true;
 }
 
-// Channel
+// Channel — `enabled` only. `transport` used to be written here, but nothing ever read it
+// (resolveFridayNextConfig ignores it); it just left a mystery key in every user's config.
 if (!config.channels) config.channels = {};
 if (!config.channels["friday-next"]) {
-  config.channels["friday-next"] = { enabled: true, transport: "http+sse" };
+  config.channels["friday-next"] = { enabled: true };
   configChanged = true;
 } else {
   if (!config.channels["friday-next"].enabled) {
     config.channels["friday-next"].enabled = true;
     configChanged = true;
   }
-  if (!config.channels["friday-next"].transport) {
-    config.channels["friday-next"].transport = "http+sse";
-    configChanged = true;
+  // Sweep the dead keys we used to write. They are unread by the plugin, and ControlUI
+  // surfaces undeclared keys in a "Custom entries" editor — so leaving them behind means
+  // every upgraded install keeps showing a setting that does nothing.
+  for (const deadKey of ["transport", "pathPrefix"]) {
+    if (deadKey in config.channels["friday-next"]) {
+      delete config.channels["friday-next"][deadKey];
+      configChanged = true;
+    }
   }
 }
 

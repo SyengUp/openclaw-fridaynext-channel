@@ -15,126 +15,20 @@
       "description": "HTTP+SSE channel for the Friday iOS client.",
       "schema": {
         "type": "object",
-        "additionalProperties": false,
         "properties": {
           "enabled": {
             "type": "boolean"
           },
-          "transport": {
-            "type": "string"
-          },
-          "pathPrefix": {
-            "type": "string"
-          },
-          "historyLimit": {
-            "type": "integer",
-            "minimum": 1,
-            "maximum": 200
-          },
-          "historyDir": {
-            "type": "string"
-          },
           "logLevel": {
             "type": "string",
             "enum": ["debug", "info", "warn", "error"]
-          },
-          "authToken": {
-            "type": "string"
-          },
-          "cors": {
-            "type": "object",
-            "additionalProperties": false,
-            "properties": {
-              "enabled": {
-                "type": "boolean"
-              },
-              "standbyDisabled": {
-                "type": "boolean",
-                "description": "Operator-only hard stop: disable FridayTunnel standby and all official control-plane traffic"
-              },
-              "allowOrigin": {
-                "type": "string"
-              }
-            }
-          },
-          "sse": {
-            "type": "object",
-            "additionalProperties": false,
-            "properties": {
-              "keepaliveSec": {
-                "type": "integer",
-                "minimum": 5,
-                "maximum": 120
-              },
-              "backlogPerDevice": {
-                "type": "integer",
-                "minimum": 0,
-                "maximum": 1000
-              }
-            }
-          },
-          "publicAccess": {
-            "type": "object",
-            "additionalProperties": false,
-            "properties": {
-              "enabled": {
-                "type": "boolean"
-              },
-              "relayAddr": {
-                "type": "string"
-              },
-              "relayToken": {
-                "type": "string"
-              },
-              "subDomainHost": {
-                "type": "string"
-              },
-              "subdomain": {
-                "type": "string"
-              },
-              "allocatorUrl": {
-                "type": "string"
-              },
-              "certSignUrl": {
-                "type": "string"
-              },
-              "corePort": {
-                "type": "integer",
-                "minimum": 1,
-                "maximum": 65535
-              },
-              "controlPlaneUrl": {
-                "type": "string"
-              }
-            }
-          },
-          "appAttest": {
-            "type": "object",
-            "additionalProperties": false,
-            "properties": {
-              "required": {
-                "type": "boolean"
-              },
-              "teamId": {
-                "type": "string"
-              },
-              "bundleId": {
-                "type": "string"
-              },
-              "allowDevelopment": {
-                "type": "boolean"
-              },
-              "gatePublicSurfaces": {
-                "type": "boolean"
-              }
-            }
           }
         }
       },
       "uiHints": {
-        "authToken": {
-          "label": "Bearer auth token",
-          "sensitive": true
+        "logLevel": {
+          "label": "Log level",
+          "help": "Verbosity of the friday-next plugin's own gateway logs. Raise to `debug` when reporting an issue."
         }
       }
     }

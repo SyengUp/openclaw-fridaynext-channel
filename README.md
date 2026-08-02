@@ -30,6 +30,44 @@
 
 See **`API.md`** (English) and **`API.zh-CN.md`** (Chinese) for payloads, event shapes, offline queue paths, and breaking changes.
 
+## Configuration
+
+ControlUI's channel settings panel exposes only what a user can meaningfully change:
+
+| Key | Default | Meaning |
+| --- | --- | --- |
+| `enabled` | `true` | Channel on/off |
+| `logLevel` | `info` | Plugin log verbosity (`debug` / `info` / `warn` / `error`) |
+
+### Advanced config keys
+
+The keys below are read from `channels.friday-next.*` but deliberately **not** declared in the
+channel schema, so ControlUI does not render them — they are operator-level knobs whose defaults
+are correct for every normal install, and a stray edit mostly just breaks connectivity. They still
+take effect when written by hand into the OpenClaw config. Authoritative list and defaults:
+`resolveFridayNextConfig()` in `src/config.ts`.
+
+| Key | Default | Meaning |
+| --- | --- | --- |
+| `authToken` | — | Bearer fallback; `gateway.auth.token` wins when set |
+| `historyDir` | `~/.openclaw/friday-next/history` | SSE replay / history JSONL location |
+| `historyLimit` | `25` | History window size (1–200) |
+| `cors.enabled` · `cors.allowOrigin` | `false` · `*` | Browser CORS for `/friday-next/*` |
+| `sse.keepaliveSec` · `sse.backlogPerDevice` | `30` · `200` | SSE heartbeat and per-device replay depth |
+| `publicAccess.standbyDisabled` | `false` | **Operator hard stop**: disables FridayTunnel standby and all official control-plane traffic. For incident response / zero-egress deployments — setting it cuts off paid cloud access. |
+| `publicAccess.relayAddr` · `.relayToken` | fetched from control plane | Point the tunnel at your own frps |
+| `publicAccess.subDomainHost` · `.subdomain` · `.allocatorUrl` · `.certSignUrl` · `.controlPlaneUrl` · `.corePort` | official endpoints | Public-access plumbing |
+| `appAttest.required` · `.teamId` · `.bundleId` · `.allowDevelopment` · `.gatePublicSurfaces` | on, our signing identity | App Attest gate — only enforced on requests arriving via the relay |
+
+`transport` and `pathPrefix` were accepted historically and are now ignored; the installer no
+longer writes them and removes them on upgrade.
+
+The channel schema deliberately **omits** `additionalProperties` instead of setting it to `true`.
+Both are permissive to the validator, so undeclared keys never fail validation — but ControlUI
+normalises a literal `true` into `{}` and then renders a "Custom entries" editor listing every
+undeclared key in the config, which would defeat the point. `false` is not an option either: it
+would reject existing configs outright.
+
 ## Testing
 
 - `pnpm test:unit` — Vitest unit tests (excludes `*.e2e.test.ts`)

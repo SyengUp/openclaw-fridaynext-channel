@@ -190,7 +190,7 @@ App 提示词胶囊的网关端持久副本：删除重装 App（或换第二台
 
 请检查：
 
-1. `channels["friday-next"]` 不能只有 `"enabled": true`；至少增加例如 `"transport": "http+sse"`，并 **重启 Gateway**。
+1. `channels["friday-next"].enabled` 为 `true`，并 **重启 Gateway**。（旧文档让你补一个 `"transport": "http+sse"`——那个键从来没被读过，现已从 schema 移除，加不加都无影响。）
 2. 插件入口已启用，日志中出现 `Friday Next channel HTTP routes registered`。
 3. URL 精确：`GET /friday-next/events?deviceId=...`，发消息为 `POST /friday-next/messages`。
 

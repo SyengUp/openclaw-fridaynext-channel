@@ -1,5 +1,22 @@
 import { homedir } from "node:os";
 
+/**
+ * Every key below is read from `channels.friday-next.*` in the OpenClaw config, but only
+ * `enabled` and `logLevel` are declared in openclaw.plugin.json's channel schema. That is
+ * deliberate: ControlUI renders one form field per declared key and honours no `hidden`
+ * ui hint, so the schema IS the user-facing settings panel. Everything else here is
+ * operator/internal (relay endpoints, attest identity, SSE tuning) — still honoured when
+ * hand-written, just not advertised as something to fiddle with.
+ *
+ * The channel schema deliberately OMITS `additionalProperties` rather than setting it to
+ * `true`. Both are permissive to the validator, but ControlUI normalises a literal `true`
+ * into `{}` and then renders a "Custom entries" key/value editor listing every undeclared
+ * key found in the config — re-exposing exactly what this schema is trying to hide. Setting
+ * it to `false` is not an option either: existing installs carry keys like `transport`, and
+ * they would fail config validation outright.
+ *
+ * Documented under "Advanced config keys" in README.md.
+ */
 export type FridayNextLogLevel = "debug" | "info" | "warn" | "error";
 
 export type FridayNextConfig = {
