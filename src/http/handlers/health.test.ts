@@ -87,6 +87,40 @@ describe("handleHealth", () => {
     expect(body.repairActions).toBeUndefined();
   });
 
+  // --- Gateway fingerprint (stable identity of this gateway) ---
+
+  it("reports a stable gatewayFingerprint across requests", async () => {
+    const call = async (): Promise<Record<string, unknown>> => {
+      const req = mockReq("GET", "/friday-next/health", { authorization: "Bearer test-token" });
+      const res = new MockRes() as unknown as ServerResponse;
+      await handleHealth(req, res);
+      return JSON.parse((res as unknown as MockRes).body) as Record<string, unknown>;
+    };
+
+    const first = await call();
+    expect(typeof first.gatewayFingerprint).toBe("string");
+    expect(first.gatewayFingerprint).toBeTruthy();
+
+    // The app compares this value across probes to tell "same gateway, new address" from
+    // "a different gateway was typed in" — it must not be re-minted per request.
+    const second = await call();
+    expect(second.gatewayFingerprint).toBe(first.gatewayFingerprint);
+  });
+
+  it("gives a different gatewayFingerprint for a different gateway install", async () => {
+    const call = async (): Promise<Record<string, unknown>> => {
+      const req = mockReq("GET", "/friday-next/health", { authorization: "Bearer test-token" });
+      const res = new MockRes() as unknown as ServerResponse;
+      await handleHealth(req, res);
+      return JSON.parse((res as unknown as MockRes).body) as Record<string, unknown>;
+    };
+
+    const first = await call();
+    setMockRuntime(); // fresh data dir == a second, unrelated gateway
+    const second = await call();
+    expect(second.gatewayFingerprint).not.toBe(first.gatewayFingerprint);
+  });
+
   // --- Node pairing: paired + healthy ---
 
   it("returns ok when node is paired with required caps and commands", async () => {

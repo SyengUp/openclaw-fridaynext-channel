@@ -3,6 +3,7 @@ import { extractBearerToken } from "../middleware/auth.js";
 import { listDevicePairing, approveDevicePairing } from "openclaw/plugin-sdk/device-bootstrap";
 import { loadNodePairingModule } from "../../agent/node-pairing-bridge.js";
 import { createFridayNextLogger } from "../../logging.js";
+import { readOrInitCapsules } from "../../prompt-capsules/capsules-store.js";
 import { PLUGIN_VERSION } from "../../version.js";
 
 const REQUIRED_NODE_CAPS = ["location", "canvas"];
@@ -37,6 +38,21 @@ export interface HealthCheckResult {
   deviceId: string;
   nodeDeviceId: string;
   pluginVersion: string;
+  /**
+   * Stable identity of **this gateway**, so a client can tell "same gateway, new address"
+   * (DHCP moved the LAN IP, a tunnel domain was added) apart from "an entirely different
+   * gateway was typed in". The app checks it before saving an edited gateway URL: a
+   * mismatch means the pairing, tunnel and chat history bound to that server entry no
+   * longer describe the machine at the new address, so it must be added as a new server
+   * rather than repointed in place.
+   *
+   * Reuses the prompt-capsule store's `storeId` (minted once on first read, then durable)
+   * rather than minting a second identifier — the app already persists that value per
+   * server profile, so existing installs compare correctly with no migration.
+   *
+   * Omitted if the store can't be read; the app treats absence as "can't confirm".
+   */
+  gatewayFingerprint?: string;
   nodePairing?: HealthComponentStatus;
   repairActions?: RepairAction[];
 }
@@ -71,6 +87,15 @@ export async function handleHealth(req: IncomingMessage, res: ServerResponse): P
   };
 
   const log = createFridayNextLogger("health");
+
+  // Best-effort: health must stay answerable even if the capsule store is unreadable.
+  try {
+    result.gatewayFingerprint = readOrInitCapsules().storeId;
+  } catch (err) {
+    log.warn(
+      `gatewayFingerprint unavailable: ${err instanceof Error ? err.message : String(err)}`,
+    );
+  }
 
   if (nodeDeviceId) {
     result.nodePairing = await checkNodePairing(nodeDeviceId, selfHeal, result, log);
