@@ -174,9 +174,13 @@ class SseEmitterRegistry {
 
   private nextEntry(deviceId: string, event: SseEvent): BacklogEntry {
     const key = deviceId.trim().toUpperCase();
-    const diskMax = fridaySseOfflineQueue.latestId(key);
-    const memMax = this.eventSeqByDevice.get(key) ?? 0;
-    const last = Math.max(memMax, diskMax);
+    // 内存序号一旦建立就是权威的（本进程是该队列文件的唯一写者），此后不再扫盘。
+    // 此前每个事件都要 latestId() → 全文件读 + 逐行 JSON.parse，长回答的每个 delta 都付一次。
+    // 进程重启后 map 为空 → 首个事件仍与磁盘对齐一次，Last-Event-ID 续传不受影响。
+    let last = this.eventSeqByDevice.get(key);
+    if (last === undefined) {
+      last = fridaySseOfflineQueue.latestId(key);
+    }
     const id = last + 1;
     this.eventSeqByDevice.set(key, id);
     fridaySseOfflineQueue.append(key, id, event.type, event.data, this.backlogLimit);

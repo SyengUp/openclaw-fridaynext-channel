@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { FridaySseOfflineQueue, setOfflineQueueBaseDirForTest } from "./offline-queue.js";
 
 describe("FridaySseOfflineQueue", () => {
@@ -61,5 +61,46 @@ describe("FridaySseOfflineQueue", () => {
     }
     const rest = q.readAfter("dev-d", 0);
     expect(rest.map((e) => e.id)).toEqual([3, 4]);
+  });
+
+  // 整文件重写是摊销的：只有涨出半个上限的余量才重写一次，而不是每 append 一条重写一次。
+  // 文件因此在 [keep, keep + keep/2] 之间浮动，但绝不无界增长。
+  it("keeps the backlog bounded without rewriting on every append", () => {
+    tmp = fs.mkdtempSync(path.join(os.tmpdir(), "friday-q-"));
+    setOfflineQueueBaseDirForTest(tmp);
+    const q = new FridaySseOfflineQueue(tmp);
+    const keep = 20;
+    const truncateSpy = vi.spyOn(q, "truncateKeepLastN");
+
+    for (let i = 1; i <= 200; i++) {
+      q.append("dev-e", i, "agent", { i }, keep);
+    }
+
+    const all = q.readAfter("dev-e", 0);
+    expect(all.length).toBeLessThanOrEqual(keep + Math.floor(keep / 2));
+    expect(all.length).toBeGreaterThanOrEqual(keep);
+    expect(all[all.length - 1]?.id).toBe(200);   // 最新的一定还在
+    // 每 keep/2 条才整文件重写一次：200 条约 18 次，而不是「每条一次」的 200 次。
+    expect(truncateSpy.mock.calls.length).toBeLessThanOrEqual(20);
+    truncateSpy.mockRestore();
+  });
+
+  // 进程内首次 append 会与磁盘对齐一次；之后靠内存计数，不再全文件扫描。
+  it("recovers the line count from disk when a fresh instance takes over the file", () => {
+    tmp = fs.mkdtempSync(path.join(os.tmpdir(), "friday-q-"));
+    setOfflineQueueBaseDirForTest(tmp);
+    const first = new FridaySseOfflineQueue(tmp);
+    for (let i = 1; i <= 30; i++) {
+      first.append("dev-f", i, "agent", { i }, 10);
+    }
+    // 模拟网关重启：新实例接手同一个文件
+    const second = new FridaySseOfflineQueue(tmp);
+    expect(second.latestId("dev-f")).toBe(30);
+    for (let i = 31; i <= 60; i++) {
+      second.append("dev-f", i, "agent", { i }, 10);
+    }
+    const all = second.readAfter("dev-f", 0);
+    expect(all.length).toBeLessThanOrEqual(15);
+    expect(all[all.length - 1]?.id).toBe(60);
   });
 });
