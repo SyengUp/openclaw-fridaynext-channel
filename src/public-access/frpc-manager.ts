@@ -34,6 +34,7 @@ import { startFilterProxy } from "./filter-proxy.js";
 import { verifySession } from "../attest/attest-store.js";
 import { resolveFridayNextConfig } from "../config.js";
 import { getHostOpenClawConfigSnapshot } from "../host-config.js";
+import { StandbyLoopGuard } from "./standby-loop-guard.js";
 import { getFridayNextRuntime } from "../runtime.js";
 
 const FRP_VERSION = "0.69.1";
@@ -118,7 +119,8 @@ let baseTunnel: { sub: string; crt: string; key: string; cn: string } | null = n
 let servedSubdomains: string[] = [];
 let spawnConfPath: string | null = null;
 let standbyRevision = "";
-let standbyPollRunning = false;
+/// standby 长轮询的生命周期闸门（代际号）：stop→start 不再叠出重复轮询。
+const standbyLoop = new StandbyLoopGuard();
 let tunnelTransition: Promise<void> = Promise.resolve();
 
 // The standby request is held by the control plane for up to 25 seconds and wakes immediately
@@ -938,7 +940,15 @@ function scheduleBringUpRetry(cfg: PublicAccessConfig, log: Logger): void {
   if (stopped) return;
   allocRetryTimer = setTimeout(() => {
     allocRetryTimer = null;
-    if (!stopped && !baseTunnel) void startPublicAccess(cfg, log);
+    if (stopped || baseTunnel) return;
+    // 走 tunnelTransition：重新拉起隧道会重写 frpc.toml 并重启子进程,
+    // 不能和在途的 reconcileServedSubdomains 交叠（此前这条路径绕过了闸门）。
+    tunnelTransition = tunnelTransition
+      .catch(() => undefined)
+      .then(async () => {
+        if (stopped || baseTunnel) return;   // 排到队时世界可能已经变了
+        await startPublicAccess(cfg, log);
+      });
   }, 30_000);
 }
 
@@ -1154,8 +1164,9 @@ export function normalizedServedSubdomains(desired: string[]): string[] {
 /** Telegram-style held HTTP standby: register the gateway's stable identity + public-key pin,
  * then wait for desired-set revisions. The endpoint carries no messages or remote commands. */
 function startGatewaySubdomainPoll(cfg: PublicAccessConfig, log: Logger): void {
-  if (standbyPollRunning || subdomainPollTimer) return;
-  standbyPollRunning = true;
+  if (subdomainPollTimer) return;
+  const generation = standbyLoop.begin();
+  if (generation === null) return;   // 已有活循环（可能正挂在 25s 长轮询上）
   const gatewayKey = createHash("sha256")
     .update(cfg.authToken || "")
     .digest("hex");
@@ -1163,8 +1174,10 @@ function startGatewaySubdomainPoll(cfg: PublicAccessConfig, log: Logger): void {
   const standbyUrl = `${base}/v1/gateway/standby`;
   const legacyUrl = `${base}/v1/gateway/subdomains`;
   const schedule = (delayMs: number): void => {
-    if (stopped) {
-      standbyPollRunning = false;
+    // 代际不符 = 这条循环在 await 期间被 stop 作废了（之后可能已开了新的）：直接退场，
+    // 不要再排下一拍，也不要去动新循环的定时器。
+    if (stopped || !standbyLoop.isCurrent(generation)) {
+      standbyLoop.end(generation);
       return;
     }
     subdomainPollTimer = setTimeout(() => {
@@ -1174,8 +1187,8 @@ function startGatewaySubdomainPoll(cfg: PublicAccessConfig, log: Logger): void {
     subdomainPollTimer.unref?.();
   };
   const poll = async (): Promise<void> => {
-    if (stopped || !baseTunnel) {
-      standbyPollRunning = false;
+    if (stopped || !baseTunnel || !standbyLoop.isCurrent(generation)) {
+      standbyLoop.end(generation);
       return;
     }
     let retryDelay = STANDBY_NEXT_POLL_MS;
@@ -1210,6 +1223,8 @@ function startGatewaySubdomainPoll(cfg: PublicAccessConfig, log: Logger): void {
       const subs = Array.isArray(data.subdomains)
         ? data.subdomains.filter((s): s is string => typeof s === "string")
         : [];
+      // 长轮询挂了最多 25 秒，回来时世界可能已经变了：被 stop 作废的旧循环不许再改全局状态。
+      if (stopped || !standbyLoop.isCurrent(generation)) return;
       if (typeof data.revision === "string") standbyRevision = data.revision;
       tunnelTransition = tunnelTransition
         .catch(() => undefined)
@@ -1249,7 +1264,7 @@ export function stopPublicAccess(): void {
     clearTimeout(subdomainPollTimer);
     subdomainPollTimer = null;
   }
-  standbyPollRunning = false;
+  standbyLoop.invalidate();   // 在途的长轮询醒来即退场，不会与随后 start 的新循环并存
   standbyRevision = "";
   tunnelTransition = Promise.resolve();
   baseTunnel = null;
