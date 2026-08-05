@@ -43,6 +43,7 @@ import { attestGateDecision, ATTEST_REJECTION_BODY } from "../attest/attest-gate
 import { handleSessionDelete } from "./handlers/session-delete.js";
 import { handleAgentIdentity } from "./handlers/agent-identity.js";
 import { handleCommandsList } from "./handlers/commands-list.js";
+import { handleCronJobs, handleCronJobRun, handleCronRuns } from "./handlers/cron.js";
 import { applyCorsHeaders } from "./middleware/cors.js";
 import { resolveFridayNextConfig } from "../config.js";
 import { getHostOpenClawConfigSnapshot } from "../host-config.js";
@@ -155,10 +156,7 @@ async function handleFridayNextRoute(req: IncomingMessage, res: ServerResponse):
   }
 
   // Route: GET/PUT /friday-next/server-name (this gateway's display name, shared by all devices)
-  if (
-    (req.method === "GET" || req.method === "PUT") &&
-    pathname === "/friday-next/server-name"
-  ) {
+  if ((req.method === "GET" || req.method === "PUT") && pathname === "/friday-next/server-name") {
     return await handleServerName(req, res);
   }
 
@@ -316,6 +314,33 @@ export function registerFridayNextHttpRoutes(api: {
   api.registerHttpRoute({
     path: "/friday-next-admin/commands",
     handler: handleCommandsList,
+    auth: "gateway",
+    match: "exact",
+  });
+
+  // Scheduled-task (cron) management. Same sibling-prefix reasoning as above. The two
+  // mutating routes need "trusted-operator" because `cron.add` / `cron.update` /
+  // `cron.remove` / `cron.run` all require `operator.admin`; the run-history route does
+  // NOT, since `cron.runs` only needs `operator.read` (least privilege, same call
+  // commands-list makes). See handlers/cron.ts for why the app can only ever create
+  // `agentTurn` jobs through this surface.
+  api.registerHttpRoute({
+    path: "/friday-next-admin/cron/jobs",
+    handler: handleCronJobs,
+    auth: "gateway",
+    match: "exact",
+    gatewayRuntimeScopeSurface: "trusted-operator",
+  });
+  api.registerHttpRoute({
+    path: "/friday-next-admin/cron/jobs/run",
+    handler: handleCronJobRun,
+    auth: "gateway",
+    match: "exact",
+    gatewayRuntimeScopeSurface: "trusted-operator",
+  });
+  api.registerHttpRoute({
+    path: "/friday-next-admin/cron/runs",
+    handler: handleCronRuns,
     auth: "gateway",
     match: "exact",
   });

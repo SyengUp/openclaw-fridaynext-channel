@@ -119,6 +119,28 @@ Lets the app edit a single agent the way ControlUI does — model / core files /
 - **`src/skills-discovery.ts`** — `discoverAvailableSkills(cfg, agentId)` returns `{ id, source, description }[]` by **scanning the same dirs core scans** (core's skill-discovery is only in hash chunks, not a stable plugin-sdk export — but skills are directory data, so we scan instead of deep-import). Sources: `workspace` (agent + shared default-agent `skills/`), `installed` (`<configDir>/skills`), `extra` (enabled-extension `dist/extensions/<ext>/skills` + `skills.load.extraDirs`), `built-in` (`<openclaw>/skills`). id = `SKILL.md` frontmatter `name` (recursive). Extension skills gated by `enabledExtensionNames` (= `plugins.allow` ∪ `entries.enabled`) to match ControlUI. Also exports `resolveOpenClawRoot` (shared with tool-catalog).
 - **`src/tool-catalog.ts`** + **`src/http/handlers/agent-tools-catalog.ts`** — `GET …/tools/catalog`. The tool catalog is **code, not scannable data**, so this **resilient-deep-imports** core's `buildToolsCatalogResult` (scan `<openclaw>/dist/*.js` for the chunk defining it → dynamic `import()` hits the gateway's already-loaded module instance, no side effects → cache; degrade to 503 on failure). Per-tool `enabled`/`inProfile` are resolved here from the agent's `tools` config so the app renders simple toggles and computes the allow/deny delta.
 
+### Scheduled tasks (`/friday-next-admin/cron/*`)
+
+Lets the app manage the gateway's built-in scheduler (list / create / edit / pause / delete /
+run-now / run history) — **zero OpenClaw core changes**: `src/http/handlers/cron.ts` forwards to the
+canonical `cron.list | add | update | remove | run | runs` methods via `dispatchGatewayMethod`.
+Writing cron's store directly (the read-only `loadCronStore` the notifications inbox uses) would
+leave the gateway's armed timers on the old schedule, so the methods are the only correct write path.
+
+- **Sibling prefix + scopes**: `cron.add/update/remove/run` need `operator.admin`, so
+  `/cron/jobs` and `/cron/jobs/run` register with `gatewayRuntimeScopeSurface: "trusted-operator"`;
+  `/cron/runs` doesn't (its `cron.runs` only needs `operator.read`, satisfied by the default
+  surface's `operator.write`). Same `/friday-next-admin` reasoning as `session-delete.ts` /
+  `commands-list.ts`: a gateway-authed route cannot overlap the `auth: "plugin"` `/friday-next`
+  prefix, and plugin-authed routes get an empty operator-scope list.
+- **The app can only ever create `agentTurn` jobs.** `POST` ignores any caller-supplied `payload` /
+  `sessionTarget` / `delivery` and assembles `isolated` + `agentTurn` +
+  `{mode:"announce", channel:"friday-next", to:<deviceId>}` itself; `PATCH` whitelists its fields.
+  Otherwise this surface would be a remote shell — `cron.add` can create `command` jobs whose argv
+  the scheduler runs on the gateway host. Command/`on-exit` jobs created elsewhere still LIST fine.
+- **Attest**: these routes sit outside the shared `/friday-next` gate but the filter proxy exposes
+  them publicly, so each handler runs `attestGateDecision` for `isPublicRequest` calls.
+
 ## SSE event names
 
 `connected` | `agent` | `deliver` | `tool-hook` | `outbound` | `ping` | `subagent`

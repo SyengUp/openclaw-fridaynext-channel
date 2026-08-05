@@ -178,6 +178,66 @@ App 提示词胶囊的网关端持久副本：删除重装 App（或换第二台
 
   限制（越界 → `400`）：最多 200 条；每条需非空且唯一的字符串 `id`；`name`/`iconSystemName` ≤ 100 字符；`prompt` ≤ 8000 字符。未知字段丢弃；缺失的 `sortOrder`/`createdAt`/`updatedAt` 由服务端补齐。
 
+## 定时任务（cron）
+
+App 侧管理网关内置调度器。插件 **1.0.16** 起提供。
+
+这些路由挂在 `/friday-next-admin` **兄弟前缀**下（gateway 鉴权的路由不能与 `auth: "plugin"` 的
+`/friday-next` 前缀重叠），转发到核心的 `cron.*` 网关方法——cron 跑在网关进程里、定时器是装填好的，
+绕过方法直接改存储只会让内存里那份继续按老时间跑。鉴权用 App 已经在发的共享密钥 bearer；公网请求
+额外过 App Attest 闸门。
+
+- `GET /friday-next-admin/cron/jobs` → `cron.list`
+
+  可选 `?agentId=`（会归一化）与 `?limit=`（钳到 200）。**始终包含已停用的任务**——停用的任务要显示成
+  「开关关着」，不能看着像被删了。
+
+  ```json
+  { "ok": true, "total": 2, "jobs": [ /* 核心 cronJobReadView 对象 */ ] }
+  ```
+
+- `POST /friday-next-admin/cron/jobs` → `cron.add`
+
+  ```json
+  {
+    "deviceId": "A1B2…",
+    "name": "早报",
+    "message": "播报今天的天气和日程",
+    "schedule": { "kind": "cron", "expr": "0 8 * * *", "tz": "Asia/Shanghai" },
+    "agentId": "main",
+    "model": "…", "thinking": "low", "timeoutSeconds": 600,
+    "enabled": true, "deleteAfterRun": false
+  }
+  ```
+
+  `schedule` 收 `at` / `every` / `cron` 三种（`on-exit` 拒绝）。其余一律**服务端组装**，调用方覆盖不了：
+  `sessionTarget: "isolated"`、`wakeMode: "now"`、`agentTurn` 载荷、
+  `delivery: {mode:"announce", channel:"friday-next", to:<deviceId>}`。这是有意为之——`cron.add` 本身
+  能建 `command` 型任务（由调度器在网关主机上执行任意 argv），这个面向 App 的入口绝不能把那个能力透出去。
+  `deviceId` 必填：播报据此钉到发起设备，而不是回落到 channel 的「唯一在线设备/最后见过的设备」猜测。
+  返回 `{ "ok": true, "job": {…} }`。
+
+- `PATCH /friday-next-admin/cron/jobs?id=<jobId>` → `cron.update`
+
+  只认白名单字段：`name`、`schedule`、`enabled`、`deleteAfterRun`，以及
+  `message` / `model` / `thinking` / `timeoutSeconds`（会被提升成 `agentTurn` 载荷补丁）。
+  带 `deviceId` 则把播报改钉到该设备。空补丁返回 `400`。
+
+- `DELETE /friday-next-admin/cron/jobs?id=<jobId>` → `cron.remove`
+
+  `{ "ok": true, "id": "…", "removed": true }`。任务不存在返回 `404`（核心把它报成
+  `{ok:true, removed:false}`，不能当成删成功）。
+
+- `POST /friday-next-admin/cron/jobs/run` — body `{ "id": "…" }` → `cron.run`（`mode: "force"`）
+
+  只是把这次运行**排进队列**，所以请求秒回，不会挂着等整轮跑完。
+  `{ "ok": true, "id", "ran": true, "enqueued": true, "runId": "…" }`；被拒时
+  `{ "ok": true, "ran": false, "reason": "already-running" }`。
+
+- `GET /friday-next-admin/cron/runs?jobId=<jobId>&limit=20` → `cron.runs`
+
+  `{ "ok": true, "jobId": "…", "runs": [ /* 运行日志条目，核心那边叫 `entries` */ ] }`。
+
 ## 已删除接口
 
 - `GET` / `DELETE /friday-next/history` — 已删除，客户端应用 SSE 自行重建上下文。

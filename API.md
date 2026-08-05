@@ -500,6 +500,68 @@ Stored at `~/.openclaw/friday-next/prompt-capsules/capsules.json`.
   `name` / `iconSystemName` ≤ 100 chars; `prompt` ≤ 8000 chars. Unknown fields are dropped;
   missing `sortOrder` / `createdAt` / `updatedAt` are filled server-side.
 
+## Scheduled tasks (cron)
+
+App-facing management of the gateway's built-in scheduler. Introduced in plugin **1.0.16**.
+
+These routes live under the `/friday-next-admin` **sibling prefix** (a gateway-authed route may not
+overlap the `auth: "plugin"` `/friday-next` prefix) and forward to core's canonical `cron.*` gateway
+methods — cron runs inside the gateway process and owns its armed timers, so writing its store
+directly would leave the live schedule stale. Auth is the same shared-secret bearer the app already
+sends; public requests additionally pass the App Attest gate.
+
+- `GET /friday-next-admin/cron/jobs` → `cron.list`
+
+  Optional `?agentId=` (normalized) and `?limit=` (clamped to 200). Always includes disabled jobs —
+  a paused job must render with its switch off, not vanish.
+
+  ```json
+  { "ok": true, "total": 2, "jobs": [ /* core cronJobReadView objects */ ] }
+  ```
+
+- `POST /friday-next-admin/cron/jobs` → `cron.add`
+
+  ```json
+  {
+    "deviceId": "A1B2…",
+    "name": "早报",
+    "message": "播报今天的天气和日程",
+    "schedule": { "kind": "cron", "expr": "0 8 * * *", "tz": "Asia/Shanghai" },
+    "agentId": "main",
+    "model": "…", "thinking": "low", "timeoutSeconds": 600,
+    "enabled": true, "deleteAfterRun": false
+  }
+  ```
+
+  `schedule` accepts `at` / `every` / `cron` (`on-exit` is rejected). Everything else is assembled
+  server-side and **cannot** be overridden by the caller: `sessionTarget: "isolated"`,
+  `wakeMode: "now"`, an `agentTurn` payload, and `delivery: {mode:"announce", channel:"friday-next",
+  to:<deviceId>}`. That is deliberate — `cron.add` can otherwise create `command` jobs (arbitrary
+  argv executed on the gateway host by the scheduler), which this surface must never expose.
+  `deviceId` is required so the announce pins to the requesting device instead of falling back to
+  the channel's sole-connected / last-seen guess. Answers `{ "ok": true, "job": {…} }`.
+
+- `PATCH /friday-next-admin/cron/jobs?id=<jobId>` → `cron.update`
+
+  Whitelisted body fields only: `name`, `schedule`, `enabled`, `deleteAfterRun`, and
+  `message` / `model` / `thinking` / `timeoutSeconds` (lifted into an `agentTurn` payload patch).
+  Passing `deviceId` re-pins delivery to that device. An empty patch is a `400`.
+
+- `DELETE /friday-next-admin/cron/jobs?id=<jobId>` → `cron.remove`
+
+  `{ "ok": true, "id": "…", "removed": true }`. A job that doesn't exist is a `404` (core reports it
+  as `{ok:true, removed:false}`, which must not read as a successful delete).
+
+- `POST /friday-next-admin/cron/jobs/run` — body `{ "id": "…" }` → `cron.run` with `mode: "force"`
+
+  Only ENQUEUES the run, so the request returns immediately rather than holding open for the whole
+  agent turn. `{ "ok": true, "id", "ran": true, "enqueued": true, "runId": "…" }`, or
+  `{ "ok": true, "ran": false, "reason": "already-running" }` for a refusal.
+
+- `GET /friday-next-admin/cron/runs?jobId=<jobId>&limit=20` → `cron.runs`
+
+  `{ "ok": true, "jobId": "…", "runs": [ /* run-log entries; core calls them `entries` */ ] }`.
+
 ## Removed endpoints
 
 - `GET` / `DELETE /friday-next/history` — **removed.** Build conversation state from the SSE stream on the client.
