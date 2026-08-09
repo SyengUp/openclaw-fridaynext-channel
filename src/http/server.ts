@@ -21,6 +21,7 @@ import { handleServerName } from "./handlers/server-name.js";
 import { handleModelsList } from "./handlers/models-list.js";
 import { handleAgentsList } from "./handlers/agents-list.js";
 import { handleAgentConfig } from "./handlers/agent-config.js";
+import { handleAgentGreeting } from "./handlers/agent-greetings.js";
 import { handleAgentFiles } from "./handlers/agent-files.js";
 import { handleAgentToolsCatalog } from "./handlers/agent-tools-catalog.js";
 import { handleHistorySessions } from "./handlers/history-sessions.js";
@@ -180,6 +181,9 @@ async function handleFridayNextRoute(req: IncomingMessage, res: ServerResponse):
     const [id, sub, name] = segs;
     if (id && sub === "config" && segs.length === 2) {
       return await handleAgentConfig(req, res, id);
+    }
+    if (id && sub === "greeting" && segs.length === 2) {
+      return await handleAgentGreeting(req, res, id);
     }
     if (id && sub === "files" && (segs.length === 2 || segs.length === 3)) {
       return await handleAgentFiles(req, res, id, name);

@@ -9,6 +9,7 @@ import {
   setFridayAgentForwardRuntime,
   resetFridayAgentForwardRuntimeForTest,
 } from "../../agent-forward-runtime.js";
+import { setAgentGreetingsBaseDirForTest } from "../../agent-greetings/greetings-store.js";
 
 class MockRes extends EventEmitter {
   statusCode = 0;
@@ -39,11 +40,18 @@ function setConfig(config: unknown): void {
 }
 
 describe("handleAgentsList", () => {
+  let greetingsDir: string;
+
   beforeEach(() => {
     setMockRuntime();
+    // 隔离 greeting store，避免读到测试机上的真实 greetings.json（agent 列表会合并它）。
+    greetingsDir = fs.mkdtempSync(path.join(os.tmpdir(), "fn-agents-greetings-"));
+    setAgentGreetingsBaseDirForTest(greetingsDir);
   });
 
   afterEach(() => {
+    setAgentGreetingsBaseDirForTest(null);
+    fs.rmSync(greetingsDir, { recursive: true, force: true });
     resetFridayAgentForwardRuntimeForTest();
   });
 

@@ -7,6 +7,7 @@ import {
 } from "../../agent-forward-runtime.js";
 import { extractBearerToken } from "../middleware/auth.js";
 import { DEFAULT_AGENT_ID, normalizeAgentId } from "../../agent-id.js";
+import { readGreetingFor } from "../../agent-greetings/greetings-store.js";
 
 export interface FridayAgentEntry {
   id: string;
@@ -18,6 +19,8 @@ export interface FridayAgentEntry {
   isDefault: boolean;
   emoji?: string;
   avatar?: string;
+  /** Custom home-greeting override (undefined = none → app falls back to its localized default). */
+  greeting?: string;
 }
 
 interface ResolvedAgents {
@@ -125,6 +128,9 @@ export function resolveConfiguredAgents(): ResolvedAgents {
           isDefault: true,
           ...(name ? { name } : {}),
           ...(inheritedThinkingDefault ? { thinkingDefault: inheritedThinkingDefault } : {}),
+          ...(readGreetingFor(DEFAULT_AGENT_ID)
+            ? { greeting: readGreetingFor(DEFAULT_AGENT_ID) }
+            : {}),
         },
       ],
       defaultAgentId: DEFAULT_AGENT_ID,
@@ -156,6 +162,7 @@ export function resolveConfiguredAgents(): ResolvedAgents {
       isDefault: id === defaultAgentId,
       emoji: readString(identity?.emoji),
       avatar: readString(identity?.avatar) ?? readString(identity?.avatarUrl),
+      greeting: readGreetingFor(id),
     });
   }
 
