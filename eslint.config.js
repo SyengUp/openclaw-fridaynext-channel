@@ -14,6 +14,7 @@ export default tseslint.config(
       "eslint.config.js",
       "vitest.config.ts",
       "vitest.e2e.config.ts",
+      "worktree-review/**",
     ],
   },
   js.configs.recommended,

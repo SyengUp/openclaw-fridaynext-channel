@@ -21,8 +21,16 @@ export type ConfigAfterWrite =
   | { mode: "none"; reason: string };
 
 export type UpgradeRuntime = {
-  /** Run a command (argv) with a timeout in ms; resolves with stdout/stderr/code. */
-  runCommandWithTimeout: (argv: string[], timeoutMs: number) => Promise<SpawnResultLike>;
+  /**
+   * Run a command (argv) with a timeout in ms; resolves with stdout/stderr/code.
+   * Optional `env` is merged over the host process env (used to point an npm
+   * subprocess at a reachable registry — see npm-registry.ts).
+   */
+  runCommandWithTimeout: (
+    argv: string[],
+    timeoutMs: number,
+    env?: NodeJS.ProcessEnv,
+  ) => Promise<SpawnResultLike>;
   /** Read the current (deep-readonly) OpenClaw config snapshot. */
   currentConfig: () => unknown;
   /** Mutate the config file; `afterWrite: { mode: "restart" }` triggers a safe gateway restart. */
@@ -52,11 +60,12 @@ export function setUpgradeRuntime(api: OpenClawPluginApi): void {
   };
 
   upgradeRuntime = {
-    runCommandWithTimeout: async (argv, timeoutMs) => {
+    runCommandWithTimeout: async (argv, timeoutMs, env) => {
       const run = runtime.system?.runCommandWithTimeout;
       if (!run) throw new Error("runtime.system.runCommandWithTimeout unavailable");
-      // `runCommandWithTimeout(argv, number | CommandOptions)` — pass the bare ms.
-      return run(argv, timeoutMs);
+      // `runCommandWithTimeout(argv, number | CommandOptions)` — pass the bare ms
+      // (or options carrying the registry env) exactly like the host expects.
+      return env ? run(argv, { timeoutMs, env }) : run(argv, timeoutMs);
     },
     currentConfig: () => runtime.config.current(),
     mutateConfigFile: async (params) => {

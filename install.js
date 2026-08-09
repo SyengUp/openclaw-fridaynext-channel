@@ -109,15 +109,50 @@ const DIST_TAG =
     ? "beta"
     : "latest";
 
+// Registry fallback chain. Mainland China ISPs frequently block the official
+// Cloudflare-backed registry, which would otherwise stall the install on npm's
+// 5-minute fetch timeouts. Prefer a reachable registry: FRIDAY_NPM_REGISTRY env
+// override → official → China mirror (npmmirror), first one answering `/-/ping`
+// wins. The resolved registry is used for the version lookup AND injected into
+// the `openclaw plugins install` subprocess via npm_config_registry.
+const OFFICIAL_REGISTRY = "https://registry.npmjs.org/";
+const CHINA_MIRROR = "https://registry.npmmirror.com/";
+
+async function probeRegistry(url) {
+  try {
+    const res = await fetch(`${url.replace(/\/$/, "")}/-/ping`, {
+      signal: AbortSignal.timeout(3000),
+      headers: { Accept: "application/json" },
+    });
+    return res.ok;
+  } catch {
+    return false;
+  }
+}
+
+async function resolveRegistry() {
+  const override = process.env.FRIDAY_NPM_REGISTRY;
+  if (override && override.trim()) return override.trim();
+  if (await probeRegistry(OFFICIAL_REGISTRY)) return OFFICIAL_REGISTRY;
+  if (await probeRegistry(CHINA_MIRROR)) return CHINA_MIRROR;
+  return OFFICIAL_REGISTRY;
+}
+
+/** Env to pass to the npm subprocess (null = leave npm's own config alone). */
+function installEnvFor(registry) {
+  if (registry === OFFICIAL_REGISTRY) return null;
+  return { npm_config_registry: registry };
+}
+
 // Resolve the EXACT version behind DIST_TAG and install THAT — never the bare
 // `@latest`/`@beta` dist-tag. OpenClaw persists a dist-tag install as a caret
 // range (`"^1.0.5"`) in the managed project package.json, and OpenClaw's own
 // plugin auto-update later rejects that range ("unsupported npm spec: use an
 // exact version or dist-tag"), disabling the plugin. An exact version is stored
 // as an exact spec, which auto-update accepts.
-async function resolveTaggedVersion(distTag) {
+async function fetchTaggedVersionFromRegistry(registry, distTag) {
   try {
-    const res = await fetch(`https://registry.npmjs.org/${PKG}/${distTag}`, {
+    const res = await fetch(`${registry.replace(/\/$/, "")}/${PKG}/${distTag}`, {
       headers: { Accept: "application/json" },
       signal: AbortSignal.timeout(8000),
     });
@@ -130,10 +165,22 @@ async function resolveTaggedVersion(distTag) {
   } catch {
     /* fall through */
   }
+  return null;
+}
+
+async function resolveTaggedVersion(distTag, registry) {
+  const candidates = [registry, process.env.FRIDAY_NPM_REGISTRY, OFFICIAL_REGISTRY, CHINA_MIRROR]
+    .filter(Boolean)
+    .filter((url, i, arr) => arr.indexOf(url) === i);
+  for (const candidate of candidates) {
+    const v = await fetchTaggedVersionFromRegistry(candidate, distTag);
+    if (v) return v;
+  }
   try {
     const v = execSync(`npm view ${PKG}@${distTag} version`, {
       encoding: "utf8",
       timeout: 20000,
+      env: { ...process.env, ...(installEnvFor(registry) ?? {}) },
     }).trim();
     if (/^\d+\.\d+\.\d+/.test(v)) return v;
   } catch {
@@ -144,7 +191,9 @@ async function resolveTaggedVersion(distTag) {
 
 const installStep = ui.step(T.stepInstall);
 
-const resolvedVersion = await resolveTaggedVersion(DIST_TAG);
+const registry = await resolveRegistry();
+const installEnv = installEnvFor(registry);
+const resolvedVersion = await resolveTaggedVersion(DIST_TAG, registry);
 // Registry lookup failed — fall back to the bare dist-tag so a transient network
 // hiccup doesn't block the install. Re-running later pins an exact spec.
 const installSpec = `${PKG}@${resolvedVersion ?? DIST_TAG}`;
@@ -154,6 +203,7 @@ try {
     encoding: "utf8",
     stdio: "pipe",
     timeout: 120000,
+    env: { ...process.env, ...(installEnv ?? {}) },
   });
 
   // Remove old manual install to avoid "duplicate plugin id" warning.
@@ -348,9 +398,7 @@ try {
   gatewayServiceUnavailable = SERVICE_UNAVAILABLE_RE.test(restartOut ?? "");
   restartStep.ok(gatewayServiceUnavailable ? T.detailRestartNoService : "");
 } catch (e) {
-  gatewayServiceUnavailable = SERVICE_UNAVAILABLE_RE.test(
-    `${e.stdout ?? ""}\n${e.stderr ?? ""}`,
-  );
+  gatewayServiceUnavailable = SERVICE_UNAVAILABLE_RE.test(`${e.stdout ?? ""}\n${e.stderr ?? ""}`);
   if (gatewayServiceUnavailable) {
     restartStep.ok(T.detailRestartNoService);
   } else {
@@ -366,7 +414,8 @@ try {
 // Interfaces whose address other LAN machines cannot reach (container bridges, VM adapters,
 // VPN tunnels). Advertising one of those as the gateway URL bricks pairing — the app tries
 // only the LAN address for the voucher exchange. Must stay in lockstep with frpc-manager.ts.
-const VIRTUAL_IFACE_NAME = /^(docker|br-|bridge|virbr|veth|vmenet|vnic|utun|tun|tap|tailscale|zt|wg|anpi|llw|awdl|feth)/i;
+const VIRTUAL_IFACE_NAME =
+  /^(docker|br-|bridge|virbr|veth|vmenet|vnic|utun|tun|tap|tailscale|zt|wg|anpi|llw|awdl|feth)/i;
 
 async function getLanIp() {
   // Preferred: kernel routing-table query. UDP connect() binds the source address the default
@@ -417,7 +466,9 @@ const gatewayToken = config.gateway?.auth?.token || "(not set)";
 const bindMode = config.gateway?.bind || "localhost";
 
 const gatewayUrl =
-  bindMode === "lan" ? `http://${await getLanIp()}:${gatewayPort}` : `http://127.0.0.1:${gatewayPort}`;
+  bindMode === "lan"
+    ? `http://${await getLanIp()}:${gatewayPort}`
+    : `http://127.0.0.1:${gatewayPort}`;
 
 // Always verify against loopback: the gateway binds 0.0.0.0 so it's reachable here,
 // and this avoids false negatives from LAN/NAT routing of the advertised IP.
@@ -486,11 +537,7 @@ if (!verified.ok) {
   // gateway process isn't running (and can't be, as a service). Saying "Installation FAILED"
   // here sends the user chasing a phantom install problem — tell them the one real next step.
   if (gatewayServiceUnavailable) {
-    die(
-      T.failGatewayNoService,
-      "openclaw gateway run",
-      "npx -y @syengup/friday-channel-next",
-    );
+    die(T.failGatewayNoService, "openclaw gateway run", "npx -y @syengup/friday-channel-next");
   }
   die(
     T.failGateway,

@@ -3,6 +3,7 @@
  * (source: "npm" vs "path"/dev), compare semver, and look up the latest version
  * published to the npm registry (cached).
  */
+import { resolveNpmRegistry } from "./npm-registry.js";
 import { getUpgradeRuntime } from "./upgrade-runtime.js";
 import { PLUGIN_ID, PLUGIN_PACKAGE_NAME } from "./version.js";
 
@@ -175,10 +176,11 @@ export async function fetchLatestVersion(
   }
   let version: string | null = null;
   try {
+    const registry = await resolveNpmRegistry(nowMs);
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), 5000);
     try {
-      const res = await fetch(`https://registry.npmjs.org/${PLUGIN_PACKAGE_NAME}/${distTag}`, {
+      const res = await fetch(`${registry}${PLUGIN_PACKAGE_NAME}/${distTag}`, {
         signal: controller.signal,
         headers: { Accept: "application/json" },
       });

@@ -1,6 +1,7 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { extractBearerToken } from "../middleware/auth.js";
 import { createFridayNextLogger } from "../../logging.js";
+import { npmRegistryEnv } from "../../npm-registry.js";
 import { PLUGIN_PACKAGE_NAME, PLUGIN_VERSION } from "../../version.js";
 import { fetchLatestVersion, getInstallSource } from "../../plugin-install-info.js";
 import { getUpgradeRuntime } from "../../upgrade-runtime.js";
@@ -87,11 +88,17 @@ export async function handlePluginUpgrade(
   const spec = `${PLUGIN_PACKAGE_NAME}@${latest}`;
   log.info(`Starting plugin upgrade: ${spec} (from ${PLUGIN_VERSION})`);
 
+  // Point npm at a reachable registry (China mirror when official is blocked)
+  // so the install subprocess doesn't wait out npm's 5-minute fetch timeouts.
+  const npmEnv = await npmRegistryEnv(Date.now());
+  if (npmEnv) log.info(`using npm registry ${npmEnv.npm_config_registry} for upgrade install`);
+
   let result;
   try {
     result = await rt.runCommandWithTimeout(
       ["openclaw", "plugins", "install", spec, "--force"],
       UPGRADE_TIMEOUT_MS,
+      npmEnv,
     );
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
