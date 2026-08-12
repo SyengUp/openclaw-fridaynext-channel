@@ -128,10 +128,10 @@ export function resolveFridayNextConfig(cfg: unknown): FridayNextConfig {
       relayToken: asString(pa.relayToken, ""),
       subDomainHost: asString(pa.subDomainHost, "bj.gw.syengup.host"),
       subdomain: asString(pa.subdomain, ""),
-      allocatorUrl: asString(pa.allocatorUrl, "https://friday.syengup.host/gw-alloc/allocate"),
-      certSignUrl: asString(pa.certSignUrl, "https://friday.syengup.host/gw-alloc/sign-cert"),
+      allocatorUrl: asString(pa.allocatorUrl, "https://gw.syengup.host/gw-alloc/allocate"),
+      certSignUrl: asString(pa.certSignUrl, "https://gw.syengup.host/gw-alloc/sign-cert"),
       corePort: asNumber(pa.corePort, 18789, 1, 65535),
-      controlPlaneUrl: asString(pa.controlPlaneUrl, "https://friday.syengup.host"),
+      controlPlaneUrl: asString(pa.controlPlaneUrl, "https://gw.syengup.host"),
     },
     appAttest: {
       // Default ON, but the gate is PUBLIC-SCOPED (only enforced on requests the
