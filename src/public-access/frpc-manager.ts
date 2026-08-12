@@ -85,6 +85,9 @@ export type PublicAccessConfig = {
   corePort: number;
   /** Bearer token the app uses (from the channel config). */
   authToken: string;
+  /** Relay region this gateway is routed to (from `/v1/relay/bootstrap`; e.g. "bj"/"na").
+   * Informational only — the DNS for `subDomainHost` is what actually routes traffic. */
+  region?: string;
 };
 
 export type PairingInfo = {
@@ -317,7 +320,8 @@ function getLanIp(): Promise<string> {
       const socket = createSocket("udp4");
       const done = (ip: string | null) => {
         socket.close();
-        ip && ip !== "0.0.0.0" ? resolve(ip) : fallback();
+        if (ip && ip !== "0.0.0.0") resolve(ip);
+        else fallback();
       };
       socket.on("error", () => done(null));
       socket.connect(53, "223.5.5.5", () => {
@@ -584,24 +588,47 @@ export async function resolveRelayCredentials(
       signal: AbortSignal.timeout(10_000),
     });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    const body = (await res.json()) as { relayAddr?: unknown; relayToken?: unknown };
+    const body = (await res.json()) as {
+      relayAddr?: unknown;
+      relayToken?: unknown;
+      subDomainHost?: unknown;
+      region?: unknown;
+    };
     const relayAddr = typeof body.relayAddr === "string" ? body.relayAddr.trim() : "";
     const relayToken = typeof body.relayToken === "string" ? body.relayToken.trim() : "";
+    const subDomainHost =
+      typeof body.subDomainHost === "string" && body.subDomainHost.trim()
+        ? body.subDomainHost.trim()
+        : cfg.subDomainHost;
+    const region = typeof body.region === "string" && body.region.trim() ? body.region.trim() : "";
     if (!relayAddr || !relayToken) throw new Error("incomplete bootstrap payload");
     ensureDir();
-    writeFileSync(cachePath, JSON.stringify({ relayAddr, relayToken }), { mode: 0o600 });
+    writeFileSync(cachePath, JSON.stringify({ relayAddr, relayToken, subDomainHost, region }), {
+      mode: 0o600,
+    });
     chmodSync(cachePath, 0o600); // `mode` only applies on create — tighten a pre-existing file too
-    return { ...cfg, relayAddr, relayToken };
+    log(
+      `relay bootstrap: region=${region || "default"} relay=${relayAddr} subDomainHost=${subDomainHost}`,
+    );
+    return { ...cfg, relayAddr, relayToken, subDomainHost, ...(region ? { region } : {}) };
   } catch (e) {
     log(`relay bootstrap failed (${e instanceof Error ? e.message : String(e)})`);
     try {
       const cached = JSON.parse(readFileSync(cachePath, "utf8")) as {
         relayAddr?: string;
         relayToken?: string;
+        subDomainHost?: string;
+        region?: string;
       };
       if (cached.relayAddr && cached.relayToken) {
         log("using cached relay credentials");
-        return { ...cfg, relayAddr: cached.relayAddr, relayToken: cached.relayToken };
+        return {
+          ...cfg,
+          relayAddr: cached.relayAddr,
+          relayToken: cached.relayToken,
+          subDomainHost: cached.subDomainHost?.trim() || cfg.subDomainHost,
+          region: cached.region?.trim() || cfg.region,
+        };
       }
     } catch {
       /* no usable cache */

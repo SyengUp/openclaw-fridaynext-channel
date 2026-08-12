@@ -81,6 +81,34 @@ describe("relay credential resolution", () => {
     expect(out?.relayToken).toBe("t1");
   });
 
+  /// North-America routing: the control plane returns the region's frps addr + subDomainHost
+  /// and the plugin must adopt BOTH — a tunnel pointed at the NA frps but named under
+  /// *.bj.gw would be unreachable (DNS has no such host, and the NA frps gate only knows *.na.gw).
+  it("adopts subDomainHost + region from the control-plane bootstrap (NA routing)", async () => {
+    stubFetch(() => ({
+      ok: true,
+      json: async () => ({
+        relayAddr: "45.76.65.243:7000",
+        relayToken: "shared-token",
+        subDomainHost: "na.gw.syengup.host",
+        region: "na",
+      }),
+    }));
+    const out = await resolveRelayCredentials(baseCfg, log);
+    expect(out?.relayAddr).toBe("45.76.65.243:7000");
+    expect(out?.subDomainHost).toBe("na.gw.syengup.host");
+    expect(out?.region).toBe("na");
+  });
+
+  /// An old control plane that predates multi-region returns no subDomainHost: the plugin must
+  /// keep its config default (BJ), never fabricate an empty host.
+  it("keeps the config subDomainHost when bootstrap omits it (old control plane)", async () => {
+    stubFetch(() => ({ ok: true, json: async () => ({ relayAddr: "b:7000", relayToken: "t2" }) }));
+    const out = await resolveRelayCredentials(baseCfg, log);
+    expect(out?.subDomainHost).toBe("bj.gw.syengup.host");
+    expect(out?.region).toBeUndefined();
+  });
+
   it("returns null with no credentials and no cache — bring-up must block, not spawn frpc", async () => {
     stubFetch(() => ({ ok: false, status: 503 }));
     expect(await resolveRelayCredentials(baseCfg, log)).toBeNull();
