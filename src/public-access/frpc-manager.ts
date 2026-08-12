@@ -35,6 +35,7 @@ import { verifySession } from "../attest/attest-store.js";
 import { resolveFridayNextConfig } from "../config.js";
 import { getHostOpenClawConfigSnapshot } from "../host-config.js";
 import { StandbyLoopGuard } from "./standby-loop-guard.js";
+import { TunnelWatchdogPolicy } from "./tunnel-watchdog-policy.js";
 import { getFridayNextRuntime } from "../runtime.js";
 
 const FRP_VERSION = "0.69.1";
@@ -142,7 +143,8 @@ const STANDBY_ERROR_RETRY_MS = 5_000;
 // `TUNNEL_HEALTH_STRIKES` consecutive failures it kills frpc, and the 3s keepalive respawn
 // re-issues NewProxy — a freshly-granted tunnel comes up within ~STRIKES·INTERVAL of payment.
 // Steady-state cost: one HTTPS HEAD per minute; a permanently-denied gateway retries NewProxy
-// once every ~3 minutes (bounded relay load).
+// once every ~3 minutes, then backs off exponentially to once per 30 minutes (see
+// `TunnelWatchdogPolicy`) so a policy-denied gateway cannot storm the relay gate forever.
 const TUNNEL_HEALTH_INTERVAL_MS = 60_000;
 const TUNNEL_HEALTH_STRIKES = 3;
 
@@ -214,15 +216,19 @@ function probeTunnelHealth(publicUrl: string, timeoutMs = 10_000): Promise<boole
  * problem is our REGISTRATION, not a transient outage (e.g. the relay registry was rebuilt
  * and no longer maps our locally-persisted subdomain — NewProxy is denied forever). The
  * escalation discards the local allocation and re-runs bring-up so a fresh allocation can
- * self-heal what no amount of frpc restarts ever would. */
-const TUNNEL_RESTART_CYCLES_BEFORE_REALLOC = 5;
+ * self-heal what no amount of frpc restarts ever would. The escalation LADDER (restart →
+ * backoff → realloc with cooldown) lives in `TunnelWatchdogPolicy`, kept pure for tests. */
 
 /** One watchdog per process; idempotent. Skips probing while frpc itself is down (the
  * keepalive owns that window) and while a probe would race a just-issued restart. */
 function startTunnelHealthWatchdog(publicUrl: string, cfg: PublicAccessConfig, log: Logger): void {
   if (healthTimer) return;
   const tracker = new TunnelHealthTracker();
-  let restartCycles = 0;
+  // 升级阶梯:短暂故障立即重启自愈;确诊长期不健康(闸门政策性拒绝/注册表重建/断网)
+  // 后重启指数退避、重分配冷却——健康或空闲即复位。没有退避的旧行为会让 grant 到期的
+  // 网关无限高频重启 frpc、每轮重发 NewProxy(katelier 案例:月均 3.3 万次拒绝)。
+  const policy = new TunnelWatchdogPolicy();
+  const hasExplicitSubdomain = Boolean(cfg.subdomain?.trim());
   const timer = setInterval(() => {
     if (stopped || !child) return;
     // An empty set is an intentional control-plane decision: this gateway currently has no
@@ -230,24 +236,31 @@ function startTunnelHealthWatchdog(publicUrl: string, cfg: PublicAccessConfig, l
     // repeatedly restarting and eventually reallocating the stable base subdomain.
     if (servedSubdomains.length === 0) {
       tracker.note(true);
-      restartCycles = 0;
+      policy.noteIdle();
       return;
     }
     void probeTunnelHealth(publicUrl).then((ok) => {
       if (stopped || !child) return;
       if (ok) {
-        restartCycles = 0;
+        policy.noteHealthy();
       }
       if (tracker.note(ok)) {
-        restartCycles += 1;
-        if (restartCycles >= TUNNEL_RESTART_CYCLES_BEFORE_REALLOC && !cfg.subdomain?.trim()) {
+        const action = policy.noteRestartWindowFired(hasExplicitSubdomain);
+        if (action.kind === "realloc") {
           log(
-            `tunnel health: ${restartCycles} restart cycles without recovery — discarding local ` +
+            `tunnel health: restart cycles without recovery — discarding local ` +
               `subdomain allocation and re-running bring-up (relay registry may have been rebuilt)`,
           );
           discardLocalSubdomainAllocation();
           stopPublicAccess();
           void startPublicAccess(cfg, log);
+          return;
+        }
+        if (action.kind === "skip") {
+          log(
+            `tunnel health: still unreachable — holding (backoff); the standby poll or the next ` +
+              `allowed restart will recover when the relay answers`,
+          );
           return;
         }
         log(
