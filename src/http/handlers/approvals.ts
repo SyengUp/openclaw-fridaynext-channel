@@ -44,7 +44,7 @@ export async function handleApprovalDecision(
   const cfg = getHostOpenClawConfigSnapshot(getFridayNextRuntime().config);
   try {
     await resolveApprovalOverGateway({
-      cfg: cfg as Parameters<typeof resolveApprovalOverGateway>[0]["cfg"],
+      cfg,
       approvalId: approvalId.trim(),
       decision: decision as "allow-once" | "allow-always" | "deny",
       senderId: deviceId || null,

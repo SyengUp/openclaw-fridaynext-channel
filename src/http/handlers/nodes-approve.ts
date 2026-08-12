@@ -195,7 +195,7 @@ async function approveNodeRoleDevice(
     return false;
   }
 
-  const sameId = (id: unknown) => String(id ?? "").trim().toUpperCase() === normalizedNodeId;
+  const sameId = (id: unknown) => (typeof id === "string" ? id : "").trim().toUpperCase() === normalizedNodeId;
   const isNodeRole = (entry: { role?: string; roles?: string[] }) =>
     entry.role === "node" || (entry.roles ?? []).includes("node");
 

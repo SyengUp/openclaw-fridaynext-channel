@@ -131,7 +131,7 @@ const fridayApprovalNativeRuntime = createChannelApprovalNativeRuntimeAdapter<
       const deviceId = deviceForRequest(request) ?? "";
       return buildPayload({
         op: "request",
-        view: view as unknown as Record<string, unknown>,
+        view: view as Record<string, unknown>,
         request,
         deviceId,
       });
@@ -142,7 +142,7 @@ const fridayApprovalNativeRuntime = createChannelApprovalNativeRuntimeAdapter<
         kind: "update",
         payload: buildPayload({
           op: "resolved",
-          view: view as unknown as Record<string, unknown>,
+          view: view as Record<string, unknown>,
           request,
           deviceId,
         }),
@@ -154,7 +154,7 @@ const fridayApprovalNativeRuntime = createChannelApprovalNativeRuntimeAdapter<
         kind: "update",
         payload: buildPayload({
           op: "expired",
-          view: view as unknown as Record<string, unknown>,
+          view: view as Record<string, unknown>,
           request,
           deviceId,
         }),
@@ -221,7 +221,7 @@ export const fridayApprovalCapability: ChannelApprovalCapability = {
       return deviceId ? { to: deviceId } : null;
     },
   },
-  // Cast widens the parameterized adapter to the field's `unknown`-typed shape (function-param
-  // contravariance). Same escape hatch Slack uses for its lazy runtime adapter.
-  nativeRuntime: fridayApprovalNativeRuntime as unknown as ChannelApprovalCapability["nativeRuntime"],
+  // The field is `unknown`-typed, so the parameterized adapter assigns directly — the widening
+  // happens at the field boundary (function-param contravariance), no cast needed.
+  nativeRuntime: fridayApprovalNativeRuntime,
 };
