@@ -1,6 +1,6 @@
 {
   "name": "@syengup/friday-channel-next",
-  "version": "1.0.19",
+  "version": "1.0.20",
   "description": "OpenClaw Friday Next Apple channel plugin",
   "license": "MIT",
   "type": "module",
@@ -61,7 +61,7 @@
     }
   },
   "dependencies": {
-    "@syengup/tunnel-edge": "^0.1.0",
+    "@syengup/tunnel-edge": "^0.2.0",
     "apn": "^2.2.0",
     "node-app-attest": "^1.0.1",
     "qrcode-terminal": "^0.12.0"
