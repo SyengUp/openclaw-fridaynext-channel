@@ -61,6 +61,9 @@ export type PublicAccessConfigResolved = {
   allocatorUrl: string;
   certSignUrl: string;
   corePort: number;
+  /** Local conductor port exposed through the same FridayTunnel as `/cap/*` (Phase 1).
+   * 0/unset disables the conductor backend in the edge routing table. */
+  conductorPort: number;
   /** Control-plane base for OSS attachment side-channel signing (Phase E). Client appends /v1. */
   controlPlaneUrl: string;
 };
@@ -131,6 +134,7 @@ export function resolveFridayNextConfig(cfg: unknown): FridayNextConfig {
       allocatorUrl: asString(pa.allocatorUrl, "https://gw.syengup.host/gw-alloc/allocate"),
       certSignUrl: asString(pa.certSignUrl, "https://gw.syengup.host/gw-alloc/sign-cert"),
       corePort: asNumber(pa.corePort, 18789, 1, 65535),
+      conductorPort: asNumber(pa.conductorPort, 0, 0, 65535),
       controlPlaneUrl: asString(pa.controlPlaneUrl, "https://gw.syengup.host"),
     },
     appAttest: {

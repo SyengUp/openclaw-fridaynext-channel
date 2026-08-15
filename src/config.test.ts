@@ -8,6 +8,7 @@ describe("resolveFridayNextConfig", () => {
     expect(cfg.logLevel).toBe("info");
     expect(cfg.sseKeepaliveSec).toBe(30);
     expect(cfg.publicAccess.enabled).toBe(true);
+    expect(cfg.publicAccess.conductorPort).toBe(0);
   });
 
   it("keeps an operator-only hard stop for zero-egress deployments", () => {
@@ -21,6 +22,13 @@ describe("resolveFridayNextConfig", () => {
         channels: { "friday-next": { publicAccess: { enabled: false } } },
       }).publicAccess.enabled,
     ).toBe(false);
+  });
+
+  it("resolves the conductor public backend port", () => {
+    const cfg = resolveFridayNextConfig({
+      channels: { "friday-next": { publicAccess: { conductorPort: 24080 } } },
+    });
+    expect(cfg.publicAccess.conductorPort).toBe(24080);
   });
 
   it("prefers gateway auth token over channel token", () => {

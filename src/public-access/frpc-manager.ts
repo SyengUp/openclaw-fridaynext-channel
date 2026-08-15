@@ -29,8 +29,7 @@ import { promisify } from "node:util";
 import { createHash, createPublicKey } from "node:crypto";
 import { homedir, platform, arch, networkInterfaces } from "node:os";
 import { join } from "node:path";
-import type { Server } from "node:http";
-import { startFilterProxy } from "./filter-proxy.js";
+import { startTunnelEdge, type TunnelBackend, type TunnelEdge } from "@fridaynext/tunnel-edge";
 import { verifySession } from "../attest/attest-store.js";
 import { resolveFridayNextConfig } from "../config.js";
 import { getHostOpenClawConfigSnapshot } from "../host-config.js";
@@ -84,6 +83,10 @@ export type PublicAccessConfig = {
   controlPlaneUrl: string;
   /** Core gateway HTTP port to expose. */
   corePort: number;
+  /** Conductor HTTP port to expose through the same tunnel as `/cap/*`.
+   * 0/unset disables the conductor backend. Precedence is documented on
+   * `resolveConductorPort`. */
+  conductorPort?: number;
   /** Bearer token the app uses (from the channel config). */
   authToken: string;
   /** Relay region this gateway is routed to (from `/v1/relay/bootstrap`; e.g. "bj"/"na").
@@ -103,12 +106,38 @@ export type PairingInfo = {
 type Logger = (msg: string) => void;
 
 let child: ChildProcess | null = null;
-let filterServer: Server | null = null;
+let filterServer: TunnelEdge | null = null;
 let stopped = false;
 
 /** Local port of the public-surface filter proxy that frpc forwards into (core + 1). */
 function filterPort(corePort: number): number {
   return corePort + 1;
+}
+
+/** Resolve the conductor backend port for the public edge routing table.
+ *
+ * Precedence:
+ *   1. explicit `PublicAccessConfig.conductorPort` (caller override)
+ *   2. `FRIDAY_NEXT_CONDUCTOR_PORT` env (positive integer)
+ *   3. plugin config `channels["friday-next"].publicAccess.conductorPort`
+ *
+ * 0/unset disables the conductor backend. The plugin config is resolved from the live runtime
+ * snapshot so a config hot-reload can add/remove the `/cap` backend without a process restart.
+ */
+export function resolveConductorPort(cfg: PublicAccessConfig): number {
+  const fromExplicit = positivePort(cfg.conductorPort);
+  if (fromExplicit !== 0) return fromExplicit;
+  const fromEnv = positivePort(Number(process.env.FRIDAY_NEXT_CONDUCTOR_PORT));
+  if (fromEnv !== 0) return fromEnv;
+  return positivePort(
+    resolveFridayNextConfig(getHostOpenClawConfigSnapshot(getFridayNextRuntime().config))
+      .publicAccess.conductorPort,
+  );
+}
+
+function positivePort(value: unknown): number {
+  const n = typeof value === "number" ? value : Number(value);
+  return Number.isInteger(n) && n > 0 && n <= 65535 ? n : 0;
 }
 let keepaliveTimer: ReturnType<typeof setTimeout> | null = null;
 let allocRetryTimer: ReturnType<typeof setTimeout> | null = null;
@@ -296,7 +325,8 @@ function frpcPath(): string {
  * `lanUrl` bricks pairing outright: `PairingVoucherClaim` tries ONLY the LAN address, so the
  * voucher exchange dies and the user reads it as "can't connect".
  */
-const VIRTUAL_IFACE_NAME = /^(docker|br-|bridge|virbr|veth|vmenet|vnic|utun|tun|tap|tailscale|zt|wg|anpi|llw|awdl|feth)/i;
+const VIRTUAL_IFACE_NAME =
+  /^(docker|br-|bridge|virbr|veth|vmenet|vnic|utun|tun|tap|tailscale|zt|wg|anpi|llw|awdl|feth)/i;
 
 /**
  * Pick the LAN IP from an interface enumeration, skipping virtual adapters. Pure — exported
@@ -986,7 +1016,7 @@ function scheduleBringUpRetry(cfg: PublicAccessConfig, log: Logger): void {
     tunnelTransition = tunnelTransition
       .catch(() => undefined)
       .then(async () => {
-        if (stopped || baseTunnel) return;   // 排到队时世界可能已经变了
+        if (stopped || baseTunnel) return; // 排到队时世界可能已经变了
         await startPublicAccess(cfg, log);
       });
   }, 30_000);
@@ -1140,12 +1170,9 @@ export async function reconcileServedSubdomains(
       /* already gone */
     }
     if (filterServer) {
-      try {
-        filterServer.close();
-      } catch {
-        /* already closed */
-      }
+      const server = filterServer;
       filterServer = null;
+      void server.close().catch(() => undefined);
     }
     if (healthTimer) {
       clearInterval(healthTimer);
@@ -1161,11 +1188,68 @@ export async function reconcileServedSubdomains(
   try {
     await ensureBinary(cfg.controlPlaneUrl, log);
     if (!filterServer) {
-      filterServer = startFilterProxy(filterPort(cfg.corePort), cfg.corePort, log, {
-        enabled: () =>
-          resolveFridayNextConfig(getHostOpenClawConfigSnapshot(getFridayNextRuntime().config))
-            .appAttest.gatePublicSurfaces,
-        verify: (t) => verifySession(t, Date.now()),
+      const openclawBackend: TunnelBackend = {
+        id: "openclaw",
+        pathPrefixes: ["/friday-next", "/friday-next-admin", "/gateway", "/__openclaw__"],
+        localPort: cfg.corePort,
+        requiresAttest: true,
+        // DENY beats ALLOW. The __openclaw__ namespace ALSO hosts the ControlUI admin panel
+        // plus config/api surfaces, and core serves /__openclaw__/control and the bare
+        // /__openclaw__ index WITHOUT auth. The bare-index entry is an exact-root deny in the
+        // edge (the path itself and its trailing-slash form) so the canvas subtree stays routable.
+        denyPrefixes: [
+          "/__openclaw__/control",
+          "/__openclaw__/config",
+          "/__openclaw__/api",
+          "/__openclaw__",
+        ],
+        // Pre-token bootstrap routes that must stay reachable through the public edge without a
+        // session token; everything else on the openclaw backend is gated at the edge now.
+        attestExemptPaths: [
+          "/friday-next/attest",
+          "/friday-next/health",
+          "/friday-next/status",
+          "/friday-next/plugin/info",
+          "/friday-next/public-access/pairing",
+          "/friday-next/pair/claim",
+        ],
+      };
+      const backends: TunnelBackend[] = [openclawBackend];
+      const conductorPort = resolveConductorPort(cfg);
+      if (conductorPort > 0) {
+        backends.push({
+          id: "conductor",
+          pathPrefixes: ["/cap"],
+          localPort: conductorPort,
+          requiresAttest: true,
+          // D6: only CAP-known routes are reachable through the public tunnel. The edge matches
+          // allowedPaths with the same segment-boundary semantics, so e.g. /cap/sessions covers
+          // /cap/sessions/{key}/messages and /cap/sessions/{key}/settings.
+          allowedPaths: [
+            "/cap/hello",
+            "/cap/health",
+            "/cap/events",
+            "/cap/models",
+            "/cap/cancel",
+            "/cap/files",
+            "/cap/approvals",
+            "/cap/sessions",
+            "/cap/workspaces",
+          ],
+          // The pre-attest probe must work; everything else on /cap is gated.
+          attestExemptPaths: ["/cap/health"],
+        });
+      }
+      filterServer = startTunnelEdge({
+        listenPort: filterPort(cfg.corePort),
+        backends,
+        log,
+        attestGate: {
+          enabled: () =>
+            resolveFridayNextConfig(getHostOpenClawConfigSnapshot(getFridayNextRuntime().config))
+              .appAttest.gatePublicSurfaces,
+          verify: (t) => verifySession(t, Date.now()),
+        },
       });
     }
   } catch (e) {
@@ -1206,7 +1290,7 @@ export function normalizedServedSubdomains(desired: string[]): string[] {
 function startGatewaySubdomainPoll(cfg: PublicAccessConfig, log: Logger): void {
   if (subdomainPollTimer) return;
   const generation = standbyLoop.begin();
-  if (generation === null) return;   // 已有活循环（可能正挂在 25s 长轮询上）
+  if (generation === null) return; // 已有活循环（可能正挂在 25s 长轮询上）
   const gatewayKey = createHash("sha256")
     .update(cfg.authToken || "")
     .digest("hex");
@@ -1304,7 +1388,7 @@ export function stopPublicAccess(): void {
     clearTimeout(subdomainPollTimer);
     subdomainPollTimer = null;
   }
-  standbyLoop.invalidate();   // 在途的长轮询醒来即退场，不会与随后 start 的新循环并存
+  standbyLoop.invalidate(); // 在途的长轮询醒来即退场，不会与随后 start 的新循环并存
   standbyRevision = "";
   tunnelTransition = Promise.resolve();
   baseTunnel = null;
@@ -1319,12 +1403,9 @@ export function stopPublicAccess(): void {
     child = null;
   }
   if (filterServer) {
-    try {
-      filterServer.close();
-    } catch {
-      /* ignore */
-    }
+    const server = filterServer;
     filterServer = null;
+    void server.close().catch(() => undefined);
   }
 }
 

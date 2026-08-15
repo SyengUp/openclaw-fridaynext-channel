@@ -61,6 +61,7 @@
     }
   },
   "dependencies": {
+    "@fridaynext/tunnel-edge": "file:../fridaynext-tunnel-edge",
     "apn": "^2.2.0",
     "node-app-attest": "^1.0.1",
     "qrcode-terminal": "^0.12.0"
