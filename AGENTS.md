@@ -92,6 +92,10 @@ iOS App ←--HTTP/SSE--→ Friday Plugin ←--OpenClaw Plugin API--→ Gateway +
 17. **`src/agent/run-usage-accumulator.ts`** — Per-`runId` token-usage accumulator fed by the `llm_output` hook (`accumulateRunUsage`). `consumeRunUsage(runId)` drains it into a `FridaySessionUsagePayload` (with `tokens.totalFresh`) for terminal lifecycle frames.
 18. **`src/agent/abort-run.ts`** — `abortRun(runId)` dynamically imports `openclaw/plugin-sdk/agent-harness` and calls `abortAgentHarnessRun`; backs `POST /cancel`. No-op under Vitest.
 19. **`src/agent/node-pairing-bridge.ts`** — `loadNodePairingModule` lazy-loads OpenClaw's node-pairing module. Resolves the OpenClaw `dist/` cross-platform: `OPENCLAW_DIST` env → walk `PATH` for the `openclaw` binary → `realpathSync` → `dist/` → platform-standard install paths. Backs `GET /health` and `POST /nodes-approve`.
+20. **`src/public-access/frpc-manager.ts`** — FridayTunnel public access: frpc child management (download/checksum/spawn/pidfile/respawn) + the public-surface edge. The edge is `@syengup/tunnel-edge` and runs in one of two modes from `channels["friday-next"].publicAccess.edgeMode`:
+    - **`in-process` (default)** — the plugin embeds `startTunnelEdge(...)`; the live routing table is hot-swapped with `TunnelEdge.updateBackends()` when the control plane returns a different authoritative backend registry.
+    - **`external`** — the plugin writes `~/.openclaw/friday-next/public-access/tunnel-edge.json` and spawns `node <@syengup/tunnel-edge/dist/cli.js> --config <path>` as a managed child (same pidfile/error/exit/respawn discipline as frpc); backend changes rewrite the config and restart the edge child only, never frpc.
+    The edge routing table is `buildTunnelBackends(cfg)`: `openclaw` (`/friday-next`, `/friday-next-admin`, `/gateway`, `/__openclaw__`, with the historical deny + attest-exempt paths) plus `conductor` (`/cap` with the CAP allowlist) when `resolveConductorPort(cfg) > 0`. The control plane's `backends` response is authoritative when valid; otherwise the plugin falls back to the locally built table.
 
 ### Supporting modules
 
