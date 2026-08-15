@@ -8,9 +8,9 @@ importers:
 
   .:
     dependencies:
-      '@fridaynext/tunnel-edge':
-        specifier: file:../fridaynext-tunnel-edge
-        version: file:../fridaynext-tunnel-edge
+      '@syengup/tunnel-edge':
+        specifier: ^0.1.0
+        version: 0.1.0
       apn:
         specifier: ^2.2.0
         version: 2.2.0
@@ -110,10 +110,6 @@ packages:
   '@eslint/plugin-kit@0.7.2':
     resolution: {integrity: sha512-+CNAzxglkrpNf/kKywqQfk74QjtceuOE7Qm+AF8miRvPF/wmmK5+OJOgVh3AVTT3RP2mH3+FOaxlE5v72owk0A==}
     engines: {node: ^20.19.0 || ^22.13.0 || >=24}
-
-  '@fridaynext/tunnel-edge@file:../fridaynext-tunnel-edge':
-    resolution: {directory: ../fridaynext-tunnel-edge, type: directory}
-    engines: {node: '>=22'}
 
   '@humanfs/core@0.19.2':
     resolution: {integrity: sha512-UhXNm+CFMWcbChXywFwkmhqjs3PRCmcSa/hfBgLIb7oQ5HNb1wS0icWsGtSAUNgefHeI+eBrA8I1fxmbHsGdvA==}
@@ -251,6 +247,10 @@ packages:
 
   '@standard-schema/spec@1.1.0':
     resolution: {integrity: sha512-l2aFy5jALhniG5HgqrD6jXLi/rUWrKvqN/qJx6yoJsgKhblVd+iqqU4RCXavm/jPityDo5TCvKMnpjKnOriy0w==}
+
+  '@syengup/tunnel-edge@0.1.0':
+    resolution: {integrity: sha512-NWVYRTR0BjZLdNQrLthqzuHhJGP21HSd39OqeUGzkePEF/+C0R1FTtirVP8H+xVgHaefi6OHNVF5C7vwElYPsg==}
+    engines: {node: '>=22'}
 
   '@tybys/wasm-util@0.10.1':
     resolution: {integrity: sha512-9tTaPJLSiejZKx+Bmog4uSubteqTvFrVrURwkmHixBo0G4seD0zUxp98E1DzUBJxLQ3NPwXrGKDiVjwx/DpPsg==}
@@ -1066,8 +1066,6 @@ snapshots:
       '@eslint/core': 1.2.1
       levn: 0.4.1
 
-  '@fridaynext/tunnel-edge@file:../fridaynext-tunnel-edge': {}
-
   '@humanfs/core@0.19.2':
     dependencies:
       '@humanfs/types': 0.15.0
@@ -1149,6 +1147,8 @@ snapshots:
   '@rolldown/pluginutils@1.0.0-rc.16': {}
 
   '@standard-schema/spec@1.1.0': {}
+
+  '@syengup/tunnel-edge@0.1.0': {}
 
   '@tybys/wasm-util@0.10.1':
     dependencies:

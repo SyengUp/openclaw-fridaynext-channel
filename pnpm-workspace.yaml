@@ -1,1 +1,3 @@
+minimumReleaseAgeExclude:
+  - '@syengup/tunnel-edge@0.1.0'
 onlyBuiltDependencies: better-sqlite3

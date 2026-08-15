@@ -29,7 +29,7 @@ import { promisify } from "node:util";
 import { createHash, createPublicKey } from "node:crypto";
 import { homedir, platform, arch, networkInterfaces } from "node:os";
 import { join } from "node:path";
-import { startTunnelEdge, type TunnelBackend, type TunnelEdge } from "@fridaynext/tunnel-edge";
+import { startTunnelEdge, type TunnelBackend, type TunnelEdge } from "@syengup/tunnel-edge";
 import { verifySession } from "../attest/attest-store.js";
 import { resolveFridayNextConfig } from "../config.js";
 import { getHostOpenClawConfigSnapshot } from "../host-config.js";

@@ -11,7 +11,7 @@ import {
   startTunnelEdge,
   type TunnelBackend,
   type TunnelEdge,
-} from "@fridaynext/tunnel-edge";
+} from "@syengup/tunnel-edge";
 
 // The OpenClaw backend config the edge is booted with must preserve every historical
 // filter-proxy behavior: segment-bounded allowlist, deny-beats-allow, the bare /__openclaw__
