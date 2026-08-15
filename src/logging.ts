@@ -16,6 +16,12 @@ export function setFridayNextLogLevel(level: FridayNextLogLevel): void {
   activeLevel = level;
 }
 
+/** Level-gated predicate for sinks that format their own prefix (e.g. the public-access
+ * adapter, which owns the `[friday-next:public-access]` prefix for shared-runtime logs). */
+export function fridayNextLogEnabled(level: FridayNextLogLevel): boolean {
+  return levelOrder[level] >= levelOrder[activeLevel];
+}
+
 // The optional `level` arg is accepted for call-site compatibility but the effective
 // threshold is the process-wide active level (single knob driven by config.logLevel).
 export function createFridayNextLogger(scope: string, _level?: FridayNextLogLevel) {

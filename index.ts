@@ -31,7 +31,7 @@ import {
 import { noteHeartbeatActivity } from "./src/notifications/heartbeat-notification-tracker.js";
 import { getOpenClawAgentRunContext } from "./src/agent-run-context-bridge.js";
 import { accumulateRunUsage } from "./src/agent/run-usage-accumulator.js";
-import { createFridayNextLogger } from "./src/logging.js";
+import { createFridayNextLogger, fridayNextLogEnabled } from "./src/logging.js";
 import { ensureCodexReasoningSummary } from "./src/codex-reasoning-config.js";
 import { startPublicAccess } from "./src/public-access/frpc-manager.js";
 
@@ -168,7 +168,12 @@ export default defineChannelPluginEntry({
             edgeMode: paCfg.publicAccess.edgeMode,
             authToken: paCfg.authToken,
           },
-          (m) => paLog.info(m),
+          // frpc-manager owns the `[friday-next:public-access]` prefix for lifecycle logs;
+          // pass a raw level-gated info sink so the shared runtime's messages keep the same
+          // console shape as before.
+          (m) => {
+            if (fridayNextLogEnabled("info")) console.info(m);
+          },
         ).catch((e: unknown) =>
           paLog.warn(`startPublicAccess failed: ${e instanceof Error ? e.message : String(e)}`),
         );

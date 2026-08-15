@@ -1,4 +1,8 @@
 /**
+ * LEGACY — production no longer uses this module. The live standby loop now runs inside
+ * `@syengup/tunnel-edge`'s TunnelRuntime, which ships its own identical `StandbyLoopGuard`.
+ * This file remains only for its existing unit tests.
+ *
  * 长轮询循环的生命周期闸门（代际号）。
  *
  * 为什么需要它：standby 是 25 秒的 held HTTP 长轮询。`stopPublicAccess()` 会把

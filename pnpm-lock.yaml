@@ -9,8 +9,8 @@ importers:
   .:
     dependencies:
       '@syengup/tunnel-edge':
-        specifier: ^0.2.1
-        version: 0.2.1
+        specifier: ^0.3.0
+        version: 0.3.0
       apn:
         specifier: ^2.2.0
         version: 2.2.0
@@ -248,8 +248,8 @@ packages:
   '@standard-schema/spec@1.1.0':
     resolution: {integrity: sha512-l2aFy5jALhniG5HgqrD6jXLi/rUWrKvqN/qJx6yoJsgKhblVd+iqqU4RCXavm/jPityDo5TCvKMnpjKnOriy0w==}
 
-  '@syengup/tunnel-edge@0.2.1':
-    resolution: {integrity: sha512-oVyrfRZm8IPbDZ3935SMkixpLzSHyaWVywfMuz+/LEZx/4iBc2z5uTGD8kD8PfhTlwlM3JDCEL9sciFRlv9FHw==}
+  '@syengup/tunnel-edge@0.3.0':
+    resolution: {integrity: sha512-qwCpvaQ7vN4MAuBLj/4aEf4y+6YqL/Ny27v99qsl82Lnl9j+kp9+4Wv8d+AMLQmo/JaIQ2rlVhPqoUjGpQqLFA==}
     engines: {node: '>=22'}
     hasBin: true
 
@@ -1149,7 +1149,7 @@ snapshots:
 
   '@standard-schema/spec@1.1.0': {}
 
-  '@syengup/tunnel-edge@0.2.1': {}
+  '@syengup/tunnel-edge@0.3.0': {}
 
   '@tybys/wasm-util@0.10.1':
     dependencies:

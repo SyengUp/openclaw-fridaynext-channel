@@ -1,4 +1,8 @@
 /**
+ * LEGACY — production no longer uses this module. The live tunnel watchdog now runs inside
+ * `@syengup/tunnel-edge`'s TunnelRuntime, which ships its own identical `TunnelWatchdogPolicy`.
+ * This file remains only for its existing unit tests.
+ *
  * 隧道看门狗的「升级阶梯」策略层——确诊隧道长期不可达(闸门政策性拒绝、注册表重建、
  * 长时间断网等)后,重启节奏指数退避、重分配冷却,健康/空闲即复位。
  *
