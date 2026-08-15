@@ -27,6 +27,7 @@ export const openclawBackend: TunnelBackend = {
     "/__openclaw__/config",
     "/__openclaw__/api",
     "/__openclaw__",
+    "/friday-next/edge",
   ],
   attestExemptPaths: [
     "/friday-next/attest",
@@ -73,6 +74,8 @@ describe("openclaw tunnel-edge routing (pure)", () => {
       "/__openclaw__/api/anything",
       "/__openclaw__",
       "/__openclaw__/",
+      "/friday-next/edge",
+      "/friday-next/edge/verify-attest",
     ]) {
       expect(resolveBackendForPath(p, [openclawBackend]), p).toBeNull();
     }

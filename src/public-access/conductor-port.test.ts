@@ -131,6 +131,7 @@ describe("buildTunnelBackends", () => {
       "/__openclaw__/config",
       "/__openclaw__/api",
       "/__openclaw__",
+      "/friday-next/edge",
     ],
     attestExemptPaths: [
       "/friday-next/attest",
@@ -201,5 +202,41 @@ describe("edgeConfigFor", () => {
     expect(config.listenPort).toBe(18790); // filterPort(corePort)
     expect(config.logLevel).toBe("info");
     expect(config.backends).toEqual(buildTunnelBackends(cfg));
+  });
+
+  it("adds the localhost attest verifier only for external mode with the gate enabled", () => {
+    setFridayNextRuntime({
+      config: {
+        current: () => ({
+          channels: { "friday-next": { appAttest: { gatePublicSurfaces: true } } },
+        }),
+      },
+    });
+    const external = edgeConfigFor({ ...baseConfig, edgeMode: "external" });
+    expect(external.attest).toEqual({
+      url: `http://127.0.0.1:${baseConfig.corePort}/friday-next/edge/verify-attest`,
+    });
+  });
+
+  it("omits the attest verifier when the gate is disabled", () => {
+    setFridayNextRuntime({
+      config: {
+        current: () => ({
+          channels: { "friday-next": { appAttest: { gatePublicSurfaces: false } } },
+        }),
+      },
+    });
+    expect(edgeConfigFor({ ...baseConfig, edgeMode: "external" }).attest).toBeUndefined();
+  });
+
+  it("omits the attest verifier for in-process mode even when the gate is enabled", () => {
+    setFridayNextRuntime({
+      config: {
+        current: () => ({
+          channels: { "friday-next": { appAttest: { gatePublicSurfaces: true } } },
+        }),
+      },
+    });
+    expect(edgeConfigFor({ ...baseConfig, edgeMode: "in-process" }).attest).toBeUndefined();
   });
 });

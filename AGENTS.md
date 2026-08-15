@@ -67,6 +67,7 @@ iOS App ←--HTTP/SSE--→ Friday Plugin ←--OpenClaw Plugin API--→ Gateway +
    - `GET /friday-next/agents/{id}/tools/catalog` — full tool catalog for the toolbox editor (`handleAgentToolsCatalog`): core + plugin tools grouped by category, with descriptions, the 4 profiles (minimal/coding/messaging/full), and per-tool `enabled`/`inProfile`. Built from core's `buildToolsCatalogResult`.
    - `GET /friday-next/status` — active runs + connection count (`handleStatus`)
    - `GET /friday-next/health` — node-pairing health + optional self-heal (`handleHealth`; query: `deviceId`, `nodeDeviceId`, `selfHeal`)
+   - `GET /friday-next/edge/verify-attest` — internal localhost-only attest verifier for the standalone edge (`handleEdgeAttestVerify`): bearer-free, rejects non-loopback and public-marker requests, returns 200/401 from `verifySession`. Not routable through the public edge (`/friday-next/edge` is denylisted).
    - `GET /friday-next/history/sessions` · `GET /friday-next/history/messages` · `PUT|POST /friday-next/sessions/title` — history sync (list sessions across agents, read a session's messages, sync app title → server `displayName`).
    - `GET /friday-next/link-preview?url=...` — Open Graph metadata for link-preview cards.
    - `GET /friday-next/plugin/info` · `POST /friday-next/plugin/upgrade` — self-version report + in-process npm upgrade & safe restart (npm installs only; dev/`--link` installs return 409).

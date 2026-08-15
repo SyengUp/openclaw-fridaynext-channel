@@ -189,6 +189,8 @@ type EdgeConfigFile = {
   listenPort: number;
   backends: TunnelBackend[];
   logLevel?: "debug" | "info" | "silent";
+  /** Localhost attest verifier used by the standalone edge. */
+  attest?: { url: string; header?: string };
 };
 
 function edgeLogLevelForCurrentConfig(): "debug" | "info" | "silent" {
@@ -219,6 +221,9 @@ export function buildTunnelBackends(cfg: PublicAccessConfig): TunnelBackend[] {
       "/__openclaw__/config",
       "/__openclaw__/api",
       "/__openclaw__",
+      // The standalone edge's attest verifier lives on this path on core; it must never be
+      // reachable through the public relay (the handler also rejects public-marker requests).
+      "/friday-next/edge",
     ],
     // Pre-token bootstrap routes that must stay reachable through the public edge without a
     // session token; everything else on the openclaw backend is gated at the edge now.
@@ -262,12 +267,27 @@ export function buildTunnelBackends(cfg: PublicAccessConfig): TunnelBackend[] {
 }
 
 /** Config file for the standalone edge CLI: the same listen port frpc forwards into, the same
- * backend table the in-process edge would use, and a log level derived from the plugin config. */
+ * backend table the in-process edge would use, and a log level derived from the plugin config.
+ * In external mode, when the public-surface attest gate is enabled, the config also points the
+ * standalone edge at the plugin's internal localhost verifier so it can enforce App Attest
+ * exactly like the in-process edge. */
 export function edgeConfigFor(cfg: PublicAccessConfig): EdgeConfigFile {
+  const attest =
+    resolveEdgeMode(cfg) === "external"
+      ? ((): EdgeConfigFile["attest"] => {
+          const gatePublicSurfaces = resolveFridayNextConfig(
+            getHostOpenClawConfigSnapshot(getFridayNextRuntime().config),
+          ).appAttest.gatePublicSurfaces;
+          return gatePublicSurfaces
+            ? { url: `http://127.0.0.1:${cfg.corePort}/friday-next/edge/verify-attest` }
+            : undefined;
+        })()
+      : undefined;
   return {
     listenPort: filterPort(cfg.corePort),
     backends: buildTunnelBackends(cfg),
     logLevel: edgeLogLevelForCurrentConfig(),
+    ...(attest ? { attest } : {}),
   };
 }
 

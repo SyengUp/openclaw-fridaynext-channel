@@ -31,6 +31,7 @@ import { handleHistorySetTitle } from "./handlers/history-set-title.js";
 import { handleStatus } from "./handlers/status.js";
 import { handleLinkPreview } from "./handlers/link-preview.js";
 import { handleHealth } from "./handlers/health.js";
+import { handleEdgeAttestVerify } from "./handlers/edge-attest-verify.js";
 import { handlePluginInfo } from "./handlers/plugin-info.js";
 import { handlePluginUpgrade } from "./handlers/plugin-upgrade.js";
 import { handlePairClaim, handlePublicAccessPairing } from "./handlers/plugin-pairing.js";
@@ -65,6 +66,12 @@ async function handleFridayNextRoute(req: IncomingMessage, res: ServerResponse):
     res.statusCode = 204;
     res.end();
     return true;
+  }
+
+  // Internal verifier for the standalone tunnel-edge process. Bearer-free but localhost-only;
+  // it must never be reachable through the public relay (the edge also denylists /friday-next/edge).
+  if (req.method === "GET" && pathname === "/friday-next/edge/verify-attest") {
+    return handleEdgeAttestVerify(req, res);
   }
 
   // App Attest gate: on the PUBLIC surface only (isPublicRequest), when required,
