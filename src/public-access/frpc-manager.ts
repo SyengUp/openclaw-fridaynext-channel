@@ -87,6 +87,9 @@ export type PublicAccessConfig = {
    * 0/unset disables the conductor backend. Precedence is documented on
    * `resolveConductorPort`. */
   conductorPort?: number;
+  /** Conductor upstream host (default 127.0.0.1; another trusted LAN host when the
+   * conductor runs on a different machine than this gateway). */
+  conductorHost?: string;
   /** Bearer token the app uses (from the channel config). */
   authToken: string;
   /** Relay region this gateway is routed to (from `/v1/relay/bootstrap`; e.g. "bj"/"na").
@@ -133,6 +136,29 @@ export function resolveConductorPort(cfg: PublicAccessConfig): number {
     resolveFridayNextConfig(getHostOpenClawConfigSnapshot(getFridayNextRuntime().config))
       .publicAccess.conductorPort,
   );
+}
+
+/** Resolve the conductor upstream host for the edge routing table.
+ *
+ * Precedence:
+ *   1. explicit `PublicAccessConfig.conductorHost`
+ *   2. `FRIDAY_NEXT_CONDUCTOR_HOST` env
+ *   3. plugin config `channels["friday-next"].publicAccess.conductorHost`
+ *
+ * Defaults to 127.0.0.1 (conductor and gateway on the same host).
+ */
+export function resolveConductorHost(cfg: PublicAccessConfig): string {
+  const candidates = [
+    cfg.conductorHost,
+    process.env.FRIDAY_NEXT_CONDUCTOR_HOST,
+    resolveFridayNextConfig(getHostOpenClawConfigSnapshot(getFridayNextRuntime().config))
+      .publicAccess.conductorHost,
+  ];
+  for (const candidate of candidates) {
+    const host = typeof candidate === "string" ? candidate.trim() : "";
+    if (host && !host.includes("://") && !host.includes("/")) return host;
+  }
+  return "127.0.0.1";
 }
 
 function positivePort(value: unknown): number {
@@ -1221,6 +1247,7 @@ export async function reconcileServedSubdomains(
           id: "conductor",
           pathPrefixes: ["/cap"],
           localPort: conductorPort,
+          localHost: resolveConductorHost(cfg),
           requiresAttest: true,
           // D6: only CAP-known routes are reachable through the public tunnel. The edge matches
           // allowedPaths with the same segment-boundary semantics, so e.g. /cap/sessions covers

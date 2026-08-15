@@ -64,6 +64,9 @@ export type PublicAccessConfigResolved = {
   /** Local conductor port exposed through the same FridayTunnel as `/cap/*` (Phase 1).
    * 0/unset disables the conductor backend in the edge routing table. */
   conductorPort: number;
+  /** Conductor upstream host for the edge (default 127.0.0.1; set to another trusted LAN
+   * host when the conductor runs on a different machine than the OpenClaw gateway). */
+  conductorHost: string;
   /** Control-plane base for OSS attachment side-channel signing (Phase E). Client appends /v1. */
   controlPlaneUrl: string;
 };
@@ -135,6 +138,7 @@ export function resolveFridayNextConfig(cfg: unknown): FridayNextConfig {
       certSignUrl: asString(pa.certSignUrl, "https://gw.syengup.host/gw-alloc/sign-cert"),
       corePort: asNumber(pa.corePort, 18789, 1, 65535),
       conductorPort: asNumber(pa.conductorPort, 0, 0, 65535),
+      conductorHost: asString(pa.conductorHost, "127.0.0.1"),
       controlPlaneUrl: asString(pa.controlPlaneUrl, "https://gw.syengup.host"),
     },
     appAttest: {

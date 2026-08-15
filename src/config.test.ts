@@ -9,6 +9,7 @@ describe("resolveFridayNextConfig", () => {
     expect(cfg.sseKeepaliveSec).toBe(30);
     expect(cfg.publicAccess.enabled).toBe(true);
     expect(cfg.publicAccess.conductorPort).toBe(0);
+    expect(cfg.publicAccess.conductorHost).toBe("127.0.0.1");
   });
 
   it("keeps an operator-only hard stop for zero-egress deployments", () => {
@@ -24,11 +25,16 @@ describe("resolveFridayNextConfig", () => {
     ).toBe(false);
   });
 
-  it("resolves the conductor public backend port", () => {
+  it("resolves the conductor public backend port and host", () => {
     const cfg = resolveFridayNextConfig({
-      channels: { "friday-next": { publicAccess: { conductorPort: 24080 } } },
+      channels: {
+        "friday-next": {
+          publicAccess: { conductorPort: 24080, conductorHost: "192.168.100.124" },
+        },
+      },
     });
     expect(cfg.publicAccess.conductorPort).toBe(24080);
+    expect(cfg.publicAccess.conductorHost).toBe("192.168.100.124");
   });
 
   it("prefers gateway auth token over channel token", () => {
