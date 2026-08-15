@@ -29,6 +29,7 @@ import { promisify } from "node:util";
 import { createHash, createPublicKey } from "node:crypto";
 import { homedir, platform, arch, networkInterfaces } from "node:os";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { startTunnelEdge, type TunnelBackend, type TunnelEdge } from "@syengup/tunnel-edge";
 import { verifySession } from "../attest/attest-store.js";
 import { resolveFridayNextConfig } from "../config.js";
@@ -83,6 +84,10 @@ export type PublicAccessConfig = {
   controlPlaneUrl: string;
   /** Core gateway HTTP port to expose. */
   corePort: number;
+  /** Edge run mode for this bring-up. Defaults to the live plugin config value, which
+   * itself defaults to `in-process` — existing deployments keep the embedded edge until
+   * `channels["friday-next"].publicAccess.edgeMode` is explicitly set to `"external"`. */
+  edgeMode?: "in-process" | "external";
   /** Conductor HTTP port to expose through the same tunnel as `/cap/*`.
    * 0/unset disables the conductor backend. Precedence is documented on
    * `resolveConductorPort`. */
@@ -108,8 +113,14 @@ export type PairingInfo = {
 
 type Logger = (msg: string) => void;
 
+const RESPAWN_BASE_MS = 3000;
+const RESPAWN_MAX_MS = 60_000;
+
 let child: ChildProcess | null = null;
 let filterServer: TunnelEdge | null = null;
+let edgeChild: ChildProcess | null = null;
+let edgeRespawnTimer: ReturnType<typeof setTimeout> | null = null;
+let edgeRespawnDelayMs = RESPAWN_BASE_MS;
 let stopped = false;
 
 /** Local port of the public-surface filter proxy that frpc forwards into (core + 1). */
@@ -159,6 +170,204 @@ export function resolveConductorHost(cfg: PublicAccessConfig): string {
     if (host && !host.includes("://") && !host.includes("/")) return host;
   }
   return "127.0.0.1";
+}
+
+/** Resolve the edge run mode for this bring-up. An explicit `PublicAccessConfig.edgeMode`
+ * wins; otherwise the live plugin config decides. The plugin config itself defaults to
+ * `in-process`, so deployed gateways keep the embedded edge until explicitly switched. */
+export function resolveEdgeMode(cfg: PublicAccessConfig): "in-process" | "external" {
+  if (cfg.edgeMode === "in-process" || cfg.edgeMode === "external") return cfg.edgeMode;
+  const resolved = resolveFridayNextConfig(
+    getHostOpenClawConfigSnapshot(getFridayNextRuntime().config),
+  ).publicAccess.edgeMode;
+  return resolved === "external" ? "external" : "in-process";
+}
+
+/** JSON shape written for the external edge CLI. Kept local so the plugin does not depend on
+ * the edge package's config-file helper exports (only the runtime API + CLI path). */
+type EdgeConfigFile = {
+  listenPort: number;
+  backends: TunnelBackend[];
+  logLevel?: "debug" | "info" | "silent";
+};
+
+function edgeLogLevelForCurrentConfig(): "debug" | "info" | "silent" {
+  const level = resolveFridayNextConfig(
+    getHostOpenClawConfigSnapshot(getFridayNextRuntime().config),
+  ).logLevel;
+  return level === "debug" ? "debug" : "info";
+}
+
+/**
+ * The public edge routing table for this gateway: the OpenClaw core surface always, plus the
+ * conductor `/cap` surface when a conductor port is configured. Every field is exactly what the
+ * legacy filter proxy enforced — pathPrefixes, denyPrefixes, allowedPaths and attestExemptPaths
+ * must stay byte-for-byte compatible with the previously inlined construction.
+ */
+export function buildTunnelBackends(cfg: PublicAccessConfig): TunnelBackend[] {
+  const openclawBackend: TunnelBackend = {
+    id: "openclaw",
+    pathPrefixes: ["/friday-next", "/friday-next-admin", "/gateway", "/__openclaw__"],
+    localPort: cfg.corePort,
+    requiresAttest: true,
+    // DENY beats ALLOW. The __openclaw__ namespace ALSO hosts the ControlUI admin panel
+    // plus config/api surfaces, and core serves /__openclaw__/control and the bare
+    // /__openclaw__ index WITHOUT auth. The bare-index entry is an exact-root deny in the
+    // edge (the path itself and its trailing-slash form) so the canvas subtree stays routable.
+    denyPrefixes: [
+      "/__openclaw__/control",
+      "/__openclaw__/config",
+      "/__openclaw__/api",
+      "/__openclaw__",
+    ],
+    // Pre-token bootstrap routes that must stay reachable through the public edge without a
+    // session token; everything else on the openclaw backend is gated at the edge now.
+    attestExemptPaths: [
+      "/friday-next/attest",
+      "/friday-next/health",
+      "/friday-next/status",
+      "/friday-next/plugin/info",
+      "/friday-next/public-access/pairing",
+      "/friday-next/pair/claim",
+    ],
+  };
+  const backends: TunnelBackend[] = [openclawBackend];
+  const conductorPort = resolveConductorPort(cfg);
+  if (conductorPort > 0) {
+    backends.push({
+      id: "conductor",
+      pathPrefixes: ["/cap"],
+      localPort: conductorPort,
+      localHost: resolveConductorHost(cfg),
+      requiresAttest: true,
+      // D6: only CAP-known routes are reachable through the public tunnel. The edge matches
+      // allowedPaths with the same segment-boundary semantics, so e.g. /cap/sessions covers
+      // /cap/sessions/{key}/messages and /cap/sessions/{key}/settings.
+      allowedPaths: [
+        "/cap/hello",
+        "/cap/health",
+        "/cap/events",
+        "/cap/models",
+        "/cap/cancel",
+        "/cap/files",
+        "/cap/approvals",
+        "/cap/sessions",
+        "/cap/workspaces",
+      ],
+      // The pre-attest probe must work; everything else on /cap is gated.
+      attestExemptPaths: ["/cap/health"],
+    });
+  }
+  return backends;
+}
+
+/** Config file for the standalone edge CLI: the same listen port frpc forwards into, the same
+ * backend table the in-process edge would use, and a log level derived from the plugin config. */
+export function edgeConfigFor(cfg: PublicAccessConfig): EdgeConfigFile {
+  return {
+    listenPort: filterPort(cfg.corePort),
+    backends: buildTunnelBackends(cfg),
+    logLevel: edgeLogLevelForCurrentConfig(),
+  };
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function isBareHost(value: string): boolean {
+  return value.length > 0 && !value.includes("://") && !value.includes("/");
+}
+
+function parseStringArrayField(value: unknown): string[] | null | undefined {
+  if (value === undefined) return undefined;
+  if (!Array.isArray(value)) return null;
+  const out: string[] = [];
+  for (const entry of value) {
+    if (typeof entry !== "string") return null;
+    const trimmed = entry.trim();
+    if (!trimmed.startsWith("/")) {
+      return null;
+    }
+    out.push(trimmed);
+  }
+  return out;
+}
+
+/**
+ * Parse the control plane's authoritative `backends` response field. Returns `null` for
+ * absent/invalid values (the caller then falls back to the locally built table). Validation
+ * mirrors the control plane's own strict registration checks: array of 0..16 entries, unique
+ * ids, pathPrefixes non-empty and starting `/`, localPort 1..65535, optional bare localHost,
+ * boolean `requiresAttest`, and string arrays for the three optional path fields.
+ */
+export function parseControlPlaneBackends(value: unknown): TunnelBackend[] | null {
+  if (!Array.isArray(value) || value.length > 16) return null;
+  const seenIds = new Set<string>();
+  const backends: TunnelBackend[] = [];
+  for (const raw of value) {
+    if (!isRecord(raw)) return null;
+    const id = typeof raw.id === "string" ? raw.id.trim() : "";
+    if (!id || seenIds.has(id)) return null;
+    seenIds.add(id);
+    if (!Array.isArray(raw.pathPrefixes) || raw.pathPrefixes.length === 0) return null;
+    const pathPrefixes: string[] = [];
+    for (const prefix of raw.pathPrefixes) {
+      if (typeof prefix !== "string") return null;
+      const trimmed = prefix.trim();
+      if (!trimmed.startsWith("/")) return null;
+      pathPrefixes.push(trimmed);
+    }
+    if (
+      typeof raw.localPort !== "number" ||
+      !Number.isInteger(raw.localPort) ||
+      raw.localPort < 1 ||
+      raw.localPort > 65535
+    ) {
+      return null;
+    }
+    let localHost: string | undefined;
+    if (raw.localHost !== undefined) {
+      if (typeof raw.localHost !== "string" || !isBareHost(raw.localHost.trim())) return null;
+      localHost = raw.localHost.trim();
+    }
+    if (raw.requiresAttest !== undefined && typeof raw.requiresAttest !== "boolean") return null;
+    const denyPrefixes = parseStringArrayField(raw.denyPrefixes);
+    if (denyPrefixes === null) return null;
+    const allowedPaths = parseStringArrayField(raw.allowedPaths);
+    if (allowedPaths === null) return null;
+    const attestExemptPaths = parseStringArrayField(raw.attestExemptPaths);
+    if (attestExemptPaths === null) return null;
+
+    backends.push({
+      id,
+      pathPrefixes,
+      localPort: raw.localPort,
+      ...(localHost !== undefined ? { localHost } : {}),
+      ...(raw.requiresAttest !== undefined ? { requiresAttest: raw.requiresAttest } : {}),
+      ...(denyPrefixes !== undefined ? { denyPrefixes } : {}),
+      ...(allowedPaths !== undefined ? { allowedPaths } : {}),
+      ...(attestExemptPaths !== undefined ? { attestExemptPaths } : {}),
+    });
+  }
+  return backends;
+}
+
+/** Compare two routing tables by the fields that define public routing identity. Backend and
+ * pathPrefix order matter — both affect first-match-wins routing decisions. */
+export function backendTablesEqual(a: TunnelBackend[], b: TunnelBackend[]): boolean {
+  if (a.length !== b.length) return false;
+  const samePrefixes = (x: string[], y: string[]): boolean =>
+    x.length === y.length && x.every((p, i) => p === y[i]);
+  for (let i = 0; i < a.length; i += 1) {
+    const x = a[i];
+    const y = b[i];
+    if (x.id !== y.id) return false;
+    if (x.localPort !== y.localPort) return false;
+    if ((x.localHost ?? "127.0.0.1") !== (y.localHost ?? "127.0.0.1")) return false;
+    if (!samePrefixes(x.pathPrefixes, y.pathPrefixes)) return false;
+  }
+  return true;
 }
 
 function positivePort(value: unknown): number {
@@ -870,6 +1079,28 @@ function frpcPidPath(): string {
   return join(DATA_DIR, "frpc.pid");
 }
 
+function edgePidPath(): string {
+  return join(DATA_DIR, "tunnel-edge.pid");
+}
+
+function edgeConfigPath(): string {
+  return join(DATA_DIR, "tunnel-edge.json");
+}
+
+/** Resolve the standalone edge CLI entrypoint. Prefer `import.meta.resolve` (exact package
+ * resolution), and fall back to the conventional node_modules path when resolution fails (e.g.
+ * a package manager or runtime that does not implement it). The CLI is always launched through
+ * `process.execPath`, so the shebang is a packaging affordance, not a spawn requirement. */
+function edgeModulePath(): string {
+  try {
+    const resolved = import.meta.resolve("@syengup/tunnel-edge/dist/cli.js");
+    if (resolved.startsWith("file:")) return fileURLToPath(resolved);
+    return resolved;
+  } catch {
+    return join(process.cwd(), "node_modules", "@syengup", "tunnel-edge", "dist", "cli.js");
+  }
+}
+
 /** A delayed exit from an old frpc must never erase the pidfile of its replacement. */
 export function shouldClearRecordedFrpcPid(
   recordedPid: number,
@@ -885,6 +1116,27 @@ function clearRecordedFrpcPid(exitedPid: number | undefined): void {
     const recordedPid = Number(readFileSync(frpcPidPath(), "utf8").trim()) || 0;
     if (shouldClearRecordedFrpcPid(recordedPid, exitedPid)) {
       rmSync(frpcPidPath(), { force: true });
+    }
+  } catch {
+    /* absent/unreadable pidfile — nothing to clear */
+  }
+}
+
+/** Same stale-pid guard as frpc: a delayed exit from an old edge child must never erase the
+ * pidfile of its replacement. */
+export function shouldClearRecordedEdgePid(
+  recordedPid: number,
+  exitedPid: number | undefined,
+): boolean {
+  return Number.isInteger(recordedPid) && recordedPid > 0 && recordedPid === exitedPid;
+}
+
+function clearRecordedEdgePid(exitedPid: number | undefined): void {
+  if (!exitedPid) return;
+  try {
+    const recordedPid = Number(readFileSync(edgePidPath(), "utf8").trim()) || 0;
+    if (shouldClearRecordedEdgePid(recordedPid, exitedPid)) {
+      rmSync(edgePidPath(), { force: true });
     }
   } catch {
     /* absent/unreadable pidfile — nothing to clear */
@@ -973,8 +1225,6 @@ function killOrphanFrpc(confPath: string, log: Logger): void {
   }
 }
 
-const RESPAWN_BASE_MS = 3000;
-const RESPAWN_MAX_MS = 60_000;
 let respawnDelayMs = RESPAWN_BASE_MS;
 
 function scheduleRespawn(confPath: string, log: Logger): void {
@@ -1026,6 +1276,104 @@ function spawnFrpc(confPath: string, log: Logger): void {
       `frpc exited (code=${code ?? "null"}); respawning in ${Math.round(respawnDelayMs / 1000)}s`,
     );
     scheduleRespawn(confPath, log);
+  });
+}
+
+/** Write the standalone edge's config file atomically (tmp+rename) with owner-only mode. */
+function writeEdgeConfigFor(cfg: PublicAccessConfig, backends = buildTunnelBackends(cfg)): string {
+  ensureDir();
+  const p = edgeConfigPath();
+  const tmp = `${p}.tmp`;
+  writeFileSync(
+    tmp,
+    JSON.stringify({ ...edgeConfigFor(cfg), backends }, null, 2),
+    { mode: 0o600 },
+  );
+  chmodSync(tmp, 0o600); // mode only applies on create — tighten a pre-existing tmp too
+  renameSync(tmp, p);
+  return p;
+}
+
+/** Reap an orphaned standalone edge left by a prior gateway process, using the same
+ * pidfile + command-line verification discipline as frpc. */
+function killOrphanEdge(configPath: string, log: Logger): void {
+  let recordedPid = 0;
+  try {
+    recordedPid = Number(readFileSync(edgePidPath(), "utf8").trim()) || 0;
+  } catch {
+    /* no pidfile — nothing to reap */
+  }
+  const modulePath = edgeModulePath();
+  if (recordedPid > 0 && recordedPid !== edgeChild?.pid) {
+    const cmd = processCmdline(recordedPid);
+    if (cmd && cmd.includes(modulePath) && cmd.includes(configPath)) {
+      try {
+        process.kill(recordedPid, "SIGTERM");
+        log(`reaped orphan tunnel-edge pid=${recordedPid}`);
+      } catch {
+        /* already gone */
+      }
+      return;
+    }
+    // Dead/reused pid, or not ours — never leave it looking like the managed child.
+    try {
+      rmSync(edgePidPath(), { force: true });
+    } catch {
+      /* best-effort */
+    }
+  }
+}
+
+function scheduleEdgeRespawn(log: Logger): void {
+  if (edgeRespawnTimer) clearTimeout(edgeRespawnTimer);
+  edgeRespawnTimer = setTimeout(() => {
+    edgeRespawnTimer = null;
+    if (!stopped && !edgeChild && servedSubdomains.length > 0) spawnEdgeChild(log);
+  }, edgeRespawnDelayMs);
+}
+
+function spawnEdgeChild(log: Logger): void {
+  const startedAt = Date.now();
+  const bumpBackoff = (): void => {
+    edgeRespawnDelayMs =
+      Date.now() - startedAt > 60_000
+        ? RESPAWN_BASE_MS
+        : Math.min(edgeRespawnDelayMs * 2, RESPAWN_MAX_MS);
+  };
+  const configPath = edgeConfigPath();
+  const c = spawn(process.execPath, [edgeModulePath(), "--config", configPath], {
+    stdio: "ignore",
+    detached: false,
+  });
+  edgeChild = c;
+  if (c.pid) {
+    try {
+      writeFileSync(edgePidPath(), String(c.pid));
+    } catch {
+      /* best-effort — orphan reap simply no-ops without a pidfile */
+    }
+  }
+  c.on("error", (err) => {
+    clearRecordedEdgePid(c.pid);
+    if (edgeChild !== c) return;
+    edgeChild = null;
+    if (stopped) return;
+    bumpBackoff();
+    log(
+      `tunnel-edge spawn error (${err.message}); retrying in ${Math.round(edgeRespawnDelayMs / 1000)}s`,
+    );
+    scheduleEdgeRespawn(log);
+  });
+  c.on("exit", (code) => {
+    clearRecordedEdgePid(c.pid);
+    if (edgeChild !== c) return; // superseded by a newer child — ignore this stale exit
+    edgeChild = null;
+    if (stopped) return;
+    bumpBackoff();
+    log(
+      `tunnel-edge exited (code=${code ?? "null"}); respawning in ${Math.round(edgeRespawnDelayMs / 1000)}s`,
+    );
+    scheduleEdgeRespawn(log);
   });
 }
 
@@ -1086,9 +1434,11 @@ export async function startPublicAccess(
   if (!cfg.enabled) {
     // Hidden operator hard stop. Normal unentitled users never enter this branch: they stay in
     // standby with zero proxies. Reap a prior-process frpc as well so zero-egress is literal.
-    const wasRunning = child != null || filterServer != null || cachedPairing != null;
+    const wasRunning =
+      child != null || filterServer != null || edgeChild != null || cachedPairing != null;
     stopPublicAccess();
     killOrphanFrpc(join(DATA_DIR, "frpc.toml"), log);
+    killOrphanEdge(edgeConfigPath(), log);
     log(
       `FridayTunnel standby hard-disabled (publicAccess.standbyDisabled=true or legacy enabled=false)` +
         (wasRunning ? " — tore down running tunnel" : ""),
@@ -1135,9 +1485,10 @@ export async function startPublicAccess(
     subdomain,
   };
 
-  // A crash/restart may have left yesterday's entitled frpc alive. Standby always begins closed;
-  // the authoritative desired-set response below is the only thing allowed to reopen it.
+  // A crash/restart may have left yesterday's entitled frpc/edge alive. Standby always begins
+  // closed; the authoritative desired-set response below is the only thing allowed to reopen it.
   killOrphanFrpc(join(DATA_DIR, "frpc.toml"), log);
+  killOrphanEdge(edgeConfigPath(), log);
   startCertRenewalTimer(cfg, cn, log);
   startGatewaySubdomainPoll(cfg, log);
 
@@ -1161,16 +1512,108 @@ function rewriteConfigForServed(cfg: PublicAccessConfig): string {
   return spawnConfPath;
 }
 
+/** Start whichever edge mode is configured, closing the other mode first if a config hot-reload
+ * switched it. The attest gate always reads the live plugin config, exactly like before. */
+function ensureEdgeRunning(cfg: PublicAccessConfig, log: Logger): void {
+  if (resolveEdgeMode(cfg) === "external") {
+    if (filterServer) {
+      const server = filterServer;
+      filterServer = null;
+      void server.close().catch(() => undefined);
+    }
+    if (!edgeChild) {
+      const configPath = writeEdgeConfigFor(cfg);
+      killOrphanEdge(configPath, log);
+      spawnEdgeChild(log);
+    }
+    return;
+  }
+
+  if (edgeChild) {
+    const running = edgeChild;
+    edgeChild = null;
+    try {
+      running.kill();
+    } catch {
+      /* already gone */
+    }
+  }
+  if (filterServer) return;
+  filterServer = startTunnelEdge({
+    listenPort: filterPort(cfg.corePort),
+    backends: buildTunnelBackends(cfg),
+    log,
+    attestGate: {
+      enabled: () =>
+        resolveFridayNextConfig(getHostOpenClawConfigSnapshot(getFridayNextRuntime().config))
+          .appAttest.gatePublicSurfaces,
+      verify: (t) => verifySession(t, Date.now()),
+    },
+  });
+}
+
+/** Stop the edge in whichever mode is currently running (in-process handle or external child). */
+function stopEdgeRunning(): void {
+  if (edgeRespawnTimer) {
+    clearTimeout(edgeRespawnTimer);
+    edgeRespawnTimer = null;
+  }
+  if (edgeChild) {
+    try {
+      edgeChild.kill();
+    } catch {
+      /* already gone */
+    }
+    edgeChild = null;
+  }
+  if (filterServer) {
+    const server = filterServer;
+    filterServer = null;
+    void server.close().catch(() => undefined);
+  }
+}
+
+/** Reconcile the live edge routing table against the control-plane-authoritative backend set.
+ * Returns true when a change was applied. In-process mode hot-swaps via `updateBackends`;
+ * external mode rewrites the config and restarts the edge child. frpc is deliberately untouched. */
+function reconcileEdgeBackends(
+  cfg: PublicAccessConfig,
+  authoritativeBackends: TunnelBackend[],
+  log: Logger,
+): boolean {
+  if (backendTablesEqual(buildTunnelBackends(cfg), authoritativeBackends)) return false;
+  if (resolveEdgeMode(cfg) === "external") {
+    if (!edgeChild) return false; // reconcile only while the edge is actually running
+    writeEdgeConfigFor(cfg, authoritativeBackends);
+    try {
+      edgeChild.kill(); // exit handler respawns from the rewritten config
+    } catch {
+      /* already gone — respawn path covers it */
+    }
+    log("tunnel-edge routing table changed; restarting edge child (frpc untouched)");
+    return true;
+  }
+  if (!filterServer) return false; // reconcile only while the edge is actually running
+  filterServer.updateBackends(authoritativeBackends);
+  log("tunnel-edge routing table updated in-process (frpc untouched)");
+  return true;
+}
+
 /**
  * Reconcile the served subdomain set against `desired` (from the control-plane poll). On a real
  * change, rewrite frpc.toml and restart frpc so the new per-Apple-ID proxies register (and dropped
  * ones stop). The control-plane list is authoritative, including an empty list: under grant
  * enforcement the base owner must not remain reachable after their entitlement ends.
+ *
+ * `desiredBackends` is the control-plane-authoritative public routing table (already validated by
+ * the caller); when omitted it defaults to the locally built table, which makes the backend
+ * reconcile a no-op for legacy endpoints that do not return `backends`.
  */
 export async function reconcileServedSubdomains(
   cfg: PublicAccessConfig,
   desired: string[],
   log: Logger,
+  desiredBackends: TunnelBackend[] = buildTunnelBackends(cfg),
 ): Promise<boolean> {
   if (!baseTunnel) return false;
   const next = normalizedServedSubdomains(desired);
@@ -1179,7 +1622,14 @@ export async function reconcileServedSubdomains(
     log(`ignoring ${rejected.length} malformed subdomain(s) from the control plane`);
   }
   const cur = Array.from(new Set(servedSubdomains)).sort();
-  if (next.length === cur.length && next.every((s, i) => s === cur[i])) return false;
+  const subdomainsChanged = !(next.length === cur.length && next.every((s, i) => s === cur[i]));
+  if (!subdomainsChanged) {
+    // Same served set — but the authoritative routing table may have changed under it. Reconcile
+    // backends without restarting frpc or reopening the tunnel.
+    if (next.length === 0) return false; // standby: edge is not running, nothing to reconcile
+    return reconcileEdgeBackends(cfg, desiredBackends, log);
+  }
+
   const added = next.filter((s) => !cur.includes(s));
   const removed = cur.filter((s) => !next.includes(s));
   if (next.length === 0) {
@@ -1195,17 +1645,13 @@ export async function reconcileServedSubdomains(
     } catch {
       /* already gone */
     }
-    if (filterServer) {
-      const server = filterServer;
-      filterServer = null;
-      void server.close().catch(() => undefined);
-    }
+    stopEdgeRunning();
     if (healthTimer) {
       clearInterval(healthTimer);
       healthTimer = null;
     }
     spawnConfPath = null;
-    log(`FridayTunnel entered standby (-${removed.length}); frpc stopped, no public proxy`);
+    log(`FridayTunnel entered standby (-${removed.length}); frpc and edge stopped, no public proxy`);
     return true;
   }
 
@@ -1213,72 +1659,7 @@ export async function reconcileServedSubdomains(
   // Friday surface. Serialisation prevents overlapping long-poll responses from double-spawning.
   try {
     await ensureBinary(cfg.controlPlaneUrl, log);
-    if (!filterServer) {
-      const openclawBackend: TunnelBackend = {
-        id: "openclaw",
-        pathPrefixes: ["/friday-next", "/friday-next-admin", "/gateway", "/__openclaw__"],
-        localPort: cfg.corePort,
-        requiresAttest: true,
-        // DENY beats ALLOW. The __openclaw__ namespace ALSO hosts the ControlUI admin panel
-        // plus config/api surfaces, and core serves /__openclaw__/control and the bare
-        // /__openclaw__ index WITHOUT auth. The bare-index entry is an exact-root deny in the
-        // edge (the path itself and its trailing-slash form) so the canvas subtree stays routable.
-        denyPrefixes: [
-          "/__openclaw__/control",
-          "/__openclaw__/config",
-          "/__openclaw__/api",
-          "/__openclaw__",
-        ],
-        // Pre-token bootstrap routes that must stay reachable through the public edge without a
-        // session token; everything else on the openclaw backend is gated at the edge now.
-        attestExemptPaths: [
-          "/friday-next/attest",
-          "/friday-next/health",
-          "/friday-next/status",
-          "/friday-next/plugin/info",
-          "/friday-next/public-access/pairing",
-          "/friday-next/pair/claim",
-        ],
-      };
-      const backends: TunnelBackend[] = [openclawBackend];
-      const conductorPort = resolveConductorPort(cfg);
-      if (conductorPort > 0) {
-        backends.push({
-          id: "conductor",
-          pathPrefixes: ["/cap"],
-          localPort: conductorPort,
-          localHost: resolveConductorHost(cfg),
-          requiresAttest: true,
-          // D6: only CAP-known routes are reachable through the public tunnel. The edge matches
-          // allowedPaths with the same segment-boundary semantics, so e.g. /cap/sessions covers
-          // /cap/sessions/{key}/messages and /cap/sessions/{key}/settings.
-          allowedPaths: [
-            "/cap/hello",
-            "/cap/health",
-            "/cap/events",
-            "/cap/models",
-            "/cap/cancel",
-            "/cap/files",
-            "/cap/approvals",
-            "/cap/sessions",
-            "/cap/workspaces",
-          ],
-          // The pre-attest probe must work; everything else on /cap is gated.
-          attestExemptPaths: ["/cap/health"],
-        });
-      }
-      filterServer = startTunnelEdge({
-        listenPort: filterPort(cfg.corePort),
-        backends,
-        log,
-        attestGate: {
-          enabled: () =>
-            resolveFridayNextConfig(getHostOpenClawConfigSnapshot(getFridayNextRuntime().config))
-              .appAttest.gatePublicSurfaces,
-          verify: (t) => verifySession(t, Date.now()),
-        },
-      });
-    }
+    ensureEdgeRunning(cfg, log);
   } catch (e) {
     log(
       `FridayTunnel activation preparation failed: ${e instanceof Error ? e.message : String(e)}`,
@@ -1294,6 +1675,7 @@ export async function reconcileServedSubdomains(
     killOrphanFrpc(confPath, log);
     spawnFrpc(confPath, log);
   }
+  reconcileEdgeBackends(cfg, desiredBackends, log);
   startTunnelHealthWatchdog(`https://${baseTunnel.cn}`, cfg, log);
   return true;
 }
@@ -1351,6 +1733,7 @@ function startGatewaySubdomainPoll(cfg: PublicAccessConfig, log: Logger): void {
           gatewayKey,
           subdomain: baseTunnel.sub,
           publicKeyPin: gatewayPublicKeyPin(),
+          backends: buildTunnelBackends(cfg),
           revision: standbyRevision,
           waitSec: STANDBY_WAIT_SEC,
         }),
@@ -1370,16 +1753,27 @@ function startGatewaySubdomainPoll(cfg: PublicAccessConfig, log: Logger): void {
         retryDelay = STANDBY_ERROR_RETRY_MS;
         return;
       }
-      const data = (await res.json()) as { subdomains?: unknown; revision?: unknown };
+      const data = (await res.json()) as {
+        subdomains?: unknown;
+        revision?: unknown;
+        backends?: unknown;
+      };
       const subs = Array.isArray(data.subdomains)
         ? data.subdomains.filter((s): s is string => typeof s === "string")
         : [];
       // 长轮询挂了最多 25 秒，回来时世界可能已经变了：被 stop 作废的旧循环不许再改全局状态。
       if (stopped || !standbyLoop.isCurrent(generation)) return;
       if (typeof data.revision === "string") standbyRevision = data.revision;
+      // The control plane is authoritative for the public routing table when its `backends`
+      // response is present and valid. Absent/invalid (e.g. legacy endpoint) falls back to the
+      // locally built table — same behavior as the previous fixed routing table.
+      const parsedBackends = parseControlPlaneBackends(data.backends);
+      const authoritativeBackends = parsedBackends ?? buildTunnelBackends(cfg);
       tunnelTransition = tunnelTransition
         .catch(() => undefined)
-        .then(() => reconcileServedSubdomains(cfg, subs, log).then(() => undefined));
+        .then(() =>
+          reconcileServedSubdomains(cfg, subs, log, authoritativeBackends).then(() => undefined),
+        );
       await tunnelTransition;
     } catch {
       // Fail-open for an already-authorized live tunnel during a short CP outage; entitlement
@@ -1429,11 +1823,7 @@ export function stopPublicAccess(): void {
     }
     child = null;
   }
-  if (filterServer) {
-    const server = filterServer;
-    filterServer = null;
-    void server.close().catch(() => undefined);
-  }
+  stopEdgeRunning();
 }
 
 /** Test/introspection: the subdomains currently written into frpc.toml. */

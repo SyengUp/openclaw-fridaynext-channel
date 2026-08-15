@@ -165,6 +165,7 @@ export default defineChannelPluginEntry({
             certSignUrl: paCfg.publicAccess.certSignUrl,
             controlPlaneUrl: paCfg.publicAccess.controlPlaneUrl,
             corePort: paCfg.publicAccess.corePort,
+            edgeMode: paCfg.publicAccess.edgeMode,
             authToken: paCfg.authToken,
           },
           (m) => paLog.info(m),

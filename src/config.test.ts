@@ -8,8 +8,22 @@ describe("resolveFridayNextConfig", () => {
     expect(cfg.logLevel).toBe("info");
     expect(cfg.sseKeepaliveSec).toBe(30);
     expect(cfg.publicAccess.enabled).toBe(true);
+    expect(cfg.publicAccess.edgeMode).toBe("in-process");
     expect(cfg.publicAccess.conductorPort).toBe(0);
     expect(cfg.publicAccess.conductorHost).toBe("127.0.0.1");
+  });
+
+  it("resolves edgeMode with an in-process default and external override", () => {
+    expect(
+      resolveFridayNextConfig({
+        channels: { "friday-next": { publicAccess: { edgeMode: "external" } } },
+      }).publicAccess.edgeMode,
+    ).toBe("external");
+    expect(
+      resolveFridayNextConfig({
+        channels: { "friday-next": { publicAccess: { edgeMode: "bogus" } } },
+      }).publicAccess.edgeMode,
+    ).toBe("in-process");
   });
 
   it("keeps an operator-only hard stop for zero-egress deployments", () => {

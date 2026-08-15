@@ -1,6 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { clearFridayNextRuntime, setFridayNextRuntime } from "../runtime.js";
 import {
+  buildTunnelBackends,
+  edgeConfigFor,
   resolveConductorHost,
   resolveConductorPort,
   type PublicAccessConfig,
@@ -103,5 +105,101 @@ describe("resolveConductorHost", () => {
       config: { current: () => ({ channels: { "friday-next": { publicAccess: {} } } }) },
     });
     expect(resolveConductorHost({ ...baseConfig })).toBe("127.0.0.1");
+  });
+});
+
+describe("buildTunnelBackends", () => {
+  beforeEach(() => {
+    setFridayNextRuntime({
+      config: { current: () => ({ channels: { "friday-next": { publicAccess: {} } } }) },
+    });
+  });
+
+  afterEach(() => {
+    clearFridayNextRuntime();
+    delete process.env.FRIDAY_NEXT_CONDUCTOR_PORT;
+    delete process.env.FRIDAY_NEXT_CONDUCTOR_HOST;
+  });
+
+  const expectedOpenclaw = {
+    id: "openclaw",
+    pathPrefixes: ["/friday-next", "/friday-next-admin", "/gateway", "/__openclaw__"],
+    localPort: 18789,
+    requiresAttest: true,
+    denyPrefixes: [
+      "/__openclaw__/control",
+      "/__openclaw__/config",
+      "/__openclaw__/api",
+      "/__openclaw__",
+    ],
+    attestExemptPaths: [
+      "/friday-next/attest",
+      "/friday-next/health",
+      "/friday-next/status",
+      "/friday-next/plugin/info",
+      "/friday-next/public-access/pairing",
+      "/friday-next/pair/claim",
+    ],
+  };
+
+  const expectedConductor = {
+    id: "conductor",
+    pathPrefixes: ["/cap"],
+    localPort: 24080,
+    localHost: "192.168.100.125",
+    requiresAttest: true,
+    allowedPaths: [
+      "/cap/hello",
+      "/cap/health",
+      "/cap/events",
+      "/cap/models",
+      "/cap/cancel",
+      "/cap/files",
+      "/cap/approvals",
+      "/cap/sessions",
+      "/cap/workspaces",
+    ],
+    attestExemptPaths: ["/cap/health"],
+  };
+
+  it("builds the exact openclaw + conductor backend table", () => {
+    const backends = buildTunnelBackends({
+      ...baseConfig,
+      conductorPort: 24080,
+      conductorHost: "192.168.100.125",
+    });
+    expect(backends).toEqual([expectedOpenclaw, expectedConductor]);
+  });
+
+  it("omits the conductor backend when the port resolves to 0", () => {
+    setFridayNextRuntime({
+      config: { current: () => ({ channels: { "friday-next": { publicAccess: {} } } }) },
+    });
+    const backends = buildTunnelBackends({ ...baseConfig, conductorPort: 0 });
+    expect(backends).toEqual([expectedOpenclaw]);
+  });
+});
+
+describe("edgeConfigFor", () => {
+  beforeEach(() => {
+    setFridayNextRuntime({
+      config: { current: () => ({ channels: { "friday-next": {} } }) },
+    });
+  });
+
+  afterEach(() => {
+    clearFridayNextRuntime();
+  });
+
+  it("returns the edge listen port, local backend table, and derived log level", () => {
+    const cfg = {
+      ...baseConfig,
+      conductorPort: 24080,
+      conductorHost: "192.168.100.125",
+    };
+    const config = edgeConfigFor(cfg);
+    expect(config.listenPort).toBe(18790); // filterPort(corePort)
+    expect(config.logLevel).toBe("info");
+    expect(config.backends).toEqual(buildTunnelBackends(cfg));
   });
 });

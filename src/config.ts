@@ -49,6 +49,9 @@ export type AppAttestConfigResolved = {
   gatePublicSurfaces: boolean;
 };
 
+/** How the FridayTunnel edge runs on this gateway. */
+export type PublicAccessEdgeMode = "in-process" | "external";
+
 /** Public access (FridayNext 云) — resolved from `channels.friday-next.publicAccess`. */
 export type PublicAccessConfigResolved = {
   /** Emergency/operator hard stop. Normal installs are enabled and remain in control-plane
@@ -61,6 +64,11 @@ export type PublicAccessConfigResolved = {
   allocatorUrl: string;
   certSignUrl: string;
   corePort: number;
+  /** Edge run mode: embed the tunnel-edge in this gateway process (`in-process`, the
+   * historical default) or run the standalone `@syengup/tunnel-edge` CLI as a managed child
+   * process (`external`). Default `in-process` keeps live deployments unchanged until
+   * explicitly switched. */
+  edgeMode: PublicAccessEdgeMode;
   /** Local conductor port exposed through the same FridayTunnel as `/cap/*` (Phase 1).
    * 0/unset disables the conductor backend in the edge routing table. */
   conductorPort: number;
@@ -94,6 +102,10 @@ function asLogLevel(value: unknown): FridayNextLogLevel {
   return value === "debug" || value === "info" || value === "warn" || value === "error"
     ? value
     : "info";
+}
+
+function asEdgeMode(value: unknown): PublicAccessEdgeMode {
+  return value === "external" ? "external" : "in-process";
 }
 
 export function resolveFridayNextConfig(cfg: unknown): FridayNextConfig {
@@ -137,6 +149,7 @@ export function resolveFridayNextConfig(cfg: unknown): FridayNextConfig {
       allocatorUrl: asString(pa.allocatorUrl, "https://gw.syengup.host/gw-alloc/allocate"),
       certSignUrl: asString(pa.certSignUrl, "https://gw.syengup.host/gw-alloc/sign-cert"),
       corePort: asNumber(pa.corePort, 18789, 1, 65535),
+      edgeMode: asEdgeMode(pa.edgeMode),
       conductorPort: asNumber(pa.conductorPort, 0, 0, 65535),
       conductorHost: asString(pa.conductorHost, "127.0.0.1"),
       controlPlaneUrl: asString(pa.controlPlaneUrl, "https://gw.syengup.host"),
