@@ -6,7 +6,7 @@ Friday Next is the native iOS companion for your OpenClaw agent — a fast, beau
 privacy-first chat experience that puts your own AI in your pocket. It streams every answer
 live, shows you the thinking behind it, and keeps your agent one tap away — anywhere you go.
 
-[![Download on the App Store](https://developer.apple.com/assets/elements/badges/download-on-the-app-store.svg)](https://apps.apple.com/us/app/fridaynext/id6768689875)
+[<img src="assets/download-on-the-app-store.png" width="200" alt="Download on the App Store">](https://apps.apple.com/us/app/fridaynext/id6768689875)
 
 ---
 
@@ -45,7 +45,7 @@ there, and you can jump in at any moment.
 
 ## Download
 
-[![Download on the App Store](https://developer.apple.com/assets/elements/badges/download-on-the-app-store.svg)](https://apps.apple.com/us/app/fridaynext/id6768689875)
+[<img src="assets/download-on-the-app-store.png" width="200" alt="Download on the App Store">](https://apps.apple.com/us/app/fridaynext/id6768689875)
 
 Available now on the App Store for iPhone. Free to download.
 
@@ -55,7 +55,8 @@ Available now on the App Store for iPhone. Free to download.
 
 `@syengup/friday-channel-next` is the OpenClaw side of Friday Next: a channel plugin that
 connects the app to your own OpenClaw gateway. Install it once, pair your iPhone, and your
-agent is in your pocket.
+agent is in your pocket — with your phone acting as an OpenClaw **channel and node**, so your
+agent can reach your canvas, location, and interactive UI from anywhere.
 
 ```bash
 openclaw plugins install clawhub:@syengup/friday-channel-next

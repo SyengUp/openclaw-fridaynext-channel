@@ -1,7 +1,8 @@
 {
   "id": "friday-next",
-  "name": "Friday Next",
-  "description": "Apple app channel with HTTP + SSE v2 streaming for the Friday iOS client.",
+  "icon": "https://raw.githubusercontent.com/SyengUp/openclaw-fridaynext-channel/main/assets/icon.png",
+  "name": "FridayNext — OpenClaw iOS Channel & Node",
+  "description": "OpenClaw iOS channel & node — FridayNext turns your iPhone into a full OpenClaw client",
   "channels": ["friday-next"],
   "contracts": {
     "gatewayMethodDispatch": ["authenticated-request"]
