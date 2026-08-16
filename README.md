@@ -19,7 +19,7 @@ there, and you can jump in at any moment.
 
 **More than chat.**
 
-| | |
+| Feature | Why |
 | --- | --- |
 | 🎨 **Interactive canvas** | Your agent pushes live web content, dashboards, and interactive UIs right into the conversation. |
 | ⏰ **Scheduled tasks** | Set recurring jobs from your phone and let your agent work on a schedule. |
