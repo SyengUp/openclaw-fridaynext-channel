@@ -33,7 +33,7 @@ there, and you can jump in at any moment.
 ## A glimpse inside
 
 <p align="center">
-  <img src="assets/screenshots/glimpse.png" width="844" alt="FridayNext screenshots — home, native markdown, transparent reasoning &amp; tools, and agent management">
+  <img src="assets/screenshots/glimpse.png" width="1055" alt="FridayNext screenshots — home, native markdown, transparent reasoning & tools, interactive canvas, and agent management">
 </p>
 
 <p align="center"><em>Your agents, your chats, your tools — all in one place.</em></p>
