@@ -32,7 +32,7 @@ import { handleStatus } from "./handlers/status.js";
 import { handleLinkPreview } from "./handlers/link-preview.js";
 import { handleHealth } from "./handlers/health.js";
 import { handlePluginInfo } from "./handlers/plugin-info.js";
-import { handlePluginUpgrade } from "./handlers/plugin-upgrade.js";
+import { handlePluginUpgrade, handlePluginUpgradeStatus } from "./handlers/plugin-upgrade.js";
 import { handlePairClaim, handlePublicAccessPairing } from "./handlers/plugin-pairing.js";
 import {
   handleAttestChallenge,
@@ -241,9 +241,14 @@ async function handleFridayNextRoute(req: IncomingMessage, res: ServerResponse):
     return await handlePluginInfo(req, res);
   }
 
-  // Route: POST /friday-next/plugin/upgrade (npm install @latest + safe gateway restart)
+  // Route: POST /friday-next/plugin/upgrade (async npm install @latest + safe gateway restart)
   if (req.method === "POST" && pathname === "/friday-next/plugin/upgrade") {
     return await handlePluginUpgrade(req, res);
+  }
+
+  // Route: GET /friday-next/plugin/upgrade/status (async upgrade progress)
+  if (req.method === "GET" && pathname === "/friday-next/plugin/upgrade/status") {
+    return await handlePluginUpgradeStatus(req, res);
   }
 
   // Route: GET /friday-next/public-access/pairing (superset QR payload for guest sharing)
