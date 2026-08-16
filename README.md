@@ -6,7 +6,7 @@ Friday Next is the native iOS companion for your OpenClaw agent — a fast, beau
 privacy-first chat experience that puts your own AI in your pocket. It streams every answer
 live, shows you the thinking behind it, and keeps your agent one tap away — anywhere you go.
 
-[<img src="assets/download-on-the-app-store.png" width="200" alt="Download on the App Store">](https://apps.apple.com/us/app/fridaynext/id6768689875)
+[<img src="assets/download-on-the-app-store.png" width="120" alt="Download on the App Store">](https://apps.apple.com/us/app/fridaynext/id6768689875)
 
 ---
 
@@ -45,7 +45,7 @@ there, and you can jump in at any moment.
 
 ## Download
 
-[<img src="assets/download-on-the-app-store.png" width="200" alt="Download on the App Store">](https://apps.apple.com/us/app/fridaynext/id6768689875)
+[<img src="assets/download-on-the-app-store.png" width="120" alt="Download on the App Store">](https://apps.apple.com/us/app/fridaynext/id6768689875)
 
 Available now on the App Store for iPhone. Free to download.
 
