@@ -1,81 +1,64 @@
-# Friday Next Channel Plugin
+# Friday Next
 
-`friday-next` is an OpenClaw channel plugin for Apple apps (iOS/macOS) using HTTP + standard SSE.
+### Your AI, on your iPhone.
 
-## Features
+Friday Next is the native iOS companion for your OpenClaw agent — a fast, beautiful,
+privacy-first chat experience that puts your own AI in your pocket. It streams every answer
+live, shows you the thinking behind it, and keeps your agent one tap away — anywhere you go.
 
-- Channel id: `friday-next` (alongside legacy `friday` if configured)
-- **Transparent proxy SSE**: forwards OpenClaw `onAgentEvent` as `event: agent`, dispatch `deliver` as `event: deliver`, tool hooks as `event: tool-hook`, channel pushes as `event: outbound`
-- **Single synthetic event**: `connected` (`deviceId`, `serverTime`, `lastSeq`)
-- **Disk-backed SSE replay** per `deviceId` (JSONL + `Last-Event-ID` / `lastEventId`) for offline gaps and restarts
-- File upload/download (`POST /friday-next/files`, `GET /friday-next/files/:id`)
-- Cancel (`POST /friday-next/cancel`) and status with `activeRuns` (`GET /friday-next/status`)
-- **Agent config editing** (mirrors ControlUI, no core changes): model / core `.md` files / tool permissions / skills, per agent — via `agents.list[]` (`mutateConfigFile`) + workspace fs
-- **Codex backend support**: asserts `model_reasoning_summary` in each agent's `codex-home/config.toml` so ChatGPT/OAuth (Codex app-server) models stream reasoning text
-- **Exec / plugin approvals**: forwards approval requests as `event: approval` and accepts decisions at `POST /friday-next/approvals/{approvalId}`
-- History sync, link-preview cards, and in-app plugin self-upgrade
+[![Download on the App Store](https://developer.apple.com/assets/elements/badges/download-on-the-app-store.svg)](https://apps.apple.com/us/app/fridaynext/id6768689875)
 
-## Endpoints
+---
 
-- `GET /friday-next/events?deviceId=...`
-- `POST /friday-next/messages`
-- `POST /friday-next/files` · `GET /friday-next/files/:id`
-- `POST /friday-next/cancel` · `GET /friday-next/status` · `GET /friday-next/health`
-- `GET /friday-next/models` · `GET /friday-next/agents` · `GET|PUT /friday-next/sessions/settings`
-- `GET|PUT /friday-next/prompt-capsules`
-- `GET|PUT /friday-next/agents/{id}/config` · `GET|PUT /friday-next/agents/{id}/files[/{name}]` · `GET /friday-next/agents/{id}/tools/catalog`
-- `GET /friday-next/history/sessions` · `GET /friday-next/history/messages` · `GET /friday-next/link-preview`
-- `POST /friday-next/device-approve` · `POST /friday-next/nodes-approve` · `POST /friday-next/approvals/{approvalId}`
-- `GET /friday-next/plugin/info` · `POST /friday-next/plugin/upgrade`
+## Why Friday Next
 
-See **`API.md`** (English) and **`API.zh-CN.md`** (Chinese) for payloads, event shapes, offline queue paths, and breaking changes.
+**Your agent, not a stranger's.** Friday Next talks to *your own* OpenClaw gateway. Self-hosted
+and private by default — your conversations, your data, your rules. No middleman, no lock-in.
 
-## Configuration
+**Watch it think.** Answers stream in real time with the agent's reasoning, tool calls, and
+subagent work laid out as they happen. You don't just get the result — you see how it got
+there, and you can jump in at any moment.
 
-ControlUI's channel settings panel exposes only what a user can meaningfully change:
+**More than chat.**
 
-| Key | Default | Meaning |
-| --- | --- | --- |
-| `enabled` | `true` | Channel on/off |
-| `logLevel` | `info` | Plugin log verbosity (`debug` / `info` / `warn` / `error`) |
+| | |
+| --- | --- |
+| 🎨 **Interactive canvas** | Your agent pushes live web content, dashboards, and interactive UIs right into the conversation. |
+| ⏰ **Scheduled tasks** | Set recurring jobs from your phone and let your agent work on a schedule. |
+| 🔔 **Proactive notifications** | Your agent reaches out when something needs you — right in your notification inbox. |
+| 📎 **Share anything** | Send links, text, photos, and files to your agent straight from the iOS share sheet. |
+| 🔊 **Listen to answers** | Built-in text-to-speech reads responses aloud while you're on the move. |
+| 🌍 **Reach it anywhere** | Optional FridayTunnel relay keeps you connected to your gateway when you're away from home. |
+| 🗂️ **Organize your AI** | Multiple agents, multiple servers, per-agent settings, and history that syncs across your devices. |
+| 🖼️ **Beautiful by design** | A native iOS experience built for speed and elegance — from the first message to the last. |
 
-### Advanced config keys
+## Download
 
-The keys below are read from `channels.friday-next.*` but deliberately **not** declared in the
-channel schema, so ControlUI does not render them — they are operator-level knobs whose defaults
-are correct for every normal install, and a stray edit mostly just breaks connectivity. They still
-take effect when written by hand into the OpenClaw config. Authoritative list and defaults:
-`resolveFridayNextConfig()` in `src/config.ts`.
+[![Download on the App Store](https://developer.apple.com/assets/elements/badges/download-on-the-app-store.svg)](https://apps.apple.com/us/app/fridaynext/id6768689875)
 
-| Key | Default | Meaning |
-| --- | --- | --- |
-| `authToken` | — | Bearer fallback; `gateway.auth.token` wins when set |
-| `historyDir` | `~/.openclaw/friday-next/history` | SSE replay / history JSONL location |
-| `historyLimit` | `25` | History window size (1–200) |
-| `cors.enabled` · `cors.allowOrigin` | `false` · `*` | Browser CORS for `/friday-next/*` |
-| `sse.keepaliveSec` · `sse.backlogPerDevice` | `30` · `200` | SSE heartbeat and per-device replay depth |
-| `publicAccess.standbyDisabled` | `false` | **Operator hard stop**: disables FridayTunnel standby and all official control-plane traffic. For incident response / zero-egress deployments — setting it cuts off paid cloud access. |
-| `publicAccess.relayAddr` · `.relayToken` | fetched from control plane | Point the tunnel at your own frps |
-| `publicAccess.subDomainHost` · `.subdomain` · `.allocatorUrl` · `.certSignUrl` · `.controlPlaneUrl` · `.corePort` | official endpoints | Public-access plumbing |
-| `appAttest.required` · `.teamId` · `.bundleId` · `.allowDevelopment` · `.gatePublicSurfaces` | on, our signing identity | App Attest gate — only enforced on requests arriving via the relay |
+Available now on the App Store for iPhone. Free to download.
 
-`transport` and `pathPrefix` were accepted historically and are now ignored; the installer no
-longer writes them and removes them on upgrade.
+---
 
-The channel schema deliberately **omits** `additionalProperties` instead of setting it to `true`.
-Both are permissive to the validator, so undeclared keys never fail validation — but ControlUI
-normalises a literal `true` into `{}` and then renders a "Custom entries" editor listing every
-undeclared key in the config, which would defeat the point. `false` is not an option either: it
-would reject existing configs outright.
+## What's this package?
 
-## Testing
+`@syengup/friday-channel-next` is the OpenClaw side of Friday Next: a channel plugin that
+connects the app to your own OpenClaw gateway. Install it once, pair your iPhone, and your
+agent is in your pocket.
 
-- `pnpm test:unit` — Vitest unit tests (excludes `*.e2e.test.ts`)
-- `pnpm test:e2e` — in-process app simulator (`vitest.e2e.config.ts`)
-- `pnpm test` — `test:unit` then `test:e2e`
-- `pnpm test:smoke` — optional live gateway smoke (gateway running; token from env or config)
+```bash
+openclaw plugins install clawhub:@syengup/friday-channel-next
+```
 
-## Migration
+Then open Friday Next and follow the in-app setup — no command line required after that.
 
-- There is **no** `GET/DELETE /friday-next/history`; clients must reconstruct state from SSE.
-- Legacy SSE names (`final`, `run-start`, `run-complete`, `run-error`, `reasoning`, `attachment`, `tts`, `block`, …) are **not** emitted; use `agent` + `deliver` + `tool-hook` + `outbound`.
+## Links
+
+- **Download the app:** <https://apps.apple.com/us/app/fridaynext/id6768689875>
+- **OpenClaw:** <https://openclaw.ai>
+- **Plugin source:** <https://github.com/SyengUp/openclaw-fridaynext-channel>
+
+---
+
+*For developers: the plugin's API contract lives in [`API.md`](API.md) and
+[`API.zh-CN.md`](API.zh-CN.md).*

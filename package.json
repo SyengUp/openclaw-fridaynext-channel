@@ -54,10 +54,22 @@
       "docsLabel": "friday-next",
       "blurb": "Apple app channel with HTTP + SSE v2 streaming.",
       "systemImage": "iphone.radiowaves.left.and.right",
-      "markdownCapable": true
+      "markdownCapable": true,
+      "configuredState": {
+        "env": {
+          "allOf": ["FRIDAY_NEXT_AUTH_TOKEN"]
+        }
+      }
     },
-    "bundle": {
-      "stageRuntimeDependencies": true
+    "compat": {
+      "pluginApi": ">=2026.5.12"
+    },
+    "build": {
+      "openclawVersion": "2026.7.1"
+    },
+    "install": {
+      "clawhubSpec": "@syengup/friday-channel-next",
+      "minHostVersion": ">=2026.5.12"
     }
   },
   "dependencies": {

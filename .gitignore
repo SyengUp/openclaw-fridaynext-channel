@@ -8,3 +8,6 @@ dist/
 /attachments/
 .claude/settings.local.json
 *.tgz
+
+# ClawHub plugin inspector output (clawhub package validate)
+/reports/

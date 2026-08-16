@@ -1,5 +1,7 @@
 {
   "id": "friday-next",
+  "name": "Friday Next",
+  "description": "Apple app channel with HTTP + SSE v2 streaming for the Friday iOS client.",
   "channels": ["friday-next"],
   "contracts": {
     "gatewayMethodDispatch": ["authenticated-request"]

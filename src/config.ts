@@ -15,7 +15,7 @@ import { homedir } from "node:os";
  * it to `false` is not an option either: existing installs carry keys like `transport`, and
  * they would fail config validation outright.
  *
- * Documented under "Advanced config keys" in README.md.
+ * Authoritative key list and defaults live here (`resolveFridayNextConfig`) and in AGENTS.md.
  */
 export type FridayNextLogLevel = "debug" | "info" | "warn" | "error";
 
