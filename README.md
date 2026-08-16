@@ -33,10 +33,7 @@ there, and you can jump in at any moment.
 ## A glimpse inside
 
 <p align="center">
-  <img src="assets/screenshots/frame-13-home.png" width="195" alt="FridayNext home — start a chat with your OpenClaw agent right from your iPhone">
-  <img src="assets/screenshots/frame-15-markdown.png" width="195" alt="Native Markdown — answers that read beautifully, with tables and formatting rendered natively">
-  <img src="assets/screenshots/frame-16-reasoning.png" width="195" alt="Transparent reasoning & tools — watch every step of your agent's work in real time">
-  <img src="assets/screenshots/frame-18-agents.png" width="195" alt="Agent Management — tune your assistant anytime, right from your phone">
+  <img src="assets/screenshots/glimpse.png" alt="FridayNext screenshots — home, native markdown, transparent reasoning &amp; tools, and agent management">
 </p>
 
 <p align="center"><em>Your agents, your chats, your tools — all in one place.</em></p>
