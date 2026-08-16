@@ -32,6 +32,17 @@ there, and you can jump in at any moment.
 | 🗂️ **Organize your AI** | Multiple agents, multiple servers, per-agent settings, and history that syncs across your devices. |
 | 🖼️ **Beautiful by design** | A native iOS experience built for speed and elegance — from the first message to the last. |
 
+## A glimpse inside
+
+<p align="center">
+  <img src="assets/screenshots/frame-13-home.png" width="195" alt="Friday Next home — start a chat with your OpenClaw agent right from your iPhone">
+  <img src="assets/screenshots/frame-15-markdown.png" width="195" alt="Native Markdown — answers that read beautifully, with tables and formatting rendered natively">
+  <img src="assets/screenshots/frame-16-reasoning.png" width="195" alt="Transparent reasoning & tools — watch every step of your agent's work in real time">
+  <img src="assets/screenshots/frame-18-agents.png" width="195" alt="Agent Management — tune your assistant anytime, right from your phone">
+</p>
+
+<p align="center"><em>Your agents, your chats, your tools — all in one place.</em></p>
+
 ## Download
 
 [![Download on the App Store](https://developer.apple.com/assets/elements/badges/download-on-the-app-store.svg)](https://apps.apple.com/us/app/fridaynext/id6768689875)

@@ -13,10 +13,6 @@ function realHome() {
   if (!sudoUser) return homedir();
   const current = homedir();
   if (current !== "/root" && current !== "/var/root" && existsSync(current)) return current;
-  try {
-    const h = execSync(`sh -c 'echo ~${sudoUser}'`, { encoding: "utf8" }).trim();
-    if (h && !h.startsWith("~") && existsSync(h)) return h;
-  } catch {}
   for (const g of [`/home/${sudoUser}`, `/Users/${sudoUser}`, `C:\\Users\\${sudoUser}`]) {
     if (existsSync(g)) return g;
   }

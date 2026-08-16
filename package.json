@@ -7,7 +7,12 @@
   "files": [
     "dist/",
     "index.ts",
-    "src/",
+    "assets/",
+    "src/**",
+    "!src/e2e/**",
+    "!src/test-support/**",
+    "!src/**/*.test.ts",
+    "!src/**/*.test.js",
     "install.js",
     "install-ui.js",
     "install-i18n.js",
@@ -57,7 +62,9 @@
       "markdownCapable": true,
       "configuredState": {
         "env": {
-          "allOf": ["FRIDAY_NEXT_AUTH_TOKEN"]
+          "allOf": [
+            "FRIDAY_NEXT_AUTH_TOKEN"
+          ]
         }
       }
     },

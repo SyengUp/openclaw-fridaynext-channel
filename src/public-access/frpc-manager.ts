@@ -194,7 +194,7 @@ function probeTunnelHealth(publicUrl: string, timeoutMs = 10_000): Promise<boole
     try {
       const req = httpsRequest(
         `${publicUrl}/friday-next/health`,
-        { method: "HEAD", rejectUnauthorized: false, timeout: timeoutMs },
+        { method: "HEAD", timeout: timeoutMs },
         (res) => {
           res.resume();
           done(isTunnelHealthyStatus(res.statusCode));

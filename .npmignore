@@ -1,0 +1,5 @@
+# Tests and test harnesses — never ship in the published artifact
+**/*.test.ts
+**/*.test.js
+src/e2e/
+src/test-support/
