@@ -1,18 +1,16 @@
-# Friday Next
+# FridayNext — OpenClaw iOS Channel & Node
 
-### Your AI, on your iPhone.
-
-Friday Next is the native iOS companion for your OpenClaw agent — a fast, beautiful,
-privacy-first chat experience that puts your own AI in your pocket. It streams every answer
-live, shows you the thinking behind it, and keeps your agent one tap away — anywhere you go.
+OpenClaw iOS channel & node — FridayNext turns your iPhone into a full OpenClaw client.
+It streams every answer live, shows you the thinking behind it, and keeps your agent one tap
+away — anywhere you go.
 
 [<img src="assets/download-on-the-app-store.png" width="120" alt="Download on the App Store">](https://apps.apple.com/us/app/fridaynext/id6768689875)
 
 ---
 
-## Why Friday Next
+## Why FridayNext
 
-**Your agent, not a stranger's.** Friday Next talks to *your own* OpenClaw gateway. Self-hosted
+**Your agent, not a stranger's.** FridayNext talks to *your own* OpenClaw gateway. Self-hosted
 and private by default — your conversations, your data, your rules. No middleman, no lock-in.
 
 **Watch it think.** Answers stream in real time with the agent's reasoning, tool calls, and
@@ -35,7 +33,7 @@ there, and you can jump in at any moment.
 ## A glimpse inside
 
 <p align="center">
-  <img src="assets/screenshots/frame-13-home.png" width="195" alt="Friday Next home — start a chat with your OpenClaw agent right from your iPhone">
+  <img src="assets/screenshots/frame-13-home.png" width="195" alt="FridayNext home — start a chat with your OpenClaw agent right from your iPhone">
   <img src="assets/screenshots/frame-15-markdown.png" width="195" alt="Native Markdown — answers that read beautifully, with tables and formatting rendered natively">
   <img src="assets/screenshots/frame-16-reasoning.png" width="195" alt="Transparent reasoning & tools — watch every step of your agent's work in real time">
   <img src="assets/screenshots/frame-18-agents.png" width="195" alt="Agent Management — tune your assistant anytime, right from your phone">
@@ -53,7 +51,7 @@ Available now on the App Store for iPhone. Free to download.
 
 ## What's this package?
 
-`@syengup/friday-channel-next` is the OpenClaw side of Friday Next: a channel plugin that
+`@syengup/friday-channel-next` is the OpenClaw side of FridayNext: a channel plugin that
 connects the app to your own OpenClaw gateway. Install it once, pair your iPhone, and your
 agent is in your pocket — with your phone acting as an OpenClaw **channel and node**, so your
 agent can reach your canvas, location, and interactive UI from anywhere.
@@ -62,7 +60,7 @@ agent can reach your canvas, location, and interactive UI from anywhere.
 openclaw plugins install clawhub:@syengup/friday-channel-next
 ```
 
-Then open Friday Next and follow the in-app setup — no command line required after that.
+Then open FridayNext and follow the in-app setup — no command line required after that.
 
 ## Links
 
