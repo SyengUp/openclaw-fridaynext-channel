@@ -12,7 +12,8 @@ export type SseEventType =
   | "outbound"
   | "ping"
   | "subagent"
-  | "approval";
+  | "approval"
+  | "session-status";
 
 export interface SseEvent {
   type: SseEventType;
@@ -53,6 +54,24 @@ export class SseConnection {
     this.pending.push(
       `id: ${normalized.id}\nevent: ${normalized.event.type}\ndata: ${payload}\n\n`,
     );
+    if (flushNow) {
+      if (this.flushTimer) clearTimeout(this.flushTimer);
+      this.flushTimer = null;
+      this.flush();
+      return;
+    }
+    this.scheduleFlush();
+  }
+
+  /**
+   * Push an event to this live connection without an SSE id and without the
+   * durable offline queue. Used for ephemeral snapshots (session-status) that
+   * must not be replayed after reconnect.
+   */
+  sendLive(event: SseEvent, flushNow?: boolean): void {
+    if (this.closed) return;
+    const payload = JSON.stringify(event.data);
+    this.pending.push(`event: ${event.type}\ndata: ${payload}\n\n`);
     if (flushNow) {
       if (this.flushTimer) clearTimeout(this.flushTimer);
       this.flushTimer = null;
@@ -210,6 +229,16 @@ class SseEmitterRegistry {
     for (const conn of this.connections.values()) {
       const entry = this.nextEntry(conn.deviceId, event);
       conn.send(entry, flushNow);
+    }
+  }
+
+  /**
+   * Fan out to every live SSE connection without assigning an id or appending
+   * the durable per-device queue. Reconnects get a fresh snapshot on `connected`.
+   */
+  broadcastLive(event: SseEvent, flushNow?: boolean): void {
+    for (const conn of this.connections.values()) {
+      conn.sendLive(event, flushNow);
     }
   }
 

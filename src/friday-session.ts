@@ -337,8 +337,6 @@ function completeAgentEventForward(params: {
 }): void {
   const { evt, sk, deviceIdRaw, outgoingData, isTerminalLifecycle, subagentMeta } = params;
 
-  observeAgentEventForActiveRuns({ stream: evt.stream, runId: evt.runId, data: outgoingData });
-
   const deviceId = deviceIdRaw.toUpperCase();
   const targetRunId = sseEmitter.getLastRunIdForDevice(deviceId) ?? evt.runId;
   const directToDevice = !sseEmitter.hasTrackedDevices(targetRunId);
@@ -386,6 +384,31 @@ export function resolveFridayDeviceIdForOutbound(
   return trimmed || "friday-next";
 }
 
+function emitSessionActivityIfChanged(evt: {
+  stream: string;
+  runId: string;
+  data: Record<string, unknown>;
+  sessionKey?: string;
+}): void {
+  const change = observeAgentEventForActiveRuns({
+    stream: evt.stream,
+    runId: evt.runId,
+    data: evt.data,
+    sessionKey: evt.sessionKey,
+  });
+  if (!change) return;
+  sseEmitter.broadcastLive(
+    {
+      type: "session-status",
+      data: {
+        sessionKey: change.sessionKey,
+        hasActiveRun: change.hasActiveRun,
+      },
+    },
+    true,
+  );
+}
+
 /**
  * Stringify a subagent error payload for the wire. `evt.data.error` comes from an
  * in-process SDK callback, so it can be a real Error, a plain object, or a value
@@ -418,6 +441,15 @@ export function forwardAgentEventRaw(evt: ForwardAgentEventArgs): void {
     const fromCtx = typeof ctx?.sessionKey === "string" ? ctx.sessionKey.trim() : "";
     if (fromCtx) sk = fromCtx;
   }
+
+  // Track live runs before Friday device routing so cross-channel sessions
+  // (WebChat / Telegram) still surface as processing on the home list.
+  emitSessionActivityIfChanged({
+    stream: evt.stream,
+    runId: evt.runId,
+    data: evt.data,
+    sessionKey: sk || undefined,
+  });
 
   let deviceIdRaw = sk ? resolveFridayDeviceIdForSessionKey(sk) : null;
   if (!deviceIdRaw) {

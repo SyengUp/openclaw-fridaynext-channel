@@ -9,6 +9,10 @@ import {
   setFridayAgentForwardRuntime,
   resetFridayAgentForwardRuntimeForTest,
 } from "../../agent-forward-runtime.js";
+import {
+  observeAgentEventForActiveRuns,
+  resetActiveRunsForTest,
+} from "../../agent/active-runs.js";
 
 class MockRes extends EventEmitter {
   statusCode = 0;
@@ -84,8 +88,10 @@ describe("handleHistorySessions", () => {
   beforeEach(() => {
     tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "friday-hs-"));
     setMockRuntime();
+    resetActiveRunsForTest();
   });
   afterEach(() => {
+    resetActiveRunsForTest();
     resetFridayAgentForwardRuntimeForTest();
     try {
       fs.rmSync(tmpDir, { recursive: true, force: true });
@@ -359,5 +365,39 @@ describe("handleHistorySessions", () => {
     await handleHistorySessions(makeReq(AUTH), res as any);
     const keys = JSON.parse(res.body).sessions.map((s: any) => s.sessionKey);
     expect(keys).toEqual(["agent:main:dashboard:b91ad945"]);
+  });
+
+  it("marks sessions that currently have a live run", async () => {
+    setForward(
+      { agents: { list: [{ id: "main" }] } },
+      {
+        main: {
+          "agent:main:live": {
+            sessionId: "a",
+            updatedAt: 2,
+            sessionFile: transcript("live.jsonl"),
+          },
+          "agent:main:idle": {
+            sessionId: "b",
+            updatedAt: 1,
+            sessionFile: transcript("idle.jsonl"),
+          },
+        },
+      },
+    );
+    observeAgentEventForActiveRuns({
+      stream: "lifecycle",
+      runId: "run-live",
+      data: { phase: "start" },
+      sessionKey: "agent:main:live",
+    });
+    const res = new MockRes();
+    await handleHistorySessions(makeReq(AUTH), res as any);
+    const sessions = JSON.parse(res.body).sessions as Array<{
+      sessionKey: string;
+      hasActiveRun?: boolean;
+    }>;
+    expect(sessions.find((s) => s.sessionKey === "agent:main:live")?.hasActiveRun).toBe(true);
+    expect(sessions.find((s) => s.sessionKey === "agent:main:idle")?.hasActiveRun).toBeUndefined();
   });
 });

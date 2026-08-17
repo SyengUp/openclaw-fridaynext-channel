@@ -15,6 +15,7 @@ import {
   resetRunUsageAccumulatorForTest,
 } from "./agent/run-usage-accumulator.js";
 import { sseEmitter } from "./sse/emitter.js";
+import { hasActiveSession, resetActiveRunsForTest } from "./agent/active-runs.js";
 import { toSessionStoreKey } from "./session/session-manager.js";
 import {
   ensureSubagentFromSpawnTool,
@@ -33,6 +34,7 @@ describe("forwardAgentEventRaw (thinking delta rewrite)", () => {
     resetFridayAgentForwardRuntimeForTest();
     resetRunMetadataForTest();
     resetRunUsageAccumulatorForTest();
+    resetActiveRunsForTest();
     registerFridaySessionDeviceMapping(sessionKey, deviceId);
     vi.spyOn(sseEmitter, "broadcastToRun").mockImplementation(() => {});
   });
@@ -622,5 +624,24 @@ describe("forwardAgentEventRaw (subagent stable-identity fields: A1/A2/A3)", () 
       data: { phase: "start" },
     });
     expect(subagentBroadcasts("dismissed")).toHaveLength(0);
+  });
+
+  it("tracks lifecycle for a foreign session with no Friday device mapping", () => {
+    const live = vi.spyOn(sseEmitter, "broadcastLive");
+    forwardAgentEventRaw({
+      runId: "webchat-1",
+      stream: "lifecycle",
+      sessionKey: "agent:main:webchat:xyz",
+      data: { phase: "start" },
+    });
+    expect(live).toHaveBeenCalledWith(
+      {
+        type: "session-status",
+        data: { sessionKey: "agent:main:webchat:xyz", hasActiveRun: true },
+      },
+      true,
+    );
+    expect(hasActiveSession("agent:main:webchat:xyz")).toBe(true);
+    expect(sseEmitter.broadcastToRun).not.toHaveBeenCalled();
   });
 });

@@ -43,6 +43,7 @@ describe("e2e connect and connected", () => {
     expect(connected?.data?.deviceId).toBe("DEV-A");
     expect(typeof connected?.data?.lastSeq).toBe("number");
     expect(typeof connected?.data?.serverTime).toBe("number");
+    expect(connected?.data?.activeSessionKeys).toEqual([]);
     app.disconnectSSE();
   });
 });

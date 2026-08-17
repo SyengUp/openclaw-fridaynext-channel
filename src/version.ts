@@ -11,7 +11,7 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
 /** Keep in sync with package.json "version" as a last-resort fallback. */
-const FALLBACK_VERSION = "1.0.22";
+const FALLBACK_VERSION = "1.0.23-beta.4";
 
 function resolvePluginVersion(): string {
   // dist layout: <root>/dist/src/version.js → ../../package.json = <root>/package.json

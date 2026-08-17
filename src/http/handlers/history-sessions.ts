@@ -12,13 +12,34 @@
  */
 
 import type { IncomingMessage, ServerResponse } from "node:http";
+import { createRequire } from "node:module";
 import fs from "node:fs";
 import { getFridayAgentForwardRuntime } from "../../agent-forward-runtime.js";
 import { extractBearerToken } from "../middleware/auth.js";
 import { resolveTranscriptPath } from "../../history/read-transcript.js";
+import { hasActiveSession } from "../../agent/active-runs.js";
 
 const DEFAULT_AGENT_ID = "main";
 const SAFE_AGENT_ID = /^[a-z0-9][a-z0-9_-]*$/;
+
+const requireSdk = createRequire(import.meta.url);
+
+/** Best-effort live-run check via plugin-sdk; no-op under Vitest / missing SDK. */
+function sdkEmbeddedRunActive(sessionKey: string): boolean {
+  if (process.env.VITEST === "true") return false;
+  try {
+    const mod = requireSdk("openclaw/plugin-sdk/agent-harness") as {
+      resolveActiveEmbeddedRunSessionId?: (key: string) => string | undefined;
+    };
+    return Boolean(mod.resolveActiveEmbeddedRunSessionId?.(sessionKey));
+  } catch {
+    return false;
+  }
+}
+
+function sessionHasActiveRun(canonicalKey: string): boolean {
+  return hasActiveSession(canonicalKey) || sdkEmbeddedRunActive(canonicalKey);
+}
 
 /**
  * Cron sessions are durable (`agent:<id>:cron:<jobId>`) but there can be hundreds
@@ -52,6 +73,8 @@ export interface FridayHistorySessionSummary {
   updatedAt?: number;
   model?: string;
   title?: string;
+  /** True when the gateway currently has a live run on this session. */
+  hasActiveRun?: boolean;
 }
 
 /** Mirror of OpenClaw's `normalizeAgentId` (also used in agents-list.ts). */
@@ -328,6 +351,7 @@ function readAgentSessions(agentId: string): FridayHistorySessionSummary[] {
         ? { model: readString(entry.model) ?? readString(entry.modelOverride) }
         : {}),
       ...(title ? { title } : {}),
+      ...(sessionHasActiveRun(canonicalKey) ? { hasActiveRun: true } : {}),
     });
   }
   return summaries;

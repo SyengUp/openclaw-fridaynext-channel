@@ -122,4 +122,22 @@ describe("sseEmitter", () => {
     expect(fridaySseOfflineQueue.readAfter("device-restart", 0).map((e) => e.id)).toEqual([1, 2, 3]);
     sseEmitter.removeConnection("device-restart");
   });
+
+  it("broadcastLive does not persist to the offline queue or assign ids", () => {
+    const c = new MockRes();
+    sseEmitter.addConnection("device-live", c as never);
+    sseEmitter.setBacklogLimit(50);
+    sseEmitter.broadcast({ type: "agent", data: { text: "queued" } }, "device-live", true);
+    sseEmitter.broadcastLive(
+      { type: "session-status", data: { sessionKey: "agent:main:s", hasActiveRun: true } },
+      true,
+    );
+
+    const body = c.writes.join("");
+    expect(body).toContain("event: session-status");
+    expect(body).toContain("agent:main:s");
+    expect(body).not.toMatch(/id: \d+\nevent: session-status/);
+    expect(fridaySseOfflineQueue.readAfter("device-live", 0).map((e) => e.event)).toEqual(["agent"]);
+    sseEmitter.removeConnection("device-live");
+  });
 });

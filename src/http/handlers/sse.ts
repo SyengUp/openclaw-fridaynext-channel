@@ -7,6 +7,7 @@ import { noteFridayDeviceSeen } from "../../friday-session.js";
 import { extractBearerToken } from "../middleware/auth.js";
 import { isPublicRequest } from "../middleware/public-surface.js";
 import { PLUGIN_VERSION } from "../../version.js";
+import { getActiveSessionKeys } from "../../agent/active-runs.js";
 
 function parseLastEventId(req: IncomingMessage, url: URL): number {
   const query = Number.parseInt(url.searchParams.get("lastEventId") ?? "", 10);
@@ -66,6 +67,7 @@ export async function handleSseStream(req: IncomingMessage, res: ServerResponse)
         serverTime: Date.now(),
         lastSeq,
         pluginVersion: PLUGIN_VERSION,
+        activeSessionKeys: getActiveSessionKeys(),
       },
     },
     deviceId,
