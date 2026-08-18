@@ -45,6 +45,7 @@ import { handleSessionDelete } from "./handlers/session-delete.js";
 import { handleAgentIdentity } from "./handlers/agent-identity.js";
 import { handleCommandsList } from "./handlers/commands-list.js";
 import { handleCronJobs, handleCronJobRun, handleCronRuns } from "./handlers/cron.js";
+import { handleTalk } from "./handlers/talk.js";
 import { applyCorsHeaders } from "./middleware/cors.js";
 import { resolveFridayNextConfig } from "../config.js";
 import { getHostOpenClawConfigSnapshot } from "../host-config.js";
@@ -352,6 +353,16 @@ export function registerFridayNextHttpRoutes(api: {
     handler: handleCronRuns,
     auth: "gateway",
     match: "exact",
+  });
+
+  // Native Talk (catalog / config / speak / mode). Default operator surface is
+  // enough: talk.catalog/config need operator.read, talk.speak/mode need
+  // operator.write. Never request includeSecrets — credentials stay on Gateway.
+  api.registerHttpRoute({
+    path: "/friday-next-admin/talk",
+    handler: handleTalk,
+    auth: "gateway",
+    match: "prefix",
   });
 
   api.logger.info("Friday Next channel HTTP routes registered at /friday-next/*");
