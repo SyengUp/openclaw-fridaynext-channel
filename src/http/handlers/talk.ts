@@ -41,6 +41,7 @@ import { resolveFridayNextConfig } from "../../config.js";
 import { getHostOpenClawConfigSnapshot } from "../../host-config.js";
 import { getFridayNextRuntime } from "../../runtime.js";
 import { getTalkOpenSession } from "../../talk/talk-runtime.js";
+import { registerFridaySessionDeviceMapping } from "../../friday-session.js";
 import {
   completeTalkRelayToolCall,
   resolveTalkConsultSessionKey,
@@ -155,6 +156,14 @@ function optionalNonEmptyString(value: unknown): string | undefined {
   if (typeof value !== "string") return undefined;
   const trimmed = value.trim();
   return trimmed.length > 0 ? trimmed : undefined;
+}
+
+// consult 不走 POST /messages。不把 sessionKey 登记到设备的话，
+// `forwardAgentEventRaw` 解析不到 Friday device，工具窗 SSE 会在进 app 之前被丢掉。
+function bindConsultSessionToDevice(sessionKey: string | undefined, deviceId: string): void {
+  const key = optionalNonEmptyString(sessionKey);
+  if (!key) return;
+  registerFridaySessionDeviceMapping(key, deviceId);
 }
 
 function optionalNumber(value: unknown): number | undefined {
@@ -298,6 +307,7 @@ async function handleTalkSessionCreate(
         (typeof handle.sessionId === "string" && handle.sessionId.trim()) ||
         `sdk:${crypto.randomUUID()}`;
       rememberTalkSession(sessionId, { kind: "sdk", deviceId, sessionKey, handle });
+      bindConsultSessionToDevice(sessionKey, deviceId);
       return json(res, 200, {
         ok: true,
         sessionId,
@@ -357,6 +367,7 @@ async function handleTalkSessionCreate(
     });
   }
   rememberTalkSession(sessionId, { kind: "dispatch", deviceId, connId, sessionKey });
+  bindConsultSessionToDevice(sessionKey, deviceId);
   return json(res, 200, { ok: true, ...created.payload, sessionId });
 }
 
@@ -426,13 +437,20 @@ async function handleTalkSessionToolCall(
     });
   }
 
+  const sessionKey = resolveTalkConsultSessionKey(
+    entry.sessionKey,
+    optionalNonEmptyString(body.sessionKey),
+  );
+  bindConsultSessionToDevice(sessionKey, entry.deviceId);
+  rememberTalkSession(sessionId, { ...entry, sessionKey });
+
   const result = await completeTalkRelayToolCall({
     sessionId,
     callId,
     name,
     args: body.args,
     forced: body.forced === true,
-    sessionKey: resolveTalkConsultSessionKey(entry.sessionKey, optionalNonEmptyString(body.sessionKey)),
+    sessionKey,
     dispatch: dispatchTalkPayload,
   });
   if (!result.ok) {

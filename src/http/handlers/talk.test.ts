@@ -6,6 +6,7 @@ import { handleTalk } from "./talk.js";
 import { clearFridayNextRuntime, setFridayNextRuntime } from "../../runtime.js";
 import { resetTalkSessionBridgeForTest } from "../../talk/talk-session-bridge.js";
 import { resetTalkRuntimeForTest } from "../../talk/talk-runtime.js";
+import { resolveFridayDeviceIdForSessionKey } from "../../friday-session.js";
 
 const { dispatchGatewayMethod, getPluginRuntimeGatewayRequestScope } = vi.hoisted(() => ({
   dispatchGatewayMethod: vi.fn(),
@@ -358,6 +359,42 @@ describe("handleTalk", () => {
         callId: "call-1",
         result: { text: "晴，24 度", result: "晴，24 度" },
       });
+      expect(resolveFridayDeviceIdForSessionKey("agent:main:chat")).toBe("PHONE-1");
+    });
+
+    it("binds a consult sessionKey supplied only on the tool-call (home-screen deferral)", async () => {
+      dispatchGatewayMethod
+        .mockResolvedValueOnce({
+          ok: true,
+          payload: { sessionId: "sess-home" },
+        })
+        .mockResolvedValueOnce({
+          ok: true,
+          payload: { runId: "run-home" },
+        })
+        .mockResolvedValueOnce({ ok: true, payload: { status: "ok" } })
+        .mockResolvedValueOnce({ ok: true, payload: {} });
+      setFridayNextRuntime({
+        subagent: {
+          getSessionMessages: async () => ({
+            messages: [{ role: "assistant", text: "好的", seq: 1 }],
+          }),
+        },
+      } as never);
+      await invoke("POST", "/friday-next-admin/talk/session", {
+        deviceId: "phone-home",
+      });
+      expect(resolveFridayDeviceIdForSessionKey("agent:main:fridaynext:talk-1")).toBeNull();
+      const { captured, json } = await invoke("POST", "/friday-next-admin/talk/session/tool-call", {
+        sessionId: "sess-home",
+        callId: "call-home",
+        name: "openclaw_agent_consult",
+        sessionKey: "agent:main:fridaynext:talk-1",
+        args: { question: "帮我看看" },
+      });
+      expect(captured.statusCode).toBe(200);
+      expect(json).toMatchObject({ ok: true, runId: "run-home" });
+      expect(resolveFridayDeviceIdForSessionKey("agent:main:fridaynext:talk-1")).toBe("PHONE-HOME");
     });
 
     it("returns 404 for a tool call on an unknown session", async () => {
