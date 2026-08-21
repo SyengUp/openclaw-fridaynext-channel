@@ -13,7 +13,8 @@ export type SseEventType =
   | "ping"
   | "subagent"
   | "approval"
-  | "session-status";
+  | "session-status"
+  | "talk";
 
 export interface SseEvent {
   type: SseEventType;
@@ -240,6 +241,16 @@ class SseEmitterRegistry {
     for (const conn of this.connections.values()) {
       conn.sendLive(event, flushNow);
     }
+  }
+
+  /**
+   * Same as `broadcastLive` but only the named device. Talk audio deltas use this
+   * so PCM never lands in the durable backlog (useless after reconnect, huge).
+   */
+  broadcastLiveToDevice(event: SseEvent, deviceId: string, flushNow?: boolean): void {
+    const key = deviceId.trim().toUpperCase();
+    if (!key) return;
+    this.connections.get(key)?.sendLive(event, flushNow);
   }
 
   trackDeviceForRun(deviceId: string, runId: string): void {

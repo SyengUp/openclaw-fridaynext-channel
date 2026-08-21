@@ -35,8 +35,5 @@
         }
       }
     }
-  },
-  "channelEnvVars": {
-    "friday-next": ["FRIDAY_NEXT_AUTH_TOKEN"]
   }
 }

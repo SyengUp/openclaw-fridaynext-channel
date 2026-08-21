@@ -196,7 +196,17 @@ declare module "openclaw/plugin-sdk/plugin-runtime" {
    * context) when called from within a plugin HTTP-route handler's async context.
    */
   export const getPluginRuntimeGatewayRequestScope: () =>
-    | { client?: { connect?: { scopes?: string[] } } }
+    | {
+        client?: { connect?: { scopes?: string[] }; connId?: string };
+        context?: {
+          broadcastToConnIds?: (
+            event: string,
+            payload: unknown,
+            connIds: Iterable<string> | Set<string>,
+            options?: unknown,
+          ) => void;
+        };
+      }
     | undefined;
 }
 

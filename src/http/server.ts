@@ -355,8 +355,9 @@ export function registerFridayNextHttpRoutes(api: {
     match: "exact",
   });
 
-  // Native Talk (catalog / config / speak / mode). Default operator surface is
-  // enough: talk.catalog/config need operator.read, talk.speak/mode need
+  // Native Talk (catalog / config / speak / mode) plus realtime session
+  // (create / audio / cancel / close). Default operator surface is enough:
+  // talk.catalog/config need operator.read, talk.speak/mode/session.* need
   // operator.write. Never request includeSecrets — credentials stay on Gateway.
   api.registerHttpRoute({
     path: "/friday-next-admin/talk",

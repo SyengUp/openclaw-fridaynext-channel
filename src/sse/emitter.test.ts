@@ -140,4 +140,23 @@ describe("sseEmitter", () => {
     expect(fridaySseOfflineQueue.readAfter("device-live", 0).map((e) => e.event)).toEqual(["agent"]);
     sseEmitter.removeConnection("device-live");
   });
+
+  it("broadcastLiveToDevice writes only to that device and skips the backlog", () => {
+    const a = new MockRes();
+    const b = new MockRes();
+    sseEmitter.addConnection("device-a-talk", a as never);
+    sseEmitter.addConnection("device-b-talk", b as never);
+    sseEmitter.broadcastLiveToDevice(
+      { type: "talk", data: { type: "audio", audioBase64: "YWI=" } },
+      "device-a-talk",
+      true,
+    );
+
+    expect(a.writes.join("")).toContain("event: talk");
+    expect(a.writes.join("")).not.toMatch(/id: \d+\nevent: talk/);
+    expect(b.writes.join("")).toBe("");
+    expect(fridaySseOfflineQueue.readAfter("device-a-talk", 0)).toEqual([]);
+    sseEmitter.removeConnection("device-a-talk");
+    sseEmitter.removeConnection("device-b-talk");
+  });
 });

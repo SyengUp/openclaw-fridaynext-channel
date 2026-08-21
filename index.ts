@@ -34,6 +34,7 @@ import { accumulateRunUsage } from "./src/agent/run-usage-accumulator.js";
 import { createFridayNextLogger } from "./src/logging.js";
 import { ensureCodexReasoningSummary } from "./src/codex-reasoning-config.js";
 import { startPublicAccess } from "./src/public-access/frpc-manager.js";
+import { setTalkRuntime } from "./src/talk/talk-runtime.js";
 
 const hookLogger = createFridayNextLogger("hook");
 
@@ -142,6 +143,7 @@ export default defineChannelPluginEntry({
   registerFull: (api: OpenClawPluginApi) => {
     setFridayAgentForwardRuntime(api);
     setUpgradeRuntime(api);
+    setTalkRuntime(api.runtime);
     const sameApi = lastApiRoutesRegistered?.deref() === api;
     if (!sameApi) {
       lastApiRoutesRegistered = new WeakRef(api);

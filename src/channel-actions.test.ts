@@ -72,6 +72,19 @@ function parseOutboundFrames(res: MockRes): OutboundFrame[] {
   return frames;
 }
 
+function sendDetails(result: unknown): {
+  ok?: boolean;
+  to?: string;
+  runId?: string;
+  error?: string;
+} {
+  if (!result || typeof result !== "object") return {};
+  const details = (result as { details?: unknown }).details;
+  return details && typeof details === "object"
+    ? (details as { ok?: boolean; to?: string; runId?: string; error?: string })
+    : {};
+}
+
 describe("channel-actions handleSend sessionKey routing", () => {
   let historyDir = "";
 
@@ -110,7 +123,7 @@ describe("channel-actions handleSend sessionKey routing", () => {
       sessionKey: "agent:operator:main", // ctx gives the base/main session — must be overridden
     });
 
-    expect((result as { ok?: boolean }).ok).toBe(true);
+    expect(sendDetails(result).ok).toBe(true);
     const frames = parseOutboundFrames(res);
     const media = frames.find((f) => f.type === "outbound" && f.data.op === "media");
     const text = frames.find((f) => f.type === "outbound" && f.data.op === "text");
@@ -142,7 +155,7 @@ describe("channel-actions handleSend sessionKey routing", () => {
       sessionKey: "agent:operator:main",
     });
 
-    expect((result as { ok?: boolean }).ok).toBe(true);
+    expect(sendDetails(result).ok).toBe(true);
     expect(fetchMock).toHaveBeenCalledWith(directLink, expect.anything());
 
     const frames = parseOutboundFrames(res);
@@ -175,7 +188,7 @@ describe("channel-actions handleSend sessionKey routing", () => {
       sessionKey: "agent:operator:main",
     });
 
-    expect((result as { ok?: boolean }).ok).toBe(true);
+    expect(sendDetails(result).ok).toBe(true);
     const frames = parseOutboundFrames(res);
     const media = frames.find((f) => f.type === "outbound" && f.data.op === "media");
     expect(media).toBeTruthy();
@@ -211,7 +224,7 @@ describe("channel-actions handleSend sessionKey routing", () => {
       sessionKey: "agent:operator:main",
     });
 
-    expect((result as { ok?: boolean }).ok).toBe(true);
+    expect(sendDetails(result).ok).toBe(true);
     const frames = parseOutboundFrames(res);
     const media = frames.find((f) => f.type === "outbound" && f.data.op === "media");
     expect(media).toBeTruthy();
@@ -252,7 +265,7 @@ describe("channel-actions handleSend sessionKey routing", () => {
       sessionKey: "agent:operator:main",
     });
 
-    expect((result as { ok?: boolean }).ok).toBe(true);
+    expect(sendDetails(result).ok).toBe(true);
     const mediaFrames = parseOutboundFrames(res).filter(
       (f) => f.type === "outbound" && f.data.op === "media",
     );
@@ -285,6 +298,31 @@ describe("channel-actions handleSend sessionKey routing", () => {
       (f) => f.type === "outbound" && f.data.op === "text",
     );
     expect(text?.data.sessionKey).toBe("agent:operator:friday:direct:fallback-session");
+  });
+
+  it("returns AgentToolResult content[] so Codex convertToolContents does not reduce undefined", async () => {
+    const deviceId = "DEV-ACT-RESULT";
+    connect(deviceId);
+
+    const result = await handleMessageAction({
+      action: "send",
+      params: { to: deviceId, message: "ok" },
+      sessionKey: "agent:operator:main",
+    });
+
+    const record = result as {
+      content?: unknown;
+      details?: { ok?: boolean; to?: string; runId?: string };
+    };
+    expect(Array.isArray(record.content)).toBe(true);
+    const block = (record.content as { type?: string; text?: string }[])[0];
+    expect(block).toEqual({
+      type: "text",
+      text: expect.stringContaining('"ok": true'),
+    });
+    expect(record.details).toMatchObject({ ok: true, to: deviceId });
+    expect(typeof record.details?.runId).toBe("string");
+    expect(record).not.toHaveProperty("ok");
   });
 });
 

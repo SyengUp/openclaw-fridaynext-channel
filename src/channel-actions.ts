@@ -27,10 +27,26 @@ const DISCOVERY = {
   capabilities: ["text", "media"] as const,
 };
 
-const CHANNEL_INFO_RESPONSE = {
+const CHANNEL_INFO_PAYLOAD = {
   ok: true as const,
   channels: [{ id: "friday-next", name: "Friday Next", transport: "http+sse" }],
 };
+
+/**
+ * `handleAction` must return `AgentToolResult` (`content[]` + `details`), matching core's
+ * `jsonResult`. A bare `{ ok, runId, to }` is truthy so message-tool skips wrapping, and Codex
+ * does `result.content.reduce(...)` on undefined — send already succeeded, the model retries,
+ * inbox stacks duplicates.
+ */
+function jsonToolResult<T>(payload: T): {
+  content: [{ type: "text"; text: string }];
+  details: T;
+} {
+  return {
+    content: [{ type: "text", text: JSON.stringify(payload, null, 2) }],
+    details: payload,
+  };
+}
 
 export function describeMessageActions() {
   return DISCOVERY;
@@ -108,7 +124,7 @@ async function handleSend(ctx: MessageActionCtx): Promise<unknown> {
   const caption = pickString(ctx.params, ["caption"]);
 
   if (!to) {
-    return { ok: false, error: "Missing required param: to" };
+    return jsonToolResult({ ok: false, error: "Missing required param: to" });
   }
 
   const runId = crypto.randomUUID();
@@ -234,12 +250,12 @@ async function handleSend(ctx: MessageActionCtx): Promise<unknown> {
     }
   }
 
-  return { ok: true, runId, to };
+  return jsonToolResult({ ok: true, runId, to });
 }
 
 export async function handleMessageAction(ctx: MessageActionCtx): Promise<unknown> {
   if (ctx.action === "channel-info" || ctx.action === "channel-list") {
-    return CHANNEL_INFO_RESPONSE;
+    return jsonToolResult(CHANNEL_INFO_PAYLOAD);
   }
   if (ctx.action === "send") {
     return handleSend(ctx);

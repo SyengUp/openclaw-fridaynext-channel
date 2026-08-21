@@ -16,6 +16,9 @@
  * on the preferred channel can retry once on the alternate (see
  * plugin-upgrade.ts) — one channel at a time, never two parallel installs
  * (parallel npm processes were the OOM trigger on small gateways).
+ *
+ * `install.js` duplicates this algorithm (it cannot import this module: the
+ * npx installer is a standalone script). Keep the two in lockstep.
  */
 export const OFFICIAL_NPM_REGISTRY = "https://registry.npmjs.org/";
 export const CHINA_NPM_MIRROR = "https://registry.npmmirror.com/";

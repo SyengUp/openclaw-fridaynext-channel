@@ -4,13 +4,20 @@ import { Readable } from "node:stream";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { handleTalk } from "./talk.js";
 import { clearFridayNextRuntime, setFridayNextRuntime } from "../../runtime.js";
+import { resetTalkSessionBridgeForTest } from "../../talk/talk-session-bridge.js";
+import { resetTalkRuntimeForTest } from "../../talk/talk-runtime.js";
 
-const { dispatchGatewayMethod } = vi.hoisted(() => ({
+const { dispatchGatewayMethod, getPluginRuntimeGatewayRequestScope } = vi.hoisted(() => ({
   dispatchGatewayMethod: vi.fn(),
+  getPluginRuntimeGatewayRequestScope: vi.fn(),
 }));
 
 vi.mock("openclaw/plugin-sdk/gateway-method-runtime", () => ({
   dispatchGatewayMethod,
+}));
+
+vi.mock("openclaw/plugin-sdk/plugin-runtime", () => ({
+  getPluginRuntimeGatewayRequestScope,
 }));
 
 type IncomingMessageLike = import("node:http").IncomingMessage;
@@ -68,6 +75,13 @@ async function invoke(
 describe("handleTalk", () => {
   beforeEach(() => {
     dispatchGatewayMethod.mockReset();
+    getPluginRuntimeGatewayRequestScope.mockReset();
+    getPluginRuntimeGatewayRequestScope.mockReturnValue({
+      client: {},
+      context: { broadcastToConnIds: vi.fn() },
+    });
+    resetTalkSessionBridgeForTest();
+    resetTalkRuntimeForTest();
   });
 
   afterEach(() => {
@@ -235,5 +249,201 @@ describe("handleTalk", () => {
     expect(captured.statusCode).toBe(403);
     expect(json).toMatchObject({ code: "attest_required" });
     expect(dispatchGatewayMethod).not.toHaveBeenCalled();
+  });
+
+  describe("session", () => {
+    it("returns false for an unknown nested talk path", async () => {
+      const { handled, captured } = await invoke("POST", "/friday-next-admin/talk/session/unknown", {
+        deviceId: "D1",
+      });
+      expect(handled).toBe(false);
+      expect(captured.body).toBe("");
+      expect(dispatchGatewayMethod).not.toHaveBeenCalled();
+    });
+
+    it("creates a realtime relay session and stamps a synthetic connId", async () => {
+      const scope = {
+        client: {} as { connId?: string },
+        context: { broadcastToConnIds: vi.fn() },
+      };
+      getPluginRuntimeGatewayRequestScope.mockReturnValue(scope);
+      dispatchGatewayMethod.mockResolvedValue({
+        ok: true,
+        payload: { sessionId: "sess-1", mode: "realtime", transport: "gateway-relay" },
+      });
+      const { captured, json } = await invoke("POST", "/friday-next-admin/talk/session", {
+        deviceId: "phone-1",
+        sessionKey: "agent:main:chat",
+        extra: "drop-me",
+      });
+      expect(captured.statusCode).toBe(200);
+      expect(json).toMatchObject({
+        ok: true,
+        sessionId: "sess-1",
+        mode: "realtime",
+        transport: "gateway-relay",
+      });
+      expect(dispatchGatewayMethod).toHaveBeenCalledWith("talk.session.create", {
+        mode: "realtime",
+        transport: "gateway-relay",
+        brain: "agent-consult",
+        sessionKey: "agent:main:chat",
+      });
+      expect(scope.client.connId).toMatch(/^friday-talk:PHONE-1:/);
+    });
+
+    it("returns 400 when deviceId is missing", async () => {
+      const { captured, json } = await invoke("POST", "/friday-next-admin/talk/session", {
+        sessionKey: "agent:main:chat",
+      });
+      expect(captured.statusCode).toBe(400);
+      expect(json).toMatchObject({ ok: false });
+      expect(dispatchGatewayMethod).not.toHaveBeenCalled();
+    });
+
+    it("returns 503 when the request scope has no client", async () => {
+      getPluginRuntimeGatewayRequestScope.mockReturnValue(undefined);
+      const { captured, json } = await invoke("POST", "/friday-next-admin/talk/session", {
+        deviceId: "phone-1",
+      });
+      expect(captured.statusCode).toBe(503);
+      expect(json).toMatchObject({ ok: false, code: "UNAVAILABLE" });
+      expect(dispatchGatewayMethod).not.toHaveBeenCalled();
+    });
+
+    it("relays a consult tool call after create", async () => {
+      dispatchGatewayMethod
+        .mockResolvedValueOnce({
+          ok: true,
+          payload: { sessionId: "sess-tool" },
+        })
+        .mockResolvedValueOnce({
+          ok: true,
+          payload: { runId: "run-weather", idempotencyKey: "idem-weather" },
+        })
+        .mockResolvedValueOnce({ ok: true, payload: { status: "ok" } })
+        .mockResolvedValueOnce({ ok: true, payload: {} });
+      setFridayNextRuntime({
+        subagent: {
+          getSessionMessages: async () => ({
+            messages: [{ role: "assistant", text: "晴，24 度", seq: 1 }],
+          }),
+        },
+      } as never);
+      await invoke("POST", "/friday-next-admin/talk/session", {
+        deviceId: "phone-1",
+        sessionKey: "agent:main:chat",
+      });
+      const { captured, json } = await invoke("POST", "/friday-next-admin/talk/session/tool-call", {
+        sessionId: "sess-tool",
+        callId: "call-1",
+        name: "openclaw_agent_consult",
+        args: { question: "天气" },
+      });
+      expect(captured.statusCode).toBe(200);
+      expect(json).toMatchObject({ ok: true, runId: "run-weather" });
+      expect(dispatchGatewayMethod).toHaveBeenCalledWith("talk.client.toolCall", {
+        sessionKey: "agent:main:chat",
+        callId: "call-1",
+        name: "openclaw_agent_consult",
+        args: { question: "天气" },
+        relaySessionId: "sess-tool",
+      });
+      expect(dispatchGatewayMethod).toHaveBeenCalledWith("agent.wait", {
+        runId: "run-weather",
+        timeoutMs: 120_000,
+      });
+      expect(dispatchGatewayMethod).toHaveBeenCalledWith("talk.session.submitToolResult", {
+        sessionId: "sess-tool",
+        callId: "call-1",
+        result: { text: "晴，24 度", result: "晴，24 度" },
+      });
+    });
+
+    it("returns 404 for a tool call on an unknown session", async () => {
+      const { captured, json } = await invoke("POST", "/friday-next-admin/talk/session/tool-call", {
+        sessionId: "missing",
+        callId: "call-1",
+        name: "openclaw_agent_consult",
+      });
+      expect(captured.statusCode).toBe(404);
+      expect(json).toMatchObject({ ok: false });
+      expect(dispatchGatewayMethod).not.toHaveBeenCalled();
+    });
+
+    it("forwards appendAudio after create", async () => {
+      dispatchGatewayMethod
+        .mockResolvedValueOnce({
+          ok: true,
+          payload: { sessionId: "sess-2" },
+        })
+        .mockResolvedValueOnce({ ok: true, payload: {} });
+      await invoke("POST", "/friday-next-admin/talk/session", { deviceId: "phone-1" });
+      const { captured, json } = await invoke("POST", "/friday-next-admin/talk/session/audio", {
+        sessionId: "sess-2",
+        audioBase64: "YWI=",
+        timestamp: 1.5,
+      });
+      expect(captured.statusCode).toBe(200);
+      expect(json).toMatchObject({ ok: true });
+      expect(dispatchGatewayMethod).toHaveBeenLastCalledWith("talk.session.appendAudio", {
+        sessionId: "sess-2",
+        audioBase64: "YWI=",
+        timestamp: 1.5,
+      });
+    });
+
+    it("returns 404 for audio on an unknown session", async () => {
+      const { captured, json } = await invoke("POST", "/friday-next-admin/talk/session/audio", {
+        sessionId: "missing",
+        audioBase64: "YWI=",
+      });
+      expect(captured.statusCode).toBe(404);
+      expect(dispatchGatewayMethod).not.toHaveBeenCalled();
+      expect(json).toMatchObject({ ok: false });
+    });
+
+    it("cancels and closes a session", async () => {
+      dispatchGatewayMethod.mockResolvedValue({ ok: true, payload: { sessionId: "sess-3" } });
+      await invoke("POST", "/friday-next-admin/talk/session", { deviceId: "phone-1" });
+      dispatchGatewayMethod.mockResolvedValue({ ok: true, payload: {} });
+      const cancelled = await invoke("POST", "/friday-next-admin/talk/session/cancel", {
+        sessionId: "sess-3",
+        reason: "barge-in",
+      });
+      expect(cancelled.captured.statusCode).toBe(200);
+      expect(dispatchGatewayMethod).toHaveBeenLastCalledWith("talk.session.cancelOutput", {
+        sessionId: "sess-3",
+        reason: "barge-in",
+      });
+      const closed = await invoke("POST", "/friday-next-admin/talk/session/close", {
+        sessionId: "sess-3",
+      });
+      expect(closed.captured.statusCode).toBe(200);
+      expect(dispatchGatewayMethod).toHaveBeenLastCalledWith("talk.session.close", {
+        sessionId: "sess-3",
+      });
+      const again = await invoke("POST", "/friday-next-admin/talk/session/close", {
+        sessionId: "sess-3",
+      });
+      expect(again.captured.statusCode).toBe(404);
+    });
+
+    it("rejects a public session create without an attest token when required", async () => {
+      setFridayNextRuntime({
+        config: {
+          current: () => ({ channels: { "friday-next": { appAttest: { required: true } } } }),
+        },
+      });
+      const { captured, json } = await invoke(
+        "POST",
+        "/friday-next-admin/talk/session",
+        { deviceId: "phone-1" },
+        { "x-fridaynext-public": "1" },
+      );
+      expect(captured.statusCode).toBe(403);
+      expect(json).toMatchObject({ code: "attest_required" });
+      expect(dispatchGatewayMethod).not.toHaveBeenCalled();
+    });
   });
 });

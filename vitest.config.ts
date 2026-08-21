@@ -43,6 +43,14 @@ export default defineConfig({
         __dirname,
         "src/test-support/mock-device-bootstrap.ts",
       ),
+      "openclaw/plugin-sdk/gateway-method-runtime": path.resolve(
+        __dirname,
+        "src/test-support/mock-gateway-method-runtime.ts",
+      ),
+      "openclaw/plugin-sdk/plugin-runtime": path.resolve(
+        __dirname,
+        "src/test-support/mock-plugin-runtime.ts",
+      ),
       openclaw: openclawDist,
     },
   },

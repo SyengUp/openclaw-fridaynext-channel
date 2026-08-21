@@ -105,39 +105,83 @@ const DIST_TAG =
     ? "beta"
     : "latest";
 
-// Registry fallback chain. Mainland China ISPs frequently block the official
-// Cloudflare-backed registry, which would otherwise stall the install on npm's
-// 5-minute fetch timeouts. Prefer a reachable registry: FRIDAY_NPM_REGISTRY env
-// override → official → China mirror (npmmirror), first one answering `/-/ping`
-// wins. The resolved registry is used for the version lookup AND injected into
-// the `openclaw plugins install` subprocess via npm_config_registry.
+// Registry selection. Must stay in lockstep with src/npm-registry.ts:
+// parallel latency probe, faster wins, close race (150ms) prefers official.
+// Reachability-alone used to lock mainland gateways onto a slow-but-reachable
+// official registry (observed: 4-minute cold install vs 31s on npmmirror).
+// FRIDAY_NPM_REGISTRY override wins without probing. Install failure retries
+// once on the other candidate — one channel at a time, never two parallel
+// installs. The resolved registry is used for the version lookup AND injected
+// into the `openclaw plugins install` subprocess via npm_config_registry.
 const OFFICIAL_REGISTRY = "https://registry.npmjs.org/";
 const CHINA_MIRROR = "https://registry.npmmirror.com/";
+const REGISTRY_CANDIDATES = [OFFICIAL_REGISTRY, CHINA_MIRROR];
+const PROBE_TIMEOUT_MS = 3_000;
+const RACE_EQUALITY_MS = 150;
 
-async function probeRegistry(url) {
+/** Probe one registry; returns latency ms, or Infinity if it doesn't answer. */
+async function probeRegistryLatency(url) {
+  const started = Date.now();
   try {
-    const res = await fetch(`${url.replace(/\/$/, "")}/-/ping`, {
-      signal: AbortSignal.timeout(3000),
-      headers: { Accept: "application/json" },
-    });
-    return res.ok;
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), PROBE_TIMEOUT_MS);
+    try {
+      const res = await fetch(`${url.replace(/\/$/, "")}/-/ping`, {
+        signal: controller.signal,
+        headers: { Accept: "application/json" },
+      });
+      return res.ok ? Date.now() - started : Infinity;
+    } finally {
+      clearTimeout(timer);
+    }
   } catch {
-    return false;
+    return Infinity;
   }
 }
 
 async function resolveRegistry() {
   const override = process.env.FRIDAY_NPM_REGISTRY;
   if (override && override.trim()) return override.trim();
-  if (await probeRegistry(OFFICIAL_REGISTRY)) return OFFICIAL_REGISTRY;
-  if (await probeRegistry(CHINA_MIRROR)) return CHINA_MIRROR;
-  return OFFICIAL_REGISTRY;
+
+  const results = await Promise.all(
+    REGISTRY_CANDIDATES.map(async (url) => ({
+      registry: url,
+      latencyMs: await probeRegistryLatency(url),
+    })),
+  );
+  const reachable = results.filter((r) => r.latencyMs !== Infinity);
+  const official = results.find((r) => r.registry === OFFICIAL_REGISTRY);
+
+  if (reachable.length === 0) return OFFICIAL_REGISTRY;
+  const fastest = reachable.reduce((a, b) => (a.latencyMs < b.latencyMs ? a : b));
+  if (
+    official &&
+    official.latencyMs !== Infinity &&
+    fastest.latencyMs + RACE_EQUALITY_MS >= official.latencyMs
+  ) {
+    return OFFICIAL_REGISTRY;
+  }
+  return fastest.registry;
 }
 
 /** Env to pass to the npm subprocess (null = leave npm's own config alone). */
 function installEnvFor(registry) {
   if (registry === OFFICIAL_REGISTRY) return null;
   return { npm_config_registry: registry };
+}
+
+/** The other known candidate, or undefined for an explicit FRIDAY_NPM_REGISTRY override. */
+function alternateRegistry(preferred) {
+  if (!REGISTRY_CANDIDATES.includes(preferred)) return undefined;
+  return REGISTRY_CANDIDATES.find((c) => c !== preferred);
+}
+
+function registryHost(url) {
+  try {
+    return new URL(url).host;
+  } catch {
+    return String(url);
+  }
 }
 
 // Resolve the EXACT version behind DIST_TAG and install THAT — never the bare
@@ -194,13 +238,27 @@ const resolvedVersion = await resolveTaggedVersion(DIST_TAG, registry);
 // hiccup doesn't block the install. Re-running later pins an exact spec.
 const installSpec = `${PKG}@${resolvedVersion ?? DIST_TAG}`;
 
-try {
-  execSync(`${openclawCmd} plugins install ${installSpec} --force`, {
+function runPluginInstall(spec, env) {
+  execSync(`${openclawCmd} plugins install ${spec} --force`, {
     encoding: "utf8",
     stdio: "pipe",
     timeout: 120000,
-    env: { ...process.env, ...(installEnv ?? {}) },
+    env: { ...process.env, ...(env ?? {}) },
   });
+}
+
+try {
+  try {
+    installStep.detail(registryHost(registry));
+    runPluginInstall(installSpec, installEnv);
+  } catch (first) {
+    // Same failover as plugin-upgrade: one retry on the other known candidate.
+    // An explicit FRIDAY_NPM_REGISTRY override is authoritative — don't bypass it.
+    const alternate = alternateRegistry(registry);
+    if (!alternate) throw first;
+    installStep.detail(registryHost(alternate));
+    runPluginInstall(installSpec, installEnvFor(alternate));
+  }
 
   // Remove old manual install to avoid "duplicate plugin id" warning.
   const legacyDir = join(USER_HOME, ".openclaw", "extensions", "friday-channel-next");
@@ -215,7 +273,12 @@ try {
 } catch (e) {
   const msg = (e.stderr || e.stdout || e.message || "").toString();
   installStep.fail();
-  die(msg.trim().split("\n").pop() || T.failInstall, "npx -y @syengup/friday-channel-next");
+  die(
+    msg.trim().split("\n").pop() || T.failInstall,
+    DIST_TAG === "beta"
+      ? "curl -fsSL https://gw.syengup.host/v1/friday-next/install.sh | sh -s -- --beta"
+      : "curl -fsSL https://gw.syengup.host/v1/friday-next/install.sh | sh",
+  );
 }
 
 // --------------- configure OpenClaw ---------------
@@ -533,13 +596,21 @@ if (!verified.ok) {
   // gateway process isn't running (and can't be, as a service). Saying "Installation FAILED"
   // here sends the user chasing a phantom install problem — tell them the one real next step.
   if (gatewayServiceUnavailable) {
-    die(T.failGatewayNoService, "openclaw gateway run", "npx -y @syengup/friday-channel-next");
+    die(
+      T.failGatewayNoService,
+      "openclaw gateway run",
+      DIST_TAG === "beta"
+        ? "curl -fsSL https://gw.syengup.host/v1/friday-next/install.sh | sh -s -- --beta"
+        : "curl -fsSL https://gw.syengup.host/v1/friday-next/install.sh | sh",
+    );
   }
   die(
     T.failGateway,
     "openclaw gateway status",
     "openclaw gateway restart",
-    "npx -y @syengup/friday-channel-next",
+    DIST_TAG === "beta"
+      ? "curl -fsSL https://gw.syengup.host/v1/friday-next/install.sh | sh -s -- --beta"
+      : "curl -fsSL https://gw.syengup.host/v1/friday-next/install.sh | sh",
   );
 }
 verifyStep.ok(verified.version ? `friday-next ${verified.version}` : "");

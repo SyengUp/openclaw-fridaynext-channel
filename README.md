@@ -54,7 +54,7 @@ agent is in your pocket — with your phone acting as an OpenClaw **channel and 
 agent can reach your canvas, location, and interactive UI from anywhere.
 
 ```bash
-openclaw plugins install clawhub:@syengup/friday-channel-next
+curl -fsSL https://gw.syengup.host/v1/friday-next/install.sh | sh
 ```
 
 Then open FridayNext and follow the in-app setup — no command line required after that.
