@@ -134,6 +134,28 @@ interface ParsedContent {
   images: FridayHistoryImage[];
 }
 
+/**
+ * OpenClaw often persists the same inbound photos twice on one user record:
+ * `[media attached: file://…]` in the text (plugin injection) AND `{type:image,data}`
+ * blocks of the same bytes (core). Prefer the file-backed markers — history can
+ * resolve them to `/friday-next/files/…` — and drop as many leftover inline blocks
+ * as there were markers. Extra inline-only images (no matching marker) stay.
+ */
+function collapseDuplicateInlineImages(images: FridayHistoryImage[]): FridayHistoryImage[] {
+  const markerCount = images.filter((img) => Boolean(img.url) && !img.data).length;
+  if (markerCount === 0) return images;
+  let remaining = markerCount;
+  const out: FridayHistoryImage[] = [];
+  for (const img of images) {
+    if (img.data && !img.url && remaining > 0) {
+      remaining -= 1;
+      continue;
+    }
+    out.push(img);
+  }
+  return out;
+}
+
 function parseContent(content: unknown): ParsedContent {
   const out: ParsedContent = { text: "", thinking: "", toolCalls: [], images: [] };
 
@@ -210,6 +232,7 @@ function parseContent(content: unknown): ParsedContent {
   }
   out.text = textParts.join("");
   out.thinking = thinkingParts.join("");
+  out.images = collapseDuplicateInlineImages(out.images);
   return out;
 }
 

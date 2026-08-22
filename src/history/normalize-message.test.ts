@@ -85,6 +85,58 @@ describe("normalizeHistoryMessage", () => {
     expect(out?.images).toEqual([{ url: "file:///a.jpg" }]);
   });
 
+  it("does not double user photos that are both media-attached markers and inline image blocks", () => {
+    // OpenClaw persists inbound photos twice on one user record: the plugin injects
+    // `[media attached: file://…]` into the text, AND the core also writes `{type:image,data}`
+    // blocks of the same bytes. History rebuild used to emit 4 images for 2 photos.
+    const out = normalizeHistoryMessage(
+      {
+        role: "user",
+        content: [
+          {
+            type: "text",
+            text:
+              "这是我昨天和今天吃的，记录一下\n\n" +
+              "[media attached: file:///Users/syengup/.openclaw/media/inbound/photo-4082CA4F---cc6e3a3b-88e4-412f-9fd3-49f3d2c9084f.jpg]\n" +
+              "[media attached: file:///Users/syengup/.openclaw/media/inbound/photo-BA087F19---f64f1c5f-67d9-4d4e-a9d1-0d343135adac.jpg]",
+          },
+          { type: "image", mimeType: "image/jpeg", data: "AAA" },
+          { type: "image", mimeType: "image/jpeg", data: "BBB" },
+        ],
+        ...meta("ffa0e0f4", 1),
+      },
+      0,
+    );
+    expect(out?.images).toEqual([
+      {
+        url: "file:///Users/syengup/.openclaw/media/inbound/photo-4082CA4F---cc6e3a3b-88e4-412f-9fd3-49f3d2c9084f.jpg",
+      },
+      {
+        url: "file:///Users/syengup/.openclaw/media/inbound/photo-BA087F19---f64f1c5f-67d9-4d4e-a9d1-0d343135adac.jpg",
+      },
+    ]);
+    expect(out?.text).toContain("这是我昨天和今天吃的，记录一下");
+  });
+
+  it("keeps leftover inline images when there are more image blocks than media markers", () => {
+    const out = normalizeHistoryMessage(
+      {
+        role: "user",
+        content: [
+          { type: "text", text: "one file [media attached: file:///a.jpg]" },
+          { type: "image", mimeType: "image/jpeg", data: "AAA" },
+          { type: "image", mimeType: "image/png", data: "BBB" },
+        ],
+        ...meta("u-extra", 1),
+      },
+      0,
+    );
+    expect(out?.images).toEqual([
+      { url: "file:///a.jpg" },
+      { mimeType: "image/png", data: "BBB" },
+    ]);
+  });
+
   it("normalizes a toolResult message", () => {
     const out = normalizeHistoryMessage(
       {

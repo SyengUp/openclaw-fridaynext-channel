@@ -242,6 +242,48 @@ describe("handleHistoryMessages", () => {
     fs.rmSync(srcDir, { recursive: true, force: true });
   });
 
+  it("does not double user photos that have both media-attached markers and inline image blocks", async () => {
+    const srcDir = fs.mkdtempSync(path.join(os.tmpdir(), "friday-inbound-"));
+    const a = path.join(srcDir, "photo-a.jpg");
+    const b = path.join(srcDir, "photo-b.jpg");
+    fs.writeFileSync(a, Buffer.from([0xff, 0xd8, 0xff, 0xe0, 0x00, 0x10]));
+    fs.writeFileSync(b, Buffer.from([0xff, 0xd8, 0xff, 0xe0, 0x00, 0x11]));
+    const file = writeTranscript("media-dup.jsonl", [
+      {
+        type: "message",
+        id: "u1",
+        message: {
+          role: "user",
+          content: [
+            {
+              type: "text",
+              text:
+                `这是我昨天和今天吃的，记录一下\n\n[media attached: file://${a}]\n[media attached: file://${b}]`,
+            },
+            { type: "image", mimeType: "image/jpeg", data: "AAA" },
+            { type: "image", mimeType: "image/jpeg", data: "BBB" },
+          ],
+        },
+      },
+    ]);
+    setForward({ "agent:main:main": { sessionId: "s", sessionFile: file } });
+
+    const res = new MockRes();
+    await handleHistoryMessages(
+      makeReq("/friday-next/history/messages?sessionKey=agent:main:main", AUTH),
+      res as any,
+    );
+    expect(res.statusCode).toBe(200);
+    const body = JSON.parse(res.body);
+    const userMsg = body.messages.find((m: any) => m.role === "user");
+    expect(userMsg.images).toHaveLength(2);
+    expect(userMsg.images.every((img: any) => img.url?.startsWith("/friday-next/files/"))).toBe(
+      true,
+    );
+    expect(userMsg.images.some((img: any) => img.data)).toBe(false);
+    fs.rmSync(srcDir, { recursive: true, force: true });
+  });
+
   it("falls back to getSessionMessages when the transcript is not on disk", async () => {
     setForward({}); // no entry → disk read yields nothing
     setRuntime(async () => ({
