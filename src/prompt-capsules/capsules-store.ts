@@ -7,12 +7,13 @@ import { getHostOpenClawConfigSnapshot } from "../host-config.js";
 import { getFridayNextRuntime } from "../runtime.js";
 
 /**
- * Gateway-side mirror of the app's prompt capsules ("提示词胶囊").
+ * Gateway-side source of truth for prompt capsules ("提示词胶囊").
  *
- * The capsules used to live only in the iOS app's Application Support directory, so a
- * delete+reinstall wiped every custom prompt the user had built up. This store is the
- * durable copy: the app pushes its list on every local edit and merges the server list
- * back on (re)connect, so a fresh install restores everything.
+ * The app used to seed two starter capsules locally and push them up. That meant a new
+ * app pairing an existing gateway would mint fresh ids and merge them back in — including
+ * when the user had already deleted the starters. Defaults now live here: a brand-new
+ * store file is planted with the two starters; an existing file (even `capsules: []`) is
+ * left alone, so a deletion survives a reinstall / new-app pairing.
  *
  * Scope is deliberately **global** (one list per gateway, shared by every agent) —
  * that matches the app, where `PromptCapsuleStore` is a single app-wide singleton.
@@ -51,6 +52,37 @@ export const MAX_NAME_LEN = 100;
 export const MAX_ICON_LEN = 100;
 export const MAX_PROMPT_LEN = 8000;
 
+/**
+ * Starter capsules planted the first time this gateway's store file is created.
+ * Copy matches the app's original Chinese source strings (the plugin is not localized).
+ * Ids are minted per gateway — they are not a shared well-known set.
+ */
+export const DEFAULT_SEED_CAPSULES: ReadonlyArray<
+  Omit<PromptCapsuleRecord, "id" | "createdAt" | "updatedAt">
+> = [
+  {
+    name: "Canvas",
+    iconSystemName: "rectangle.on.rectangle.angled",
+    prompt: "通过在.openclaw/canvas中生成html文件，然后用canvas.present回复我",
+    sortOrder: 0,
+  },
+  {
+    name: "长按胶囊来编辑/删除",
+    iconSystemName: "hand.tap",
+    prompt: '在这里输入你常用的提示词，如"用网页搜索"\n现在，你可以删除这个胶囊了',
+    sortOrder: 1,
+  },
+];
+
+function plantDefaultCapsules(now: number): PromptCapsuleRecord[] {
+  return DEFAULT_SEED_CAPSULES.map((spec) => ({
+    ...spec,
+    id: randomUUID(),
+    createdAt: now,
+    updatedAt: now,
+  }));
+}
+
 /** Test-only override for the store base directory. */
 let testBaseDir: string | null = null;
 
@@ -78,6 +110,18 @@ function emptyFile(): PromptCapsulesFile {
   return { version: 1, storeId: randomUUID(), revision: 0, updatedAt: 0, capsules: [] };
 }
 
+/** First persist of a gateway that has never had a capsules file. */
+function seededNewStore(): PromptCapsulesFile {
+  const now = Date.now();
+  return {
+    version: 1,
+    storeId: randomUUID(),
+    revision: 0,
+    updatedAt: now,
+    capsules: plantDefaultCapsules(now),
+  };
+}
+
 function coerceRecord(raw: unknown): PromptCapsuleRecord | null {
   if (!raw || typeof raw !== "object") return null;
   const r = raw as Record<string, unknown>;
@@ -99,12 +143,10 @@ function coerceRecord(raw: unknown): PromptCapsuleRecord | null {
 }
 
 /**
- * Read the persisted list. A missing/corrupt file degrades to an empty store rather than
- * throwing — the app then pushes its local list up and the store self-heals.
- *
- * Note the returned `storeId` for a missing file is freshly minted and NOT yet persisted;
- * it is written on the first `writeCapsules()`. Callers that hand a `storeId` to a client
- * must therefore go through `readOrInitCapsules()`.
+ * Read the persisted list. A missing/corrupt file degrades to an empty in-memory store
+ * rather than throwing — and does **not** plant defaults (that would resurrect a list the
+ * user cleared, or mint a throwaway `storeId`). Callers that hand a `storeId` to a client
+ * must go through `readOrInitCapsules()`.
  */
 export function readCapsules(): PromptCapsulesFile {
   const file = capsulesFile();
@@ -128,11 +170,16 @@ export function readCapsules(): PromptCapsulesFile {
   }
 }
 
-/** Read, and persist immediately if the file didn't exist yet (so `storeId` is stable from the first GET). */
+/**
+ * Read, and persist immediately if the file didn't exist yet (so `storeId` is stable from
+ * the first GET, and a brand-new gateway starts with the two starter capsules).
+ *
+ * An existing file is never re-seeded — `capsules: []` means the user deleted them.
+ */
 export function readOrInitCapsules(): PromptCapsulesFile {
   const file = capsulesFile();
   if (fs.existsSync(file)) return readCapsules();
-  const fresh = emptyFile();
+  const fresh = seededNewStore();
   persist(fresh);
   return fresh;
 }

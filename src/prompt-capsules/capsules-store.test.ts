@@ -5,6 +5,7 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   MAX_CAPSULES,
+  DEFAULT_SEED_CAPSULES,
   readCapsules,
   readOrInitCapsules,
   setPromptCapsulesBaseDirForTest,
@@ -46,11 +47,22 @@ describe("capsules store", () => {
     expect(state.storeId).toBeTruthy();
   });
 
-  it("mints and persists a stable storeId on first read-or-init", () => {
+  it("mints and persists a stable storeId on first read-or-init, with the two starters", () => {
     const first = readOrInitCapsules();
     const second = readOrInitCapsules();
     expect(second.storeId).toBe(first.storeId);
     expect(fs.existsSync(path.join(dir, "capsules.json"))).toBe(true);
+    expect(first.revision).toBe(0);
+    expect(first.capsules.map((c) => c.name)).toEqual(DEFAULT_SEED_CAPSULES.map((c) => c.name));
+    expect(first.capsules.map((c) => c.prompt)).toEqual(DEFAULT_SEED_CAPSULES.map((c) => c.prompt));
+  });
+
+  it("does not re-seed an existing store, even when the user deleted every capsule", () => {
+    const seeded = readOrInitCapsules();
+    writeCapsules([], seeded);
+    const after = readOrInitCapsules();
+    expect(after.capsules).toEqual([]);
+    expect(after.storeId).toBe(seeded.storeId);
   });
 
   it("round-trips capsules and bumps the revision, keeping storeId stable", () => {

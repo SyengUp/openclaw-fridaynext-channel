@@ -47,14 +47,15 @@ describe("e2e prompt capsules", () => {
   it("round-trips the capsule list across a PUT and a fresh GET", async () => {
     const app = createAppSimulator({ token: "test-token" });
 
-    const empty = await app.rawRequest({
+    const first = await app.rawRequest({
       method: "GET",
       path: "/friday-next/prompt-capsules",
       headers: auth,
     });
-    expect(empty.status).toBe(200);
-    const emptyBody = JSON.parse(empty.body);
-    expect(emptyBody).toMatchObject({ ok: true, revision: 0, capsules: [] });
+    expect(first.status).toBe(200);
+    const firstBody = JSON.parse(first.body);
+    expect(firstBody).toMatchObject({ ok: true, revision: 0 });
+    expect(firstBody.capsules).toHaveLength(2);
 
     const put = await app.rawRequest({
       method: "PUT",
@@ -73,7 +74,7 @@ describe("e2e prompt capsules", () => {
     });
     const restoredBody = JSON.parse(restored.body);
     expect(restoredBody.capsules).toEqual([CAPSULE]);
-    expect(restoredBody.storeId).toBe(emptyBody.storeId);
+    expect(restoredBody.storeId).toBe(firstBody.storeId);
   });
 
   it("refuses a stale baseRevision with 409 and the current state", async () => {

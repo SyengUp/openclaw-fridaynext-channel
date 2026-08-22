@@ -149,7 +149,7 @@ async function handleFridayNextRoute(req: IncomingMessage, res: ServerResponse):
     return await handleSessionsSettings(req, res);
   }
 
-  // Route: GET/PUT /friday-next/prompt-capsules (durable mirror of the app's prompt capsules)
+  // Route: GET/PUT /friday-next/prompt-capsules (gateway source of truth; new stores get two starters)
   if (
     (req.method === "GET" || req.method === "PUT") &&
     pathname === "/friday-next/prompt-capsules"

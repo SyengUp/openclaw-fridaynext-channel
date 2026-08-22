@@ -487,7 +487,8 @@ Stored at `~/.openclaw/friday-next/prompt-capsules/capsules.json`.
   `storeId` is minted on first access and never changes — clients key their sync bookkeeping on it,
   so the same gateway reached over a LAN IP and over the public relay domain is one data source, and
   a genuinely different gateway is a new peer (union-only merge, never delete). A fresh gateway
-  answers `revision: 0` with an empty list.
+  answers `revision: 0` with two starter capsules (Canvas + edit-hint). An existing store file is
+  never re-seeded, even if the list is empty — that means the user deleted them.
 
 - `PUT /friday-next/prompt-capsules` — body `{ "capsules": [...], "baseRevision": 7 }`
 

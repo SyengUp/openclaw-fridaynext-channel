@@ -6,7 +6,10 @@ import path from "node:path";
 import { Readable } from "node:stream";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { setMockRuntime } from "../../test-support/mock-runtime.js";
-import { setPromptCapsulesBaseDirForTest } from "../../prompt-capsules/capsules-store.js";
+import {
+  DEFAULT_SEED_CAPSULES,
+  setPromptCapsulesBaseDirForTest,
+} from "../../prompt-capsules/capsules-store.js";
 import { handlePromptCapsules } from "./prompt-capsules.js";
 
 type Captured = { statusCode: number; headers: Record<string, unknown>; body: string };
@@ -89,11 +92,13 @@ describe("prompt-capsules route", () => {
     expect(handled).toBe(true);
   });
 
-  it("GET on a fresh gateway returns an empty list at revision 0", async () => {
+  it("GET on a fresh gateway plants the two starter capsules at revision 0", async () => {
     const res = await invoke("GET");
     expect(res.status).toBe(200);
-    expect(res.json).toMatchObject({ ok: true, revision: 0, capsules: [] });
+    expect(res.json).toMatchObject({ ok: true, revision: 0 });
     expect(res.json?.storeId).toBeTruthy();
+    const capsules = res.json?.capsules as Array<{ name: string }>;
+    expect(capsules.map((c) => c.name)).toEqual(DEFAULT_SEED_CAPSULES.map((c) => c.name));
   });
 
   it("PUT then GET round-trips the list and bumps the revision", async () => {
