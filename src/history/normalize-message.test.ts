@@ -325,4 +325,29 @@ describe("normalizeHistoryMessages", () => {
     ]);
     expect(result.map((m) => m.id)).toEqual(["u1", "u2"]);
   });
+
+  // Real session agent:operator:fridaynext:mt5mxc5c (2026-08-23): stealth/ox-alpha
+  // died with an empty assistant; restart-recovery re-wrote the same user prompt
+  // ~300ms later. No idempotencyKey on either copy. History rebuild painted two
+  // identical user bubbles.
+  it("collapses identical user prompts separated only by an empty assistant (model-error restart mirror)", () => {
+    const prompt = "“please speaking”这句话有语法问题吗？";
+    const result = normalizeHistoryMessages([
+      { role: "user", content: prompt, __openclaw: { id: "e6e7a6d3", seq: 1 } },
+      { role: "assistant", content: [], stopReason: "stop", __openclaw: { id: "83b7e378", seq: 2 } },
+      { role: "user", content: prompt, __openclaw: { id: "9ac18fe4", seq: 3 } },
+      { role: "assistant", content: [], stopReason: "stop", __openclaw: { id: "cbbe720c", seq: 4 } },
+    ]);
+    expect(result.filter((m) => m.role === "user").map((m) => m.id)).toEqual(["e6e7a6d3"]);
+    expect(result.filter((m) => m.role === "user")[0]?.text).toBe(prompt);
+  });
+
+  it("keeps a repeated user prompt when a real assistant reply sits between", () => {
+    const result = normalizeHistoryMessages([
+      { role: "user", content: "same text", __openclaw: { id: "u1", seq: 1 } },
+      { role: "assistant", content: "ok", __openclaw: { id: "a1", seq: 2 } },
+      { role: "user", content: "same text", __openclaw: { id: "u2", seq: 3 } },
+    ]);
+    expect(result.map((m) => m.id)).toEqual(["u1", "a1", "u2"]);
+  });
 });

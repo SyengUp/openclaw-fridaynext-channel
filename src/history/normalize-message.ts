@@ -347,7 +347,9 @@ export function normalizeHistoryMessage(raw: unknown, index: number): FridayHist
  * start and once inside the run-end mirror batch — with distinct transcript
  * entry ids but the identical key (an upstream session-cache bug the key was
  * meant to prevent); without this the app renders duplicate user bubbles on
- * every history rebuild. Records without a key are never collapsed.
+ * every history rebuild. Records without a key are still collapsed when they
+ * are consecutive identical user prompts with no visible assistant between
+ * them (model-error restart mirror; see `collapseMirroredUserPrompts`).
  */
 export function normalizeHistoryMessages(rawMessages: unknown[]): FridayHistoryMessage[] {
   const out: FridayHistoryMessage[] = [];
@@ -362,5 +364,62 @@ export function normalizeHistoryMessages(rawMessages: unknown[]): FridayHistoryM
     if (normalized) out.push(normalized);
   }
   out.sort((a, b) => a.seq - b.seq);
-  return out;
+  return collapseMirroredUserPrompts(out);
+}
+
+function historyMessageHasVisibleAssistantBody(message: FridayHistoryMessage): boolean {
+  if (message.role !== "assistant") return false;
+  if ((message.text ?? "").trim().length > 0) return true;
+  if (message.thinking && message.thinking.trim().length > 0) return true;
+  if (message.toolCalls && message.toolCalls.length > 0) return true;
+  if (message.images && message.images.length > 0) return true;
+  if (message.mediaPaths && message.mediaPaths.length > 0) return true;
+  return false;
+}
+
+/**
+ * OpenClaw can persist the same user prompt twice when a run dies with an empty
+ * assistant (model error / killed restart-recovery): send-time record, then a
+ * run-end mirror ~300ms later, neither carrying `idempotencyKey`. History rebuild
+ * would otherwise open a second user-only round and the iOS surface paints two
+ * identical bubbles. Collapse when the previous user text matches and nothing
+ * visible from the assistant sits between them.
+ */
+function collapseMirroredUserPrompts(messages: FridayHistoryMessage[]): FridayHistoryMessage[] {
+  const collapsed: FridayHistoryMessage[] = [];
+  for (const message of messages) {
+    if (message.role === "user") {
+      const incoming = (message.text ?? "").trim();
+      if (incoming.length > 0) {
+        let lastUserIndex = -1;
+        let hasVisibleAssistantAfter = false;
+        for (let i = collapsed.length - 1; i >= 0; i -= 1) {
+          const prior = collapsed[i];
+          if (prior.role === "user") {
+            lastUserIndex = i;
+            break;
+          }
+          if (historyMessageHasVisibleAssistantBody(prior)) {
+            hasVisibleAssistantAfter = true;
+            break;
+          }
+        }
+        const lastUser = lastUserIndex >= 0 ? collapsed[lastUserIndex] : undefined;
+        // Adjacent identical user records (no assistant between) are a real
+        // double-send — keep them. The restart-mirror always inserts an empty
+        // assistant between the two copies.
+        const hasIntervening = lastUserIndex >= 0 && lastUserIndex < collapsed.length - 1;
+        if (
+          lastUser &&
+          (lastUser.text ?? "").trim() === incoming &&
+          hasIntervening &&
+          !hasVisibleAssistantAfter
+        ) {
+          continue;
+        }
+      }
+    }
+    collapsed.push(message);
+  }
+  return collapsed;
 }
