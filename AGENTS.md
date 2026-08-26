@@ -151,7 +151,7 @@ From `channels["friday-next"]`: `authToken`, `historyDir` (default `~/.openclaw/
 
 OpenClaw filters `nodes` by **profile** and **owner**. To verify or fix visibility:
 
-1. If using `tools.profile: "coding"` (or similar), add **`tools.alsoAllow: ["nodes"]`** — profile allowlists do not re-include tools removed at profile resolution; `alsoAllow` does.
+1. If using `tools.profile: "coding"` (or similar), add **`tools.alsoAllow: ["nodes", "fridaynext_health_query", "fridaynext_health_log"]`** — profile allowlists do not re-include tools removed at profile resolution; `alsoAllow` does. Both are plugin tools (SSE + `POST /friday-next/health-query/result`); they are **not** `nodes` / `node.invoke`.
 2. **Owner:** `POST /friday-next/messages` is Bearer-gated; the plugin sets dispatch **`SenderId`** and **`OwnerAllowFrom: [deviceId]`** (normalized uppercase) so OpenClaw can treat the session as owner when the channel is effectively open (`allowFrom` empty/wildcard) and `commands.ownerAllowFrom` does not override with a fixed list that omits this device.
 3. If you use an explicit **`commands.ownerAllowFrom`** list, include the Friday device id there (or use channel `allowFrom`) — context `OwnerAllowFrom` is only used when that config list is empty.
 

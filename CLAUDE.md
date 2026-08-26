@@ -53,7 +53,7 @@ iOS App ←--HTTP/SSE--→ Friday Plugin ←--OpenClaw Plugin API--→ Gateway +
                     [offline-queue] — JSONL per-device persistence for replay
 ```
 
-1. **`index.ts`** — Plugin entry. Registers HTTP routes, `onAgentEvent` → `forwardAgentEventRaw`, an `llm_output` hook → `accumulateRunUsage` (per-run token usage), tool hooks (`before_tool_call`/`after_tool_call` → `tool-hook` SSE), and a `subagent_delivery_target` hook (routes sub-agent completion responses back to the Friday device that initiated the run). Routes are re-registered when `registerFull` receives a **new** `api` (compared via a `WeakRef`) so the plugin survives a health-monitor restart; the `onAgentEvent` listener is disposed+re-added each call, while tool hooks register at most once per process (boolean guard).
+1. **`index.ts`** — Plugin entry. Registers HTTP routes, `fridaynext_health_query` / `fridaynext_health_log` via `api.registerTool`, `onAgentEvent` → `forwardAgentEventRaw`, an `llm_output` hook → `accumulateRunUsage` (per-run token usage), tool hooks (`before_tool_call`/`after_tool_call` → `tool-hook` SSE), and a `subagent_delivery_target` hook (routes sub-agent completion responses back to the Friday device that initiated the run). Routes are re-registered when `registerFull` receives a **new** `api` (compared via a `WeakRef`) so the plugin survives a health-monitor restart; the `onAgentEvent` listener is disposed+re-added each call, while tool hooks register at most once per process (boolean guard).
 2. **`src/channel.ts`** — Plugin channel definition; `sendText` / `sendMedia` → `sseEmitter.broadcast(..., type: "outbound")` (plus media URL handling via `saveMediaBuffer` / `resolveMediaAttachment`).
 3. **`src/http/server.ts`** + **`src/http/handlers/*`** — `/friday-next/*` routes. Full route table:
    - `GET /friday-next/events` — SSE stream (`handleSseStream`)
@@ -61,6 +61,7 @@ iOS App ←--HTTP/SSE--→ Friday Plugin ←--OpenClaw Plugin API--→ Gateway +
    - `POST /friday-next/files` — multipart upload (`handleFilesUpload`)
    - `GET /friday-next/files/:id` — file download (`handleFilesDownload`)
    - `POST /friday-next/cancel` — abort a run (`handleCancel`)
+   - `POST /friday-next/health-query/result` — iPhone HealthKit RPC result (`handleHealthQueryResult`); pairs with `fridaynext_health_query` (SSE `fridaynext-health-query`) and `fridaynext_health_log` (SSE `fridaynext-health-log`). Does not use OpenClaw `nodes`.
    - `POST /friday-next/device-approve` — device trust approval (`handleDeviceApprove`)
    - `POST /friday-next/nodes-approve` — node pairing approval (`handleNodesApprove`)
    - `PUT|GET /friday-next/sessions/settings` — read/write session settings (`handleSessionsSettings`)
@@ -145,9 +146,9 @@ leave the gateway's armed timers on the old schedule, so the methods are the onl
 
 ## SSE event names
 
-`connected` | `agent` | `deliver` | `tool-hook` | `outbound` | `ping` | `subagent`
+`connected` | `agent` | `deliver` | `tool-hook` | `outbound` | `ping` | `subagent` | `approval` | `session-status` | `talk` | `fridaynext-health-query` | `fridaynext-health-log`
 
-`subagent` events carry `phase: "spawning"|"spawned"|"ended"` with `runId`, `parentRunId`, `label`, `depth`, `deviceId` for subagent lifecycle UI.
+`fridaynext-health-query` / `fridaynext-health-log` are device RPCs (not chat): the plugin tools broadcast them, the iPhone reads or writes HealthKit, then `POST /friday-next/health-query/result`. They do **not** go through OpenClaw `nodes` / `node.invoke`.
 
 Do not reintroduce `run-start` / `run-complete` / `run-error` / `final` / `reasoning` / `block` / `attachment` / `tts` as top-level SSE events.
 
@@ -179,7 +180,7 @@ From `channels["friday-next"]`: `authToken`, `historyDir` (default `~/.openclaw/
 
 OpenClaw filters `nodes` by **profile** and **owner**. To verify or fix visibility:
 
-1. If using `tools.profile: "coding"` (or similar), add **`tools.alsoAllow: ["nodes"]`** — profile allowlists do not re-include tools removed at profile resolution; `alsoAllow` does.
+1. If using `tools.profile: "coding"` (or similar), add **`tools.alsoAllow: ["nodes", "fridaynext_health_query", "fridaynext_health_log"]`** — profile allowlists do not re-include tools removed at profile resolution; `alsoAllow` does. Both health tools are registered by this plugin (SSE + HTTP); they are not `nodes`.
 2. **Owner:** `POST /friday-next/messages` is Bearer-gated; the plugin sets dispatch **`SenderId`** and **`OwnerAllowFrom: [deviceId]`** (normalized uppercase) so OpenClaw can treat the session as owner when the channel is effectively open (`allowFrom` empty/wildcard) and `commands.ownerAllowFrom` does not override with a fixed list that omits this device.
 3. If you use an explicit **`commands.ownerAllowFrom`** list, include the Friday device id there (or use channel `allowFrom`) — context `OwnerAllowFrom` is only used when that config list is empty.
 

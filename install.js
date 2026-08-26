@@ -399,11 +399,11 @@ if (!mainAgent) {
 }
 if (!mainAgent.tools) mainAgent.tools = {};
 if (!Array.isArray(mainAgent.tools.alsoAllow)) mainAgent.tools.alsoAllow = [];
-for (const tool of ["canvas", "nodes"]) {
+for (const tool of ["canvas", "nodes", "fridaynext_health_query", "fridaynext_health_log"]) {
   ensureArrayContains(mainAgent.tools.alsoAllow, tool);
 }
 if (Array.isArray(mainAgent.tools.deny)) {
-  for (const tool of ["canvas", "nodes"]) {
+  for (const tool of ["canvas", "nodes", "fridaynext_health_query", "fridaynext_health_log"]) {
     const idx = mainAgent.tools.deny.indexOf(tool);
     if (idx !== -1) {
       mainAgent.tools.deny.splice(idx, 1);

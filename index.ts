@@ -35,6 +35,8 @@ import { createFridayNextLogger } from "./src/logging.js";
 import { ensureCodexReasoningSummary } from "./src/codex-reasoning-config.js";
 import { startPublicAccess } from "./src/public-access/frpc-manager.js";
 import { setTalkRuntime } from "./src/talk/talk-runtime.js";
+import { createHealthQueryTool } from "./src/tools/health-query-tool.js";
+import { createHealthLogTool } from "./src/tools/health-log-tool.js";
 
 const hookLogger = createFridayNextLogger("hook");
 
@@ -148,6 +150,12 @@ export default defineChannelPluginEntry({
     if (!sameApi) {
       lastApiRoutesRegistered = new WeakRef(api);
       registerFridayNextHttpRoutes(api);
+      api.registerTool((ctx: { sessionKey?: string }) => createHealthQueryTool(ctx), {
+        names: ["fridaynext_health_query"],
+      });
+      api.registerTool((ctx: { sessionKey?: string }) => createHealthLogTool(ctx), {
+        names: ["fridaynext_health_log"],
+      });
 
       // FridayTunnel: enter control-plane standby by default. frpc is spawned only after an
       // entitled desired set arrives; explicit operator hard-disable keeps this fully inert.

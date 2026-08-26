@@ -14,7 +14,9 @@ export type SseEventType =
   | "subagent"
   | "approval"
   | "session-status"
-  | "talk";
+  | "talk"
+  | "fridaynext-health-query"
+  | "fridaynext-health-log";
 
 export interface SseEvent {
   type: SseEventType;
