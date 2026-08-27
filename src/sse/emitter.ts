@@ -16,7 +16,9 @@ export type SseEventType =
   | "session-status"
   | "talk"
   | "fridaynext-health-query"
-  | "fridaynext-health-log";
+  | "fridaynext-health-log"
+  | "fridaynext-calendar-query"
+  | "fridaynext-calendar-log";
 
 export interface SseEvent {
   type: SseEventType;

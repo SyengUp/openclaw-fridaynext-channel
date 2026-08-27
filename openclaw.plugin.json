@@ -4,9 +4,15 @@
   "name": "FridayNext — OpenClaw iOS Channel & Node",
   "description": "OpenClaw iOS channel & node — FridayNext turns your iPhone into a full OpenClaw client",
   "channels": ["friday-next"],
+  "skills": ["skills"],
   "contracts": {
     "gatewayMethodDispatch": ["authenticated-request"],
-    "tools": ["fridaynext_health_query", "fridaynext_health_log"]
+    "tools": [
+      "fridaynext_health_query",
+      "fridaynext_health_log",
+      "fridaynext_calendar_query",
+      "fridaynext_calendar_log"
+    ]
   },
   "configSchema": {
     "type": "object",

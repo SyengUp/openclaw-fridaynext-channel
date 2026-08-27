@@ -37,6 +37,8 @@ import { startPublicAccess } from "./src/public-access/frpc-manager.js";
 import { setTalkRuntime } from "./src/talk/talk-runtime.js";
 import { createHealthQueryTool } from "./src/tools/health-query-tool.js";
 import { createHealthLogTool } from "./src/tools/health-log-tool.js";
+import { createCalendarQueryTool } from "./src/tools/calendar-query-tool.js";
+import { createCalendarLogTool } from "./src/tools/calendar-log-tool.js";
 
 const hookLogger = createFridayNextLogger("hook");
 
@@ -155,6 +157,12 @@ export default defineChannelPluginEntry({
       });
       api.registerTool((ctx: { sessionKey?: string }) => createHealthLogTool(ctx), {
         names: ["fridaynext_health_log"],
+      });
+      api.registerTool((ctx: { sessionKey?: string }) => createCalendarQueryTool(ctx), {
+        names: ["fridaynext_calendar_query"],
+      });
+      api.registerTool((ctx: { sessionKey?: string }) => createCalendarLogTool(ctx), {
+        names: ["fridaynext_calendar_log"],
       });
 
       // FridayTunnel: enter control-plane standby by default. frpc is spawned only after an

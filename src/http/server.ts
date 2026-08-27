@@ -47,6 +47,7 @@ import { handleCommandsList } from "./handlers/commands-list.js";
 import { handleCronJobs, handleCronJobRun, handleCronRuns } from "./handlers/cron.js";
 import { handleTalk } from "./handlers/talk.js";
 import { handleHealthQueryResult } from "./handlers/health-query-result.js";
+import { handleCalendarResult } from "./handlers/calendar-result.js";
 import { applyCorsHeaders } from "./middleware/cors.js";
 import { resolveFridayNextConfig } from "../config.js";
 import { getHostOpenClawConfigSnapshot } from "../host-config.js";
@@ -145,6 +146,10 @@ async function handleFridayNextRoute(req: IncomingMessage, res: ServerResponse):
 
   if (req.method === "POST" && pathname === "/friday-next/health-query/result") {
     return await handleHealthQueryResult(req, res);
+  }
+
+  if (req.method === "POST" && pathname === "/friday-next/calendar/result") {
+    return await handleCalendarResult(req, res);
   }
 
   if (

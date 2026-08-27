@@ -62,6 +62,7 @@ iOS App ←--HTTP/SSE--→ Friday Plugin ←--OpenClaw Plugin API--→ Gateway +
    - `GET /friday-next/files/:id` — file download (`handleFilesDownload`)
    - `POST /friday-next/cancel` — abort a run (`handleCancel`)
    - `POST /friday-next/health-query/result` — iPhone HealthKit RPC result (`handleHealthQueryResult`); pairs with `fridaynext_health_query` (SSE `fridaynext-health-query`) and `fridaynext_health_log` (SSE `fridaynext-health-log`). Does not use OpenClaw `nodes`.
+   - `POST /friday-next/calendar/result` — iPhone EventKit RPC result (`handleCalendarResult`); pairs with `fridaynext_calendar_query` (SSE `fridaynext-calendar-query`) and `fridaynext_calendar_log` (SSE `fridaynext-calendar-log`). Same request/response pattern as health; two tools share one route. Introduced in `1.0.27`.
    - `POST /friday-next/device-approve` — device trust approval (`handleDeviceApprove`)
    - `POST /friday-next/nodes-approve` — node pairing approval (`handleNodesApprove`)
    - `PUT|GET /friday-next/sessions/settings` — read/write session settings (`handleSessionsSettings`)
@@ -146,7 +147,7 @@ leave the gateway's armed timers on the old schedule, so the methods are the onl
 
 ## SSE event names
 
-`connected` | `agent` | `deliver` | `tool-hook` | `outbound` | `ping` | `subagent` | `approval` | `session-status` | `talk` | `fridaynext-health-query` | `fridaynext-health-log`
+`connected` | `agent` | `deliver` | `tool-hook` | `outbound` | `ping` | `subagent` | `approval` | `session-status` | `talk` | `fridaynext-health-query` | `fridaynext-health-log` | `fridaynext-calendar-query` | `fridaynext-calendar-log`
 
 `fridaynext-health-query` / `fridaynext-health-log` are device RPCs (not chat): the plugin tools broadcast them, the iPhone reads or writes HealthKit, then `POST /friday-next/health-query/result`. They do **not** go through OpenClaw `nodes` / `node.invoke`.
 
