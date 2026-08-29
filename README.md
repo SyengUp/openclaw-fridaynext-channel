@@ -54,13 +54,24 @@ agent is in your pocket — with your phone acting as an OpenClaw **channel and 
 agent can reach your canvas, location, and interactive UI from anywhere.
 
 ```bash
-curl -fsSL https://gw.syengup.host/v1/friday-next/install.sh | sh
+npx -y @syengup/friday-channel-next@beta --beta
 ```
 
-On native Windows (PowerShell; there is no `sh`):
+One command for every platform (macOS, Linux, native Windows) — the installer probes
+npmjs.org vs npmmirror itself and installs from the faster one. The `@beta` line is
+pinned because Windows support currently ships only on the beta dist-tag (the stable
+installer dies with `未找到 openclaw` on native Windows); drop `@beta --beta` once a
+stable release carries the win32 support.
+
+In mainland China, `npx` fetching the installer from registry.npmjs.org can hang; the
+bootstrap scripts probe first and pick the mirror for you:
+
+```bash
+curl -fsSL https://gw.syengup.host/v1/friday-next/install.sh | sh -s -- --beta
+```
 
 ```powershell
-iwr -useb https://gw.syengup.host/v1/friday-next/install.ps1 | iex
+iex "& { $(iwr -useb https://gw.syengup.host/v1/friday-next/install.ps1) } -Beta"
 ```
 
 Then open FridayNext and follow the in-app setup — no command line required after that.
