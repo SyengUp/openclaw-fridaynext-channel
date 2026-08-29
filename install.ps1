@@ -9,6 +9,11 @@
 #   iex "& { $(iwr -useb https://gw.syengup.host/v1/friday-next/install.ps1) } -Beta"
 # (`iex`-piped scripts cannot take arguments, so the beta form wraps it in a
 # scriptblock. $env:FRIDAY_CHANNEL_NEXT_CHANNEL = "beta" works too.)
+#
+# After the QR prints, an interactive console waits for a key so a double-clicked
+# PowerShell window (or `powershell -File`) does not vanish before they can scan.
+# SSH / redirected stdin / FRIDAY_INSTALL_NO_PAUSE skip the wait. Do not `exit`
+# after `iwr | iex` — that would close the user's session.
 param([switch]$Beta)
 
 $ErrorActionPreference = "Stop"
@@ -77,4 +82,29 @@ $npxArgs = @("-y", $spec)
 if ($betaRequested) { $npxArgs += "--beta" }
 
 & npx @npxArgs
-exit $LASTEXITCODE
+$installExit = $LASTEXITCODE
+
+# `iwr | iex` runs this script *inside* the user's PowerShell session. `exit` would
+# kill that session — and a `powershell -Command` window would vanish with the QR.
+# Keep the window up so they can scan; skip when stdin isn't a console (CI / SSH).
+$shouldPause = -not $env:FRIDAY_INSTALL_NO_PAUSE
+if ($shouldPause) {
+  try { if ([Console]::IsInputRedirected) { $shouldPause = $false } } catch {}
+}
+if ($shouldPause -and ($env:SSH_CLIENT -or $env:SSH_CONNECTION)) { $shouldPause = $false }
+if ($shouldPause -and $Host.Name -eq "ConsoleHost") {
+  $zh = ($PSUICulture -like "zh*") -or ($env:FRIDAY_INSTALL_LANG -like "zh*")
+  Write-Host ""
+  if ($zh) { Write-Host "扫完码后按任意键关闭" -ForegroundColor DarkGray }
+  else { Write-Host "Press any key after scanning" -ForegroundColor DarkGray }
+  try { $null = $Host.UI.RawUI.ReadKey("NoEcho,IncludeKeyDown") }
+  catch { Read-Host " " | Out-Null }
+}
+
+# Don't `exit` — that closes an iex'd session. -File callers still get this as the
+# script's result; interactive hosts just return to the prompt.
+if ($MyInvocation.InvocationName -eq "." -or $MyInvocation.Line -match "iex") {
+  # stay in the caller's session
+} elseif ($installExit -ne 0) {
+  exit $installExit
+}
