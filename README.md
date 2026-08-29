@@ -22,13 +22,21 @@ there, and you can jump in at any moment.
 | Feature | Why |
 | --- | --- |
 | 🎨 **Interactive canvas** | Your agent pushes live web content, dashboards, and interactive UIs right into the conversation. |
+| 🗣️ **Talk in real time** | Full voice conversations with your agent — speak naturally, and it can run tools and check facts mid-call before answering. |
+| 🔊 **Listen to answers** | Built-in text-to-speech reads responses aloud while you're on the move. |
+| 📅 **Calendar & Reminders** | Your agent reads your schedule and writes back: "what's today look like?" and "remind me to call the bank Tuesday" become real events and reminders, alarms included. |
+| ❤️ **Health, both ways** | Ask about sleep, steps, or caffeine — the agent reads Apple Health, and can log meals, water, caffeine, and body measurements back into it. |
 | ⏰ **Scheduled tasks** | Set recurring jobs from your phone and let your agent work on a schedule. |
 | 🔔 **Proactive notifications** | Your agent reaches out when something needs you — right in your notification inbox. |
 | 📎 **Share anything** | Send links, text, photos, and files to your agent straight from the iOS share sheet. |
-| 🔊 **Listen to answers** | Built-in text-to-speech reads responses aloud while you're on the move. |
 | 🌍 **Reach it anywhere** | Optional FridayTunnel relay keeps you connected to your gateway when you're away from home. |
 | 🗂️ **Organize your AI** | Multiple agents, multiple servers, per-agent settings, and history that syncs across your devices. |
 | 🖼️ **Beautiful by design** | A native iOS experience built for speed and elegance — from the first message to the last. |
+
+Calendar, Reminders, and Health access are agent **tools** (`fridaynext_calendar_query/log`,
+`fridaynext_health_query/log`): they run over your own Friday SSE channel to your paired
+iPhone, behind separate read and write toggles you control in the app — the phone has to
+be online, and nothing is written without the write toggle on.
 
 ## A glimpse inside
 
@@ -51,7 +59,8 @@ Available now on the App Store for iPhone. Free to download.
 `@syengup/friday-channel-next` is the OpenClaw side of FridayNext: a channel plugin that
 connects the app to your own OpenClaw gateway. Install it once, pair your iPhone, and your
 agent is in your pocket — with your phone acting as an OpenClaw **channel and node**, so your
-agent can reach your canvas, location, and interactive UI from anywhere.
+agent can reach your canvas, location, and interactive UI from anywhere, talk with you by
+voice, and read or write your calendar, reminders, and Apple Health when you allow it.
 
 ```bash
 npx -y @syengup/friday-channel-next@beta --beta
