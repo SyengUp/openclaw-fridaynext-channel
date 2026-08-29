@@ -11,6 +11,7 @@
  */
 
 import type { IncomingMessage, ServerResponse } from "node:http";
+import { isAbsolute } from "node:path";
 import { fileURLToPath } from "node:url";
 import { getFridayNextRuntime } from "../../runtime.js";
 import { extractBearerToken } from "../middleware/auth.js";
@@ -39,16 +40,20 @@ type SubagentSessionApi = {
  * remote `http(s)://` / `data:` URLs are NOT local paths — never feed them to
  * `resolveMediaAttachment` (it would mis-treat them as paths and break valid URLs).
  */
-function serverLocalPathForImageUrl(url: string): string | null {
+/** Exported for unit tests (POSIX `/abs`, Windows `C:\abs`, `file://`). */
+export function serverLocalPathForImageUrl(url: string): string | null {
   if (url.startsWith("file://")) {
     try {
       return fileURLToPath(url);
     } catch {
-      return url.slice("file://".length);
+      // Malformed file URL — don't guess by slicing; a Windows `file:///C:/…`
+      // that failed to parse would become `\Users\…` if we only strip `file://`.
+      return null;
     }
   }
   if (url.startsWith("/friday-next/files/")) return null;
-  if (url.startsWith("/")) return url;
+  // POSIX `/abs` and Windows `C:\abs` / `C:/abs` are local; http(s)/data are not.
+  if (isAbsolute(url) || /^[A-Za-z]:[\\/]/.test(url)) return url;
   return null;
 }
 

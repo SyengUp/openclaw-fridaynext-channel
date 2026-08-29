@@ -3,7 +3,8 @@ import { EventEmitter } from "node:events";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { handleHistoryMessages } from "./history-messages.js";
+import { fileURLToPath } from "node:url";
+import { handleHistoryMessages, serverLocalPathForImageUrl } from "./history-messages.js";
 import { setFridayNextRuntime } from "../../runtime.js";
 import {
   setFridayAgentForwardRuntime,
@@ -296,5 +297,32 @@ describe("handleHistoryMessages", () => {
     );
     const body = JSON.parse(res.body);
     expect(body.messages.map((m: any) => m.id)).toEqual(["a1"]);
+  });
+});
+
+describe("serverLocalPathForImageUrl", () => {
+  it("keeps POSIX absolute and file:// URLs as local paths", () => {
+    expect(serverLocalPathForImageUrl("/Users/me/a.jpg")).toBe("/Users/me/a.jpg");
+    expect(serverLocalPathForImageUrl("file:///Users/me/a.jpg")).toBe("/Users/me/a.jpg");
+  });
+
+  it("treats Windows drive paths as local even on a POSIX test host", () => {
+    expect(serverLocalPathForImageUrl("C:\\Users\\tempuser\\.openclaw\\media\\inbound\\a.jpg")).toBe(
+      "C:\\Users\\tempuser\\.openclaw\\media\\inbound\\a.jpg",
+    );
+    expect(serverLocalPathForImageUrl("C:/Users/tempuser/.openclaw/media/inbound/a.jpg")).toBe(
+      "C:/Users/tempuser/.openclaw/media/inbound/a.jpg",
+    );
+  });
+
+  it("decodes file:///C:/ URLs via fileURLToPath", () => {
+    const href = "file:///C:/Users/tempuser/.openclaw/media/inbound/a.jpg";
+    expect(serverLocalPathForImageUrl(href)).toBe(fileURLToPath(href));
+  });
+
+  it("does not treat gateway or remote URLs as local files", () => {
+    expect(serverLocalPathForImageUrl("/friday-next/files/abc")).toBeNull();
+    expect(serverLocalPathForImageUrl("https://example.com/a.jpg")).toBeNull();
+    expect(serverLocalPathForImageUrl("data:image/png;base64,xx")).toBeNull();
   });
 });

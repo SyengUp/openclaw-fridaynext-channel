@@ -55,6 +55,7 @@ import {
 import { runFridayDispatch } from "../../agent/dispatch-bridge.js";
 import { ensureSubagentSpawnScope } from "../../agent/operator-scope.js";
 import { saveInboundMediaBuffer } from "../../agent/media-bridge.js";
+import { pathToFileURL } from "node:url";
 import {
   decodeRefURI,
   encodeRefURI,
@@ -475,7 +476,7 @@ async function buildBodyForAgentWithAttachments(
         const saved = await saveInboundMediaBuffer(plain, ossRef.mime, ossRef.name);
         if (saved.id && saved.path) {
           if (ossRef.name) rememberInboundMediaName(saved.path, ossRef.name, ossRef.mime);
-          mediaRefs.push(`[media attached: file://${saved.path}]`);
+          mediaRefs.push(`[media attached: ${pathToFileURL(saved.path).href}]`);
         }
       }
       continue;
@@ -489,7 +490,7 @@ async function buildBodyForAgentWithAttachments(
       // the transcript records that path — stash the original name now so history rebuild
       // can restore it instead of surfacing the uuid.
       if (filename) rememberInboundMediaName(saved.path, filename, mimeType);
-      mediaRefs.push(`[media attached: file://${saved.path}]`);
+      mediaRefs.push(`[media attached: ${pathToFileURL(saved.path).href}]`);
     }
   }
 

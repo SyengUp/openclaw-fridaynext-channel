@@ -1,4 +1,6 @@
 import { describe, expect, it } from "vitest";
+import { homedir } from "node:os";
+import { join } from "node:path";
 import { resolveFridayNextConfig } from "./config.js";
 
 describe("resolveFridayNextConfig", () => {
@@ -8,6 +10,7 @@ describe("resolveFridayNextConfig", () => {
     expect(cfg.logLevel).toBe("info");
     expect(cfg.sseKeepaliveSec).toBe(30);
     expect(cfg.publicAccess.enabled).toBe(true);
+    expect(cfg.historyDir).toBe(join(homedir(), ".openclaw", "friday-next", "history"));
   });
 
   it("keeps an operator-only hard stop for zero-egress deployments", () => {

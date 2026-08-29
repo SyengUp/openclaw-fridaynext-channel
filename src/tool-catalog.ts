@@ -15,6 +15,7 @@
 
 import fs from "node:fs";
 import path from "node:path";
+import { importAbsoluteModule } from "./import-absolute-module.js";
 import { resolveOpenClawRoot } from "./skills-discovery.js";
 import { normalizeAgentId } from "./agent-id.js";
 
@@ -94,7 +95,7 @@ async function locateChannelRegistryFns(): Promise<ChannelRegistryFns | null> {
     // Only the chunk that re-exports both helpers by their real names is usable.
     if (!content.includes("pinActivePluginChannelRegistry")) continue;
     try {
-      const mod = (await import(path.join(distDir, file))) as Record<string, unknown>;
+      const mod = (await importAbsoluteModule(path.join(distDir, file))) as Record<string, unknown>;
       const pin = mod.pinActivePluginChannelRegistry;
       const get = mod.getActivePluginChannelRegistry;
       if (typeof pin === "function" && typeof get === "function") {
@@ -164,7 +165,7 @@ async function locateBuildFn(): Promise<BuildFn | null> {
     }
     if (!content.includes("function buildToolsCatalogResult")) continue;
     try {
-      const mod = (await import(path.join(distDir, file))) as Record<string, unknown>;
+      const mod = (await importAbsoluteModule(path.join(distDir, file))) as Record<string, unknown>;
       if (typeof mod.buildToolsCatalogResult === "function")
         return mod.buildToolsCatalogResult as BuildFn;
       // ≥2026.7.1: the builder is module-private; adapt the gateway-method handler map.

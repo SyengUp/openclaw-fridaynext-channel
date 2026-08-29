@@ -32,7 +32,11 @@ export function classifyInstallSourceFromLoadedPath(
   loadedPath: string | null | undefined,
 ): InstallSource {
   if (!loadedPath) return "unknown";
-  return loadedPath.includes("/.openclaw/npm/projects/") ? "npm" : "path";
+  // Win32 `api.source` uses backslashes (`C:\Users\…\.openclaw\npm\projects\…`).
+  // Normalize first so the managed-dir check is separator-agnostic; POSIX paths
+  // have no `\` so this is a no-op there.
+  const normalized = loadedPath.replace(/\\/g, "/");
+  return normalized.includes("/.openclaw/npm/projects/") ? "npm" : "path";
 }
 
 /**

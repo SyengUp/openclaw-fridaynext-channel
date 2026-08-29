@@ -1,5 +1,6 @@
 import { existsSync, readdirSync, realpathSync } from "node:fs";
 import { delimiter, dirname, join } from "node:path";
+import { importAbsoluteModule } from "../import-absolute-module.js";
 
 // Results come from the untyped OpenClaw dist module, so the resolved shapes are
 // `any` at this host boundary — callers read dynamic fields (.pending, .status, …).
@@ -78,7 +79,7 @@ export async function loadNodePairingModule(): Promise<NodePairingModule> {
   // ESM import() returns the minified export names (r, t, …) because the
   // bundled module uses `export { listNodePairing as r, … }`.  Resolve the
   // correct functions by Function.name, which preserves the original name.
-  const mod = await import(join(dist, file));
+  const mod = (await importAbsoluteModule(join(dist, file))) as Record<string, unknown>;
   let listNodePairing: ListNodePairingFn | undefined;
   let approveNodePairing: ApproveNodePairingFn | undefined;
   for (const value of Object.values(mod)) {

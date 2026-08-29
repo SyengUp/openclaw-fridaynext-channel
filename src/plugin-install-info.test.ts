@@ -21,10 +21,30 @@ describe("classifyInstallSourceFromLoadedPath", () => {
     ).toBe("npm");
   });
 
+  it("treats a Windows managed npm projects path as npm (backslash or mixed seps)", () => {
+    // Live VM 2026-08-29: api.source uses Win32 separators; a POSIX-only
+    // `includes("/.openclaw/npm/projects/")` classified this as a dev checkout.
+    expect(
+      classifyInstallSourceFromLoadedPath(
+        "C:\\Users\\tempuser\\.openclaw\\npm\\projects\\syengup-friday-channel-next-ef89e139a1__openclaw-generation__g-14c0021a0747025b\\node_modules\\@syengup\\friday-channel-next\\dist\\index.js",
+      ),
+    ).toBe("npm");
+    expect(
+      classifyInstallSourceFromLoadedPath(
+        "C:/Users/me/.openclaw/npm/projects/syengup-friday-channel-next-ef89e139a1/node_modules/@syengup/friday-channel-next",
+      ),
+    ).toBe("npm");
+  });
+
   it("treats a dev/link checkout path as path", () => {
     expect(
       classifyInstallSourceFromLoadedPath(
         "/Users/me/Documents/Project/Friday-Next/openclaw-fridaynext-channel/dist/index.js",
+      ),
+    ).toBe("path");
+    expect(
+      classifyInstallSourceFromLoadedPath(
+        "C:\\Users\\me\\Documents\\Project\\Friday-Next\\openclaw-fridaynext-channel\\dist\\index.js",
       ),
     ).toBe("path");
   });
