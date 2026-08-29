@@ -57,6 +57,12 @@ agent can reach your canvas, location, and interactive UI from anywhere.
 curl -fsSL https://gw.syengup.host/v1/friday-next/install.sh | sh
 ```
 
+On native Windows (PowerShell; there is no `sh`):
+
+```powershell
+iwr -useb https://gw.syengup.host/v1/friday-next/install.ps1 | iex
+```
+
 Then open FridayNext and follow the in-app setup — no command line required after that.
 
 ## Links

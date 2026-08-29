@@ -1,7 +1,7 @@
 #!/usr/bin/env node
-import { execSync } from "node:child_process";
+import { execSync, spawn } from "node:child_process";
 import { createSocket as dgramCreateSocket } from "node:dgram";
-import { existsSync, readFileSync, writeFileSync, rmSync } from "node:fs";
+import { existsSync, openSync, readFileSync, writeFileSync, rmSync } from "node:fs";
 import { homedir, networkInterfaces } from "node:os";
 import { join } from "node:path";
 import { createInstallerUI } from "./install-ui.js";
@@ -21,6 +21,17 @@ function realHome() {
 
 const USER_HOME = realHome();
 const OPENCLAW_CONFIG = join(USER_HOME, ".openclaw", "openclaw.json");
+
+// Native Windows: non-interactive shells often omit `%APPDATA%\npm`, where `openclaw.cmd`
+// and `npx.cmd` live. Prepend it (and the default Node.js dir) so `has("openclaw")` and
+// the later detached `gateway run` resolve the same way a normal desktop PowerShell would.
+if (process.platform === "win32") {
+  const extra = [
+    process.env.APPDATA ? join(process.env.APPDATA, "npm") : "",
+    join(process.env.ProgramFiles || "C:\\Program Files", "nodejs"),
+  ].filter((p) => p && existsSync(p));
+  if (extra.length) process.env.PATH = [...extra, process.env.PATH || ""].join(";");
+}
 
 // All output goes through the UI module (install-ui.js) — one line per step, no
 // prose. `scripts/preview-install-ui.mjs` drives the same module with fake timings
@@ -104,6 +115,17 @@ const DIST_TAG =
   process.argv.includes("--beta") || process.env.FRIDAY_CHANNEL_NEXT_CHANNEL === "beta"
     ? "beta"
     : "latest";
+
+// Re-run hint printed on failure. Native Windows has no `sh` — the PowerShell equivalent
+// (install.ps1) takes arguments via the scriptblock wrap, since `iwr | iex` cannot take any.
+const RERUN_CMD =
+  process.platform === "win32"
+    ? DIST_TAG === "beta"
+      ? 'iex "& { $(iwr -useb https://gw.syengup.host/v1/friday-next/install.ps1) } -Beta"'
+      : "iwr -useb https://gw.syengup.host/v1/friday-next/install.ps1 | iex"
+    : DIST_TAG === "beta"
+      ? "curl -fsSL https://gw.syengup.host/v1/friday-next/install.sh | sh -s -- --beta"
+      : "curl -fsSL https://gw.syengup.host/v1/friday-next/install.sh | sh";
 
 // Registry selection. Must stay in lockstep with src/npm-registry.ts:
 // parallel latency probe, faster wins, close race (150ms) prefers official.
@@ -273,12 +295,7 @@ try {
 } catch (e) {
   const msg = (e.stderr || e.stdout || e.message || "").toString();
   installStep.fail();
-  die(
-    msg.trim().split("\n").pop() || T.failInstall,
-    DIST_TAG === "beta"
-      ? "curl -fsSL https://gw.syengup.host/v1/friday-next/install.sh | sh -s -- --beta"
-      : "curl -fsSL https://gw.syengup.host/v1/friday-next/install.sh | sh",
-  );
+  die(msg.trim().split("\n").pop() || T.failInstall, RERUN_CMD);
 }
 
 // --------------- configure OpenClaw ---------------
@@ -582,7 +599,40 @@ async function verifyGateway(url, token, retries = 30) {
   return { ok: false, reason: T.reasonTimeout };
 }
 
+/** Start the gateway detached on native Windows, where the managed Scheduled Task start can
+ * silently lose the process. Logs land in ~/.openclaw/gateway-installer.*.log so a failure
+ * here is diagnosable after the installer exits. */
+function selfStartGatewayWindows() {
+  try {
+    const logDir = join(USER_HOME, ".openclaw");
+    const out = openSync(join(logDir, "gateway-installer.out.log"), "a");
+    const err = openSync(join(logDir, "gateway-installer.err.log"), "a");
+    // shell:true → cmd.exe resolves openclaw.cmd from PATH; detached so the gateway outlives
+    // both this installer and the console it was launched from.
+    const child = spawn("openclaw gateway run", {
+      shell: true,
+      detached: true,
+      stdio: ["ignore", out, err],
+      windowsHide: true,
+    });
+    child.unref();
+  } catch {
+    /* the verify loop below reports the truth either way */
+  }
+}
+
 const verifyStep = ui.step(T.stepVerify);
+// Native Windows: the managed restart can report success while the Scheduled-Task-spawned
+// gateway dies silently in session 0 (observed 2026-08-29 on a Parallels VM — the installer
+// then burned the whole verify window on a port nobody owned). Probe briefly; if nobody
+// answers, start the gateway detached ourselves and let the full verify below decide.
+if (process.platform === "win32") {
+  const quick = await verifyGateway(verifyUrl, gatewayToken, 3);
+  if (!quick.ok) {
+    selfStartGatewayWindows();
+    restartStep.detail(T.detailRestartSelfStart);
+  }
+}
 // No managed service → nobody is going to start the gateway for us; a running foreground
 // gateway answers on the first few probes, so don't sit through the full 30s timeout.
 const verified = await verifyGateway(verifyUrl, gatewayToken, gatewayServiceUnavailable ? 5 : 30);
@@ -596,22 +646,9 @@ if (!verified.ok) {
   // gateway process isn't running (and can't be, as a service). Saying "Installation FAILED"
   // here sends the user chasing a phantom install problem — tell them the one real next step.
   if (gatewayServiceUnavailable) {
-    die(
-      T.failGatewayNoService,
-      "openclaw gateway run",
-      DIST_TAG === "beta"
-        ? "curl -fsSL https://gw.syengup.host/v1/friday-next/install.sh | sh -s -- --beta"
-        : "curl -fsSL https://gw.syengup.host/v1/friday-next/install.sh | sh",
-    );
+    die(T.failGatewayNoService, "openclaw gateway run", RERUN_CMD);
   }
-  die(
-    T.failGateway,
-    "openclaw gateway status",
-    "openclaw gateway restart",
-    DIST_TAG === "beta"
-      ? "curl -fsSL https://gw.syengup.host/v1/friday-next/install.sh | sh -s -- --beta"
-      : "curl -fsSL https://gw.syengup.host/v1/friday-next/install.sh | sh",
-  );
+  die(T.failGateway, "openclaw gateway status", "openclaw gateway restart", RERUN_CMD);
 }
 verifyStep.ok(verified.version ? `friday-next ${verified.version}` : "");
 

@@ -26,6 +26,12 @@ installs the channel plugin, and enables it (including the canvas capability):
 curl -fsSL https://gw.syengup.host/v1/friday-next/install.sh | sh
 ```
 
+Native Windows (PowerShell):
+
+```powershell
+iwr -useb https://gw.syengup.host/v1/friday-next/install.ps1 | iex
+```
+
 Then open FridayNext on your iPhone and follow the in-app setup to pair with your gateway.
 The installer restarts the gateway automatically — no manual restart needed.
 

@@ -1,6 +1,6 @@
 {
   "name": "@syengup/friday-channel-next",
-  "version": "1.0.27-beta.2",
+  "version": "1.0.27-beta.3",
   "description": "OpenClaw iOS channel & node — FridayNext turns your iPhone into a full OpenClaw client",
   "keywords": [
     "openclaw",
@@ -32,6 +32,7 @@
     "install-ui.js",
     "install-i18n.js",
     "install.sh",
+    "install.ps1",
     "tsconfig.json",
     "openclaw.plugin.json"
   ],
