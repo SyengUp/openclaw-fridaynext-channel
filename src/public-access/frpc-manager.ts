@@ -26,11 +26,16 @@ import {
   renameSync,
 } from "node:fs";
 import { promisify } from "node:util";
-import { createHash, createPublicKey } from "node:crypto";
+import { createHash, createPublicKey, X509Certificate } from "node:crypto";
 import { homedir, platform, arch, networkInterfaces } from "node:os";
 import { join } from "node:path";
 import type { Server } from "node:http";
 import { startFilterProxy } from "./filter-proxy.js";
+import {
+  createCsrPem,
+  createSelfSignedCertPem,
+  generateRsaKeyPairPem,
+} from "./cert-selfsign.js";
 import { verifySession } from "../attest/attest-store.js";
 import { resolveFridayNextConfig } from "../config.js";
 import { getHostOpenClawConfigSnapshot } from "../host-config.js";
@@ -44,17 +49,26 @@ const FRP_SHA256: Record<string, string> = {
   "frp_0.69.1_darwin_arm64": "310012e2f1dcf3cdde2605d29b95340b686c94d1680a23711d58efeffc02f64e",
   "frp_0.69.1_linux_amd64": "7be257b72dbbc60bcb3e0e25a5afd1dfac7b63f897084864d3c956dd3d5674e1",
   "frp_0.69.1_linux_arm64": "bbc0c75e896af3f292fb46ba09c844a04fa9b5ea3530c039c7af20637f836355",
+  // Windows releases ship .zip (not .tar.gz) — see frpcArchiveFileName.
+  "frp_0.69.1_windows_amd64": "829ac915f8655d4d4e021b8db61b46c3445205ed80d32b04cda7fa89d87c46e0",
+  "frp_0.69.1_windows_arm64": "9b88e6eefc5d9ea2a1d5869026287e269e3d1486ac5bb08f7b4d2b26bdd6166d",
 };
 
 export function expectedFrpcArchiveSHA256(base: string): string | null {
   return FRP_SHA256[base] ?? null;
 }
 
+/** Archive file name for a platform base — Windows releases are .zip, everything else .tar.gz. */
+export function frpcArchiveFileName(base: string): string {
+  return `${base}.${base.includes("_windows_") ? "zip" : "tar.gz"}`
+}
+
 export function frpcDownloadSources(controlPlaneUrl: string, base: string): string[] {
   const controlPlaneBase = controlPlaneUrl.replace(/\/+$/, "");
+  const file = frpcArchiveFileName(base);
   return [
-    `${controlPlaneBase}/v1/frpc/v${FRP_VERSION}/${base}.tar.gz`,
-    `https://github.com/fatedier/frp/releases/download/v${FRP_VERSION}/${base}.tar.gz`,
+    `${controlPlaneBase}/v1/frpc/v${FRP_VERSION}/${file}`,
+    `https://github.com/fatedier/frp/releases/download/v${FRP_VERSION}/${file}`,
   ];
 }
 // Override is primarily for hermetic tests and managed deployments. Production defaults to the
@@ -287,7 +301,7 @@ function ensureDir(): void {
 }
 
 function frpcPath(): string {
-  return join(DATA_DIR, "frpc");
+  return join(DATA_DIR, platform() === "win32" ? "frpc.exe" : "frpc");
 }
 
 /**
@@ -370,14 +384,23 @@ async function ensureBinary(controlPlaneUrl: string, log: Logger): Promise<void>
   const installed = existsSync(frpcVersionPath())
     ? readFileSync(frpcVersionPath(), "utf8").trim()
     : "";
+  // Migration: pre-Windows-support builds mis-downloaded the LINUX binary as `frpc` on win32
+  // (platform() fell through to "linux"). A unix-binary + marker would early-return here and
+  // keep the broken install forever, so purge it and fall through to the real download.
+  if (platform() === "win32" && existsSync(join(DATA_DIR, "frpc"))) {
+    rmSync(join(DATA_DIR, "frpc"), { force: true });
+    rmSync(frpcVersionPath(), { force: true });
+  }
   if (existsSync(p) && installed === FRP_VERSION) return;
   ensureDir();
-  const plat = platform() === "darwin" ? "darwin" : "linux";
+  const plat =
+    platform() === "darwin" ? "darwin" : platform() === "win32" ? "windows" : "linux";
   const a = arch() === "arm64" ? "arm64" : "amd64";
   const base = `frp_${FRP_VERSION}_${plat}_${a}`;
+  const binName = plat === "windows" ? "frpc.exe" : "frpc";
   const expectedSHA256 = expectedFrpcArchiveSHA256(base);
   if (!expectedSHA256) throw new Error(`unsupported frpc platform: ${plat}/${a}`);
-  const tgz = join(DATA_DIR, "frp.tgz");
+  const tgz = join(DATA_DIR, "frp-download");
   const partial = `${tgz}.part`;
   const sources = frpcDownloadSources(controlPlaneUrl, base);
   const failures: string[] = [];
@@ -419,10 +442,19 @@ async function ensureBinary(controlPlaneUrl: string, log: Logger): Promise<void>
   if (failures.length) {
     throw new Error(`frpc download failed (${failures.join("; ")})`);
   }
-  execFileSync("tar", ["xzf", tgz, "-C", DATA_DIR, "--strip-components=1", `${base}/frpc`], {
-    timeout: 60_000,
-  });
-  chmodSync(p, 0o755);
+  if (plat === "windows") {
+    // frp ships .zip on Windows; bsdtar (C:\Windows\System32\tar.exe, Win10 1803+) reads it.
+    execFileSync(
+      "tar",
+      ["-xf", tgz, "-C", DATA_DIR, "--strip-components=1", `${base}/${binName}`],
+      { timeout: 60_000 },
+    );
+  } else {
+    execFileSync("tar", ["xzf", tgz, "-C", DATA_DIR, "--strip-components=1", `${base}/${binName}`], {
+      timeout: 60_000,
+    });
+  }
+  if (platform() !== "win32") chmodSync(p, 0o755);
   writeFileSync(frpcVersionPath(), FRP_VERSION);
   log(
     `frpc ${FRP_VERSION} installed (checksum ok)${installed ? ` — upgraded from ${installed}` : ""}`,
@@ -436,8 +468,9 @@ function ensureGatewayKey(): string {
   ensureDir();
   const key = join(DATA_DIR, "gateway-key.pem");
   if (!existsSync(key)) {
-    execFileSync("openssl", ["genrsa", "-out", key, "2048"], { timeout: 30_000 });
-    chmodSync(key, 0o600); // TLS private key — owner-only, same discipline as attest-store
+    // node:crypto rather than the openssl CLI: Windows gateways have no openssl.
+    writeFileSync(key, generateRsaKeyPairPem().privateKeyPem, { mode: 0o600 });
+    if (platform() !== "win32") chmodSync(key, 0o600); // TLS private key — owner-only, same discipline as attest-store
   }
   return key;
 }
@@ -463,24 +496,9 @@ function ensureCert(
   const key = ensureGatewayKey();
   const crt = join(DATA_DIR, crtName);
   if (!existsSync(crt)) {
-    execFileSync(
-      "openssl",
-      [
-        "req",
-        "-new",
-        "-x509",
-        "-key",
-        key,
-        "-out",
-        crt,
-        "-days",
-        "3650",
-        "-nodes",
-        "-subj",
-        `/CN=${cn}`,
-      ],
-      { timeout: 30_000 },
-    );
+    const keyPem = readFileSync(key, "utf8");
+    const publicKeyPem = createPublicKey(keyPem).export({ type: "spki", format: "pem" });
+    writeFileSync(crt, createSelfSignedCertPem(cn, keyPem, publicKeyPem, 3650));
   }
   return { crt, key, fingerprint: leafFingerprint(crt) };
 }
@@ -490,24 +508,43 @@ function certNameForSub(sub: string): string {
   return `sub-${sub}.pem`;
 }
 
+/** First PEM certificate block of a (possibly fullchain) PEM file. */
+function firstCertPem(pem: string): string {
+  const m = pem.match(/-----BEGIN CERTIFICATE-----[\s\S]*?-----END CERTIFICATE-----/);
+  return m ? m[0] : pem;
+}
+
 /** Leaf SHA-256 fingerprint of a PEM cert/fullchain (lowercase hex, no colons). */
 function leafFingerprint(crtPath: string): string {
-  return execFileSync("openssl", ["x509", "-in", crtPath, "-noout", "-fingerprint", "-sha256"])
-    .toString()
-    .split("=")[1]
-    .replace(/:/g, "")
-    .trim()
+  // X509Certificate.fingerprint256 is the same digest as `openssl x509 -fingerprint -sha256`.
+  return new X509Certificate(firstCertPem(readFileSync(crtPath, "utf8")))
+    .fingerprint256.replace(/:/g, "")
     .toLowerCase();
+}
+
+const X509_VALID_TO_MONTHS: Record<string, number> = {
+  Jan: 0, Feb: 1, Mar: 2, Apr: 3, May: 4, Jun: 5,
+  Jul: 6, Aug: 7, Sep: 8, Oct: 9, Nov: 10, Dec: 11,
+};
+
+/** Parse X509Certificate.validTo ("Aug 26 03:14:52 2036 GMT") without relying on Date's
+ * non-standard format guessing. Returns NaN on anything unexpected. */
+function parseX509ValidTo(validTo: string): number {
+  const m = validTo.match(/^(\w{3})\s+(\d{1,2})\s+(\d{2}):(\d{2}):(\d{2})\s+(\d{4})\s+GMT$/);
+  if (!m) return NaN;
+  const month = X509_VALID_TO_MONTHS[m[1]];
+  if (month === undefined) return NaN;
+  return Date.UTC(Number(m[6]), month, Number(m[2]), Number(m[3]), Number(m[4]), Number(m[5]));
 }
 
 /** True when the cert is missing or expires within 30 days (needs (re)issue). */
 function certNeedsRenewal(crtPath: string): boolean {
   if (!existsSync(crtPath)) return true;
   try {
-    const out = execFileSync("openssl", ["x509", "-in", crtPath, "-noout", "-enddate"]).toString();
-    const m = out.match(/notAfter=(.+)/);
-    if (!m) return true;
-    return new Date(m[1].trim()).getTime() - Date.now() < 30 * 24 * 3600 * 1000;
+    const validTo = new X509Certificate(firstCertPem(readFileSync(crtPath, "utf8"))).validTo;
+    const expiresAt = parseX509ValidTo(validTo);
+    if (!Number.isFinite(expiresAt)) return true;
+    return expiresAt - Date.now() < 30 * 24 * 3600 * 1000;
   } catch {
     return true;
   }
@@ -552,12 +589,10 @@ async function ensureRealCert(
     return { crt, key, fingerprint: leafFingerprint(crt) };
   }
   try {
-    if (!existsSync(key)) {
-      execFileSync("openssl", ["genrsa", "-out", key, "2048"]);
-      chmodSync(key, 0o600); // TLS private key — owner-only
-    }
-    const csrPath = join(DATA_DIR, "gateway.csr");
-    execFileSync("openssl", ["req", "-new", "-key", key, "-out", csrPath, "-subj", `/CN=${cn}`]);
+    ensureGatewayKey(); // creates `key` with node:crypto when missing (no openssl CLI anywhere)
+    const keyPem = readFileSync(key, "utf8");
+    const publicKeyPem = createPublicKey(keyPem).export({ type: "spki", format: "pem" });
+    const csrPem = createCsrPem(cn, keyPem, publicKeyPem);
     const keyHash = createHash("sha256")
       .update(cfg.authToken || "")
       .digest("hex");
@@ -565,7 +600,7 @@ async function ensureRealCert(
       cfg.certSignUrl,
       cfg.relayToken,
       keyHash,
-      readFileSync(csrPath, "utf8"),
+      csrPem,
     );
     writeFileSync(crt, fullchain);
     log(`obtained Let's Encrypt cert for ${cn}`);
@@ -619,7 +654,7 @@ export async function resolveRelayCredentials(
     writeFileSync(cachePath, JSON.stringify({ relayAddr, relayToken, subDomainHost, region }), {
       mode: 0o600,
     });
-    chmodSync(cachePath, 0o600); // `mode` only applies on create — tighten a pre-existing file too
+    if (platform() !== "win32") chmodSync(cachePath, 0o600); // `mode` only applies on create — tighten a pre-existing file too
     log(
       `relay bootstrap: region=${region || "default"} relay=${relayAddr} subDomainHost=${subDomainHost}`,
     );
@@ -754,13 +789,18 @@ type ProxySpec = { subdomain: string; crt: string; key: string };
  * to the same local filter port). Proxy names are namespaced + subdomain-suffixed so they never
  * clash on the shared relay. Returns the config path.
  */
+/** TOML basic-string escape — Windows paths carry backslashes, which TOML reads as escapes. */
+function tomlStr(s: string): string {
+  return s.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
+}
+
 function writeFrpcConfig(cfg: PublicAccessConfig, proxies: ProxySpec[]): string {
   const [host, portRaw] = cfg.relayAddr.split(":");
   const port = Number(portRaw) || 7000;
-  const head = `serverAddr = "${host}"
+  const head = `serverAddr = "${tomlStr(host)}"
 serverPort = ${port}
-auth.token = "${cfg.relayToken}"
-log.to = "${join(DATA_DIR, "frpc.log")}"
+auth.token = "${tomlStr(cfg.relayToken)}"
+log.to = "${tomlStr(join(DATA_DIR, "frpc.log"))}"
 log.level = "info"
 log.maxDays = 3
 `;
@@ -774,14 +814,14 @@ subdomain = "${px.subdomain}"
 [proxies.plugin]
 type = "https2http"
 localAddr = "127.0.0.1:${filterPort(cfg.corePort)}"
-crtPath = "${px.crt}"
-keyPath = "${px.key}"
+crtPath = "${tomlStr(px.crt)}"
+keyPath = "${tomlStr(px.key)}"
 `,
     )
     .join("");
   const p = join(DATA_DIR, "frpc.toml");
   writeFileSync(p, head + blocks, { mode: 0o600 }); // contains the shared relay token — owner-only
-  chmodSync(p, 0o600); // mode above only applies on create; tighten pre-existing files too
+  if (platform() !== "win32") chmodSync(p, 0o600); // mode above only applies on create; tighten pre-existing files too
   return p;
 }
 
@@ -850,19 +890,75 @@ export function pluginFrpcPidsFromProcessList(
     .filter((pid) => Number.isInteger(pid) && pid > 0);
 }
 
-function pluginFrpcProcessIds(confPath: string): number[] {
+/** Platform process list as "pid cmdline" lines: `ps` on unix, PowerShell CIM on Windows
+ * (tasklist has no command lines; WMIC is deprecated). null when neither works. */
+function processListCommand(): string | null {
+  if (platform() === "win32") {
+    try {
+      return execFileSync(
+        "powershell",
+        [
+          "-NoProfile",
+          "-Command",
+          'Get-CimInstance Win32_Process | ForEach-Object { "$($_.ProcessId) $($_.CommandLine)" }',
+        ],
+        { timeout: 15_000, maxBuffer: 16 * 1024 * 1024 },
+      ).toString();
+    } catch {
+      return null;
+    }
+  }
   try {
-    const processList = execFileSync("ps", ["-Ao", "pid=,command="], { timeout: 5_000 }).toString();
-    return pluginFrpcPidsFromProcessList(processList, frpcPath(), confPath);
+    return execFileSync("ps", ["-Ao", "pid=,command="], { timeout: 5_000 }).toString();
   } catch {
-    return [];
+    return null;
   }
 }
 
+function pluginFrpcProcessIds(confPath: string): number[] {
+  const processList = processListCommand();
+  if (processList == null) return [];
+  if (platform() === "win32") {
+    // Windows command lines arrive quoted and backslashed; exact-match never holds there.
+    const exe = frpcPath().toLowerCase();
+    const conf = confPath.toLowerCase();
+    return processList
+      .split("\n")
+      .map((line) => line.trim().match(/^(\d+)\s+(.+)$/))
+      .filter((match): match is RegExpMatchArray => {
+        if (!match) return false;
+        const cmd = match[2].toLowerCase().replace(/["']/g, "");
+        return cmd.includes(exe) && cmd.includes(conf);
+      })
+      .map((match) => Number(match[1]))
+      .filter((pid) => Number.isInteger(pid) && pid > 0);
+  }
+  return pluginFrpcPidsFromProcessList(processList, frpcPath(), confPath);
+}
+
 /** Read a live process's command line for identity verification. Prefers Linux `/proc`
- * (zero external deps), falls back to `ps` on macOS. Returns null if the pid isn't alive
- * (or can't be read) — the caller then reaps nothing, which is the safe outcome. */
+ * (zero external deps), falls back to `ps` on macOS, PowerShell CIM on Windows. Returns null
+ * if the pid isn't alive (or can't be read) — the caller then reaps nothing, which is the
+ * safe outcome. */
 function processCmdline(pid: number): string | null {
+  if (platform() === "win32") {
+    try {
+      const out = execFileSync(
+        "powershell",
+        [
+          "-NoProfile",
+          "-Command",
+          `(Get-CimInstance Win32_Process -Filter "ProcessId=${pid}").CommandLine`,
+        ],
+        { timeout: 10_000 },
+      )
+        .toString()
+        .trim();
+      return out || null;
+    } catch {
+      return null;
+    }
+  }
   try {
     return readFileSync(`/proc/${pid}/cmdline`).toString("utf8").replace(/\0/g, " ");
   } catch {
