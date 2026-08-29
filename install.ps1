@@ -27,8 +27,8 @@ foreach ($dir in @((Join-Path $env:APPDATA "npm"), (Join-Path $env:ProgramFiles 
 }
 
 $PKG = "@syengup/friday-channel-next"
-$OFFICIAL = "https://registry.npmjs.org"
-$MIRROR = "https://registry.npmmirror.com"
+$OfficialUrl = "https://registry.npmjs.org"
+$MirrorUrl = "https://registry.npmmirror.com"
 $PROBE_TIMEOUT = 3
 
 if (-not (Get-Command npx -ErrorAction SilentlyContinue)) {
@@ -52,16 +52,18 @@ function Test-Registry([string]$Url) {
 if ($env:FRIDAY_NPM_REGISTRY) {
   $registry = $env:FRIDAY_NPM_REGISTRY
 } else {
-  $official = Test-Registry $OFFICIAL
-  $mirror = Test-Registry $MIRROR
+  # Names must not collide with $OfficialUrl / $MirrorUrl — PowerShell variables
+  # are case-insensitive, so `$official = …` would clobber `$OfficialUrl`.
+  $officialMs = Test-Registry $OfficialUrl
+  $mirrorMs = Test-Registry $MirrorUrl
 
   # Both unreachable → npmmirror. Typical China failure is official-dead /
   # mirror-fine; preferring official there would recreate the npx hang.
-  if ($null -eq $official -and $null -eq $mirror) { $registry = $MIRROR }
-  elseif ($null -eq $official) { $registry = $MIRROR }
-  elseif ($null -eq $mirror) { $registry = $OFFICIAL }
-  elseif ($mirror + 0.150 -ge $official) { $registry = $OFFICIAL } # close race: official
-  else { $registry = $MIRROR }
+  if ($null -eq $officialMs -and $null -eq $mirrorMs) { $registry = $MirrorUrl }
+  elseif ($null -eq $officialMs) { $registry = $MirrorUrl }
+  elseif ($null -eq $mirrorMs) { $registry = $OfficialUrl }
+  elseif ($mirrorMs + 0.150 -ge $officialMs) { $registry = $OfficialUrl } # close race: official
+  else { $registry = $MirrorUrl }
 }
 
 $env:npm_config_registry = $registry
