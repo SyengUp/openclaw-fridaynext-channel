@@ -12,7 +12,34 @@
  */
 import { createServer, request as httpRequest, type Server } from "node:http";
 import { connect as netConnect } from "node:net";
+import type { Duplex } from "node:stream";
 import { attestGateDecision, ATTEST_REJECTION_BODY } from "../attest/attest-gate.js";
+
+/** Per-server forced-shutdown hook, registered by `startFilterProxy` (see `stopFilterProxy`). */
+const shutdownHooks = new WeakMap<Server, () => void>();
+
+/**
+ * Force the proxy down AND free its listen port. Plain `server.close()` waits for existing
+ * connections to end — and the connections this proxy carries are frpc-relayed SSE streams
+ * (`/friday-next/events`, `setTimeout(0)`) that frpc holds open for hours, so close() never
+ * completed, `corePort+1` stayed bound, and the next tunnel activation retried EADDRINUSE
+ * every 60s against its own corpse. Destroy every connection class instead: in-flight HTTP
+ * (closeAllConnections covers the flowing SSE responses), idle keep-alives, and the upgraded
+ * sockets — which closeAllConnections can't reach because they're detached from the server on
+ * upgrade. Also cancels any pending rebind from the error-retry loop below.
+ */
+export function stopFilterProxy(server: Server): void {
+  const hook = shutdownHooks.get(server);
+  if (hook) {
+    hook();
+    return;
+  }
+  try {
+    server.close();
+  } catch {
+    /* not running */
+  }
+}
 
 // Trusted "this request arrived via the public relay" marker. EVERY public request
 // must traverse this proxy (frpc forwards only here), so stamping it here — after
@@ -138,8 +165,14 @@ export function startFilterProxy(
     req.pipe(upstream);
   });
 
+  // Upgraded sockets are detached from the http server on 'upgrade', so neither close() nor
+  // closeAllConnections() reaches them — track them ourselves for stopFilterProxy.
+  const upgradedSockets = new Set<Duplex>();
+
   // WebSocket / other HTTP upgrades (the node channel at /gateway).
   server.on("upgrade", (req, socket, head) => {
+    upgradedSockets.add(socket);
+    socket.once("close", () => upgradedSockets.delete(socket));
     const url = req.url ?? "/";
     if (!allowed(url)) {
       socket.destroy();
@@ -222,6 +255,26 @@ export function startFilterProxy(
       clearTimeout(retryTimer);
       retryTimer = null;
     }
+  });
+  shutdownHooks.set(server, () => {
+    closed = true; // also disarms a pending rebind (listen() no-ops once closed)
+    if (retryTimer) {
+      clearTimeout(retryTimer);
+      retryTimer = null;
+    }
+    try {
+      server.close();
+    } catch {
+      /* not running */
+    }
+    try {
+      server.closeAllConnections(); // in-flight SSE responses held open by frpc
+      server.closeIdleConnections();
+    } catch {
+      /* not running */
+    }
+    for (const s of upgradedSockets) s.destroy();
+    upgradedSockets.clear();
   });
   listen();
   return server;

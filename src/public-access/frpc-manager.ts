@@ -30,7 +30,7 @@ import { createHash, createPublicKey, X509Certificate } from "node:crypto";
 import { homedir, platform, arch, networkInterfaces } from "node:os";
 import { join } from "node:path";
 import type { Server } from "node:http";
-import { startFilterProxy } from "./filter-proxy.js";
+import { startFilterProxy, stopFilterProxy } from "./filter-proxy.js";
 import {
   createCsrPem,
   createSelfSignedCertPem,
@@ -1117,14 +1117,97 @@ function startCertRenewalTimer(cfg: PublicAccessConfig, cn: string, log: Logger)
   certRenewalTimer = timer;
 }
 
+// ── Cross-process ownership ─────────────────────────────────────────────────
+// Every process that full-registers the plugin used to run public access: the gateway
+// daemon AND every `openclaw agent` CLI run on the same host. Each spawned its own frpc
+// and raced to bind the filter-proxy port (corePort+1) — the loser retried EADDRINUSE
+// forever and the relay saw duplicate proxies. Ownership is a pid file in DATA_DIR: the
+// gateway service (OPENCLAW_SERVICE_KIND=gateway, set by launchd/systemd/schtasks and
+// scrubbed from agent spawns by the core) always claims it, stomping a CLI run that
+// grabbed it while the daemon was down; an ambient process (manual gateway, CLI agent
+// run) claims only when the recorded owner is dead. The standby poll re-validates each
+// cycle, so a stomped instance tears itself down within ~25s.
+
+export type PublicAccessRole = "service" | "ambient";
+
+type PublicAccessOwner = { pid: number; role: PublicAccessRole; claimedAt: string };
+
+function publicAccessRole(): PublicAccessRole {
+  return process.env.OPENCLAW_SERVICE_KIND === "gateway" ? "service" : "ambient";
+}
+
+function ownerPath(dir: string): string {
+  return join(dir, "public-access-owner.json");
+}
+
+function readOwner(dir: string): PublicAccessOwner | null {
+  try {
+    const o = JSON.parse(readFileSync(ownerPath(dir), "utf8")) as Partial<PublicAccessOwner>;
+    if (!Number.isInteger(o.pid) || (o.pid as number) <= 0) return null;
+    if (o.role !== "service" && o.role !== "ambient") return null;
+    return { pid: o.pid as number, role: o.role, claimedAt: String(o.claimedAt ?? "") };
+  } catch {
+    return null;
+  }
+}
+
+function pidAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** Claim cross-process ownership of public access for this process. */
+export function claimPublicAccessOwnership(dir: string, role: PublicAccessRole): boolean {
+  const cur = readOwner(dir);
+  if (cur?.pid === process.pid) return true; // re-entrant bring-up retry
+  const record = JSON.stringify({
+    pid: process.pid,
+    role,
+    claimedAt: new Date().toISOString(),
+  } satisfies PublicAccessOwner);
+  if (!cur) {
+    try {
+      writeFileSync(ownerPath(dir), record, { mode: 0o600, flag: "wx" }); // atomic create
+      return true;
+    } catch {
+      // Lost a create race, or the file exists but is corrupt — re-read and decide below.
+      const again = readOwner(dir);
+      if (again && again.pid !== process.pid && pidAlive(again.pid) && role !== "service") {
+        return false;
+      }
+    }
+  } else if (pidAlive(cur.pid) && role !== "service") {
+    return false; // ambient yields to a live owner
+  }
+  writeFileSync(ownerPath(dir), record, { mode: 0o600 }); // dead/corrupt owner, or service stomp
+  return readOwner(dir)?.pid === process.pid;
+}
+
+export function currentProcessOwnsPublicAccess(dir: string): boolean {
+  return readOwner(dir)?.pid === process.pid;
+}
+
+/** Release only our own record — a stomping successor's file must survive our shutdown. */
+export function releasePublicAccessOwnership(dir: string): void {
+  if (readOwner(dir)?.pid !== process.pid) return;
+  try {
+    rmSync(ownerPath(dir), { force: true });
+  } catch {
+    /* already gone */
+  }
+}
+
 /** Enter FridayTunnel standby. Returns pairing coordinates even when no public proxy is active. */
 export async function startPublicAccess(
   rawCfg: PublicAccessConfig,
   log: Logger,
 ): Promise<PairingInfo | null> {
   let cfg = rawCfg;
-  if (!cfg.enabled) {
-    // Hidden operator hard stop. Normal unentitled users never enter this branch: they stay in
+  if (!cfg.enabled) {    // Hidden operator hard stop. Normal unentitled users never enter this branch: they stay in
     // standby with zero proxies. Reap a prior-process frpc as well so zero-egress is literal.
     const wasRunning = child != null || filterServer != null || cachedPairing != null;
     stopPublicAccess();
@@ -1139,6 +1222,12 @@ export async function startPublicAccess(
   if (baseTunnel && cachedPairing) {
     startGatewaySubdomainPoll(cfg, log);
     return cachedPairing;
+  }
+  if (!claimPublicAccessOwnership(DATA_DIR, publicAccessRole())) {
+    log(
+      `public access already owned by pid ${readOwner(DATA_DIR)?.pid ?? "?"} — staying inert (secondary/CLI instance)`,
+    );
+    return null;
   }
   ensureDir();
 
@@ -1236,11 +1325,7 @@ export async function reconcileServedSubdomains(
       /* already gone */
     }
     if (filterServer) {
-      try {
-        filterServer.close();
-      } catch {
-        /* already closed */
-      }
+      stopFilterProxy(filterServer); // drains relayed SSE/WS so corePort+1 actually frees
       filterServer = null;
     }
     if (healthTimer) {
@@ -1325,6 +1410,12 @@ function startGatewaySubdomainPoll(cfg: PublicAccessConfig, log: Logger): void {
   const poll = async (): Promise<void> => {
     if (stopped || !baseTunnel || !standbyLoop.isCurrent(generation)) {
       standbyLoop.end(generation);
+      return;
+    }
+    if (!currentProcessOwnsPublicAccess(DATA_DIR)) {
+      log("public access ownership claimed by another process — tearing down local tunnel");
+      standbyLoop.end(generation);
+      stopPublicAccess();
       return;
     }
     let retryDelay = STANDBY_NEXT_POLL_MS;
@@ -1415,13 +1506,10 @@ export function stopPublicAccess(): void {
     child = null;
   }
   if (filterServer) {
-    try {
-      filterServer.close();
-    } catch {
-      /* ignore */
-    }
+    stopFilterProxy(filterServer); // drains relayed SSE/WS so corePort+1 actually frees
     filterServer = null;
   }
+  releasePublicAccessOwnership(DATA_DIR);
 }
 
 /** Test/introspection: the subdomains currently written into frpc.toml. */
