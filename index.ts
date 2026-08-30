@@ -93,6 +93,21 @@ function isCommandTool(toolName: unknown): boolean {
   return typeof toolName === "string" && COMMAND_TOOL_NAMES.has(toolName.trim().toLowerCase());
 }
 
+function registerFridayNextPluginTools(api: OpenClawPluginApi): void {
+  api.registerTool((ctx: { sessionKey?: string }) => createHealthQueryTool(ctx), {
+    names: ["fridaynext_health_query"],
+  });
+  api.registerTool((ctx: { sessionKey?: string }) => createHealthLogTool(ctx), {
+    names: ["fridaynext_health_log"],
+  });
+  api.registerTool((ctx: { sessionKey?: string }) => createCalendarQueryTool(ctx), {
+    names: ["fridaynext_calendar_query"],
+  });
+  api.registerTool((ctx: { sessionKey?: string }) => createCalendarLogTool(ctx), {
+    names: ["fridaynext_calendar_log"],
+  });
+}
+
 /** Best-effort flatten of an after-hook tool result into the stdout string the app expects. */
 function coerceCommandOutput(result: unknown): string {
   if (typeof result === "string") return result;
@@ -145,6 +160,15 @@ export default defineChannelPluginEntry({
   plugin: fridayNextChannelPlugin,
   setRuntime: setFridayNextRuntime,
   registerFull: (api: OpenClawPluginApi) => {
+    // `tool-discovery` cold load: when the host resolves plugin-owned tools on demand, the SDK's
+    // entry wrapper calls `registerFull` WITHOUT `setRuntime`/`registerChannel` (see
+    // `defineChannelPluginEntry.register`). Anything dereferencing `getFridayNextRuntime()`
+    // throws "Friday Next runtime not initialized" there — register only the tools and leave
+    // HTTP routes / event listeners / public access to the `full` registration.
+    if (api.registrationMode === "tool-discovery") {
+      registerFridayNextPluginTools(api);
+      return;
+    }
     setFridayAgentForwardRuntime(api);
     setUpgradeRuntime(api);
     setTalkRuntime(api.runtime);
@@ -152,18 +176,7 @@ export default defineChannelPluginEntry({
     if (!sameApi) {
       lastApiRoutesRegistered = new WeakRef(api);
       registerFridayNextHttpRoutes(api);
-      api.registerTool((ctx: { sessionKey?: string }) => createHealthQueryTool(ctx), {
-        names: ["fridaynext_health_query"],
-      });
-      api.registerTool((ctx: { sessionKey?: string }) => createHealthLogTool(ctx), {
-        names: ["fridaynext_health_log"],
-      });
-      api.registerTool((ctx: { sessionKey?: string }) => createCalendarQueryTool(ctx), {
-        names: ["fridaynext_calendar_query"],
-      });
-      api.registerTool((ctx: { sessionKey?: string }) => createCalendarLogTool(ctx), {
-        names: ["fridaynext_calendar_log"],
-      });
+      registerFridayNextPluginTools(api);
 
       // FridayTunnel: enter control-plane standby by default. frpc is spawned only after an
       // entitled desired set arrives; explicit operator hard-disable keeps this fully inert.
