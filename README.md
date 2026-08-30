@@ -63,24 +63,21 @@ agent can reach your canvas, location, and interactive UI from anywhere, talk wi
 voice, and read or write your calendar, reminders, and Apple Health when you allow it.
 
 ```bash
-npx -y @syengup/friday-channel-next@beta --beta
+npx -y @syengup/friday-channel-next
 ```
 
 One command for every platform (macOS, Linux, native Windows) — the installer probes
-npmjs.org vs npmmirror itself and installs from the faster one. The `@beta` line is
-pinned because Windows support currently ships only on the beta dist-tag (the stable
-installer dies with `未找到 openclaw` on native Windows); drop `@beta --beta` once a
-stable release carries the win32 support.
+npmjs.org vs npmmirror itself and installs from the faster one.
 
 In mainland China, `npx` fetching the installer from registry.npmjs.org can hang; the
 bootstrap scripts probe first and pick the mirror for you:
 
 ```bash
-curl -fsSL https://gw.syengup.host/v1/friday-next/install.sh | sh -s -- --beta
+curl -fsSL https://gw.syengup.host/v1/friday-next/install.sh | sh
 ```
 
 ```powershell
-iex "& { $(iwr -useb https://gw.syengup.host/v1/friday-next/install.ps1) } -Beta"
+iex "& { $(iwr -useb https://gw.syengup.host/v1/friday-next/install.ps1) }"
 ```
 
 Then open FridayNext and follow the in-app setup — no command line required after that.
