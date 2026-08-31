@@ -208,11 +208,10 @@ export async function setSessionSettings(
   settings: FridaySessionSettingsUpdate,
   historyDir?: string,
 ): Promise<FridaySessionSettings> {
+  // COMPAT(openclaw<2026.8.1): sessions.json still exists on older hosts.
   const jsonResult = writeJsonSessionSettings(sessionKey, settings, historyDir);
-  if (settings.permissionMode !== undefined) {
-    await writeSdkPermissionMode(sessionKey, settings.permissionMode);
-  }
-  return overlaySdkPermissionMode(sessionKey, jsonResult);
+  await writeSdkSessionSettings(sessionKey, settings);
+  return overlaySdkSessionSettings(sessionKey, jsonResult);
 }
 
 function writeJsonSessionSettings(
@@ -297,14 +296,23 @@ function readSdkSessionEntry(sessionKey: string): Record<string, unknown> | unde
   }
 }
 
-function overlaySdkPermissionMode(
+/**
+ * SQLite (8.1+) is canonical for every session field the agent actually reads.
+ * JSON is a fallback for older hosts and for fields the identity row has not
+ * stored yet. `permissionMode` still treats a present SDK row as authoritative
+ * even when the field is missing (Default), matching Control UI.
+ */
+function overlaySdkSessionSettings(
   sessionKey: string,
   json: FridaySessionSettings,
 ): FridaySessionSettings {
   const sdkEntry = readSdkSessionEntry(sessionKey);
   if (!sdkEntry) return json;
+  const fromSdk = readSettingsFromEntry(sdkEntry);
   return {
-    ...json,
+    reasoningLevel: fromSdk.reasoningLevel ?? json.reasoningLevel,
+    thinkingLevel: fromSdk.thinkingLevel ?? json.thinkingLevel,
+    modelRef: fromSdk.modelRef ?? json.modelRef,
     permissionMode: isSessionPermissionMode(sdkEntry["permissionMode"])
       ? sdkEntry["permissionMode"]
       : undefined,
@@ -370,28 +378,62 @@ function resolveCanonicalSessionTarget(
   return { sessionKey: fileKey, agentId };
 }
 
-function permissionModePatch(mode: SessionPermissionMode | null): Record<string, unknown> {
-  return mode === null ? { permissionMode: null } : { permissionMode: mode };
+const SDK_SESSION_SETTING_KEYS: (keyof FridaySessionSettingsUpdate)[] = [
+  "reasoningLevel",
+  "thinkingLevel",
+  "modelRef",
+  "providerOverride",
+  "modelOverride",
+  "permissionMode",
+];
+
+function sessionSettingsSdkPatch(
+  settings: FridaySessionSettingsUpdate,
+): Record<string, unknown> | null {
+  const patch: Record<string, unknown> = {};
+  for (const key of SDK_SESSION_SETTING_KEYS) {
+    const value = settings[key];
+    if (value === undefined) continue;
+    patch[key] = value;
+  }
+  if (
+    settings.modelOverride !== undefined ||
+    settings.providerOverride !== undefined ||
+    settings.modelRef !== undefined
+  ) {
+    const clearing = settings.modelOverride === null || settings.modelRef === null;
+    patch.modelOverrideSource = clearing ? null : "user";
+  }
+  return Object.keys(patch).length > 0 ? patch : null;
 }
 
-function sdkPermissionModeMatches(
+function sdkSessionSettingsMatch(
   entry: Record<string, unknown> | null | undefined,
-  mode: SessionPermissionMode | null,
+  patch: Record<string, unknown>,
 ): boolean {
   if (!entry) return false;
-  if (mode === null) return !isSessionPermissionMode(entry["permissionMode"]);
-  return entry["permissionMode"] === mode;
+  for (const [key, expected] of Object.entries(patch)) {
+    const actual = entry[key];
+    if (expected === null) {
+      if (actual != null) return false;
+      continue;
+    }
+    if (actual !== expected) return false;
+  }
+  return true;
 }
 
-async function writeSdkPermissionMode(
+async function writeSdkSessionSettings(
   sessionKey: string,
-  mode: SessionPermissionMode | null,
+  settings: FridaySessionSettingsUpdate,
 ): Promise<void> {
+  const patchBody = sessionSettingsSdkPatch(settings);
+  if (!patchBody) return;
   const rt = getFridayAgentForwardRuntime();
   if (!rt) return;
   const target = resolveCanonicalSessionTarget(sessionKey);
   if (!target) return;
-  const patch = () => permissionModePatch(mode);
+  const patch = () => patchBody;
 
   try {
     if (rt.patchSessionEntry) {
@@ -401,9 +443,9 @@ async function writeSdkPermissionMode(
         preserveActivity: true,
         update: patch,
       });
-      if (sdkPermissionModeMatches(updated, mode)) return;
+      if (sdkSessionSettingsMatch(updated, patchBody)) return;
       log.warn(
-        `patchSessionEntry did not persist permissionMode=${mode ?? "default"} key=${target.sessionKey}`,
+        `patchSessionEntry did not persist session settings key=${target.sessionKey}`,
       );
     }
   } catch (err) {
@@ -429,10 +471,8 @@ async function writeSdkPermissionMode(
       sessionKey: storeKey,
       update: patch,
     });
-    if (!sdkPermissionModeMatches(updated, mode)) {
-      log.warn(
-        `updateSessionStoreEntry did not persist permissionMode=${mode ?? "default"} key=${storeKey}`,
-      );
+    if (!sdkSessionSettingsMatch(updated, patchBody)) {
+      log.warn(`updateSessionStoreEntry did not persist session settings key=${storeKey}`);
     }
   } catch (err) {
     log.warn(
@@ -447,9 +487,9 @@ export function getSessionSettings(sessionKey: string, historyDir?: string): Fri
     const sessionsFile = resolveSessionsFilePath(historyDir, agentIdFromSessionKey(fileKey));
     const data = readSessionsData(sessionsFile);
     const json = data?.[fileKey] ? readSettingsFromEntry(data[fileKey]) : {};
-    return overlaySdkPermissionMode(sessionKey, json);
+    return overlaySdkSessionSettings(sessionKey, json);
   } catch {
-    return overlaySdkPermissionMode(sessionKey, {});
+    return overlaySdkSessionSettings(sessionKey, {});
   }
 }
 

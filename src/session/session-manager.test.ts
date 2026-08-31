@@ -357,6 +357,150 @@ describe("permissionMode canonical store", () => {
   });
 });
 
+describe("canonical store model and thinking", () => {
+  let baseDir: string;
+  let historyDir: string;
+
+  beforeEach(() => {
+    baseDir = mkdtempSync(join(tmpdir(), "friday-model-"));
+    historyDir = join(baseDir, ".openclaw", "friday-next", "history");
+  });
+
+  afterEach(() => {
+    resetFridayAgentForwardRuntimeForTest();
+    rmSync(baseDir, { recursive: true, force: true });
+  });
+
+  function wireSdk(sdkStore: Record<string, Record<string, unknown>>): unknown[] {
+    const patches: unknown[] = [];
+    setFridayAgentForwardRuntime({
+      runtime: {
+        agent: {
+          session: {
+            resolveStorePath: () => "/store/main.json",
+            getSessionEntry: ({ sessionKey }: { sessionKey: string }) => sdkStore[sessionKey],
+            listSessionEntries: () =>
+              Object.entries(sdkStore).map(([sessionKey, entry]) => ({ sessionKey, entry })),
+            patchSessionEntry: async (params: {
+              sessionKey: string;
+              update: (entry: Record<string, unknown>) => Record<string, unknown>;
+            }) => {
+              const patch = await params.update(sdkStore[params.sessionKey] ?? {});
+              patches.push(patch);
+              sdkStore[params.sessionKey] = { ...(sdkStore[params.sessionKey] ?? {}), ...patch };
+              for (const [key, value] of Object.entries(patch)) {
+                if (value === null) delete sdkStore[params.sessionKey][key];
+              }
+              return sdkStore[params.sessionKey];
+            },
+          },
+        },
+        config: { current: () => ({}) },
+      },
+    } as any);
+    return patches;
+  }
+
+  it("patches thinkingLevel via patchSessionEntry when sessions.json is absent", async () => {
+    const sdkStore: Record<string, Record<string, unknown>> = {
+      "agent:main:fridaynext:abc": { sessionId: "s1" },
+    };
+    const patches = wireSdk(sdkStore);
+
+    await setSessionSettings(
+      "agent:main:fridaynext:abc",
+      { thinkingLevel: "high", reasoningLevel: "stream" },
+      historyDir,
+    );
+
+    expect(patches).toEqual([{ thinkingLevel: "high", reasoningLevel: "stream" }]);
+    expect(getSessionSettings("agent:main:fridaynext:abc", historyDir)).toMatchObject({
+      thinkingLevel: "high",
+      reasoningLevel: "stream",
+    });
+  });
+
+  it("patches model override with modelOverrideSource=user", async () => {
+    const sdkStore: Record<string, Record<string, unknown>> = {
+      "agent:main:main": { sessionId: "s1" },
+    };
+    const patches = wireSdk(sdkStore);
+
+    await setSessionSettings(
+      "main",
+      { modelRef: "openai/gpt-x", providerOverride: "openai", modelOverride: "gpt-x" },
+      historyDir,
+    );
+
+    expect(patches).toEqual([
+      {
+        modelRef: "openai/gpt-x",
+        providerOverride: "openai",
+        modelOverride: "gpt-x",
+        modelOverrideSource: "user",
+      },
+    ]);
+    expect(getSessionSettings("main", historyDir).modelRef).toBe("openai/gpt-x");
+  });
+
+  it("clears a model override on the identity row", async () => {
+    const sdkStore: Record<string, Record<string, unknown>> = {
+      "agent:main:main": {
+        sessionId: "s1",
+        modelRef: "openai/gpt-x",
+        providerOverride: "openai",
+        modelOverride: "gpt-x",
+        modelOverrideSource: "user",
+      },
+    };
+    wireSdk(sdkStore);
+
+    await setSessionSettings(
+      "main",
+      { modelRef: null, providerOverride: null, modelOverride: null },
+      historyDir,
+    );
+
+    expect(sdkStore["agent:main:main"]?.modelOverride).toBeUndefined();
+    expect(sdkStore["agent:main:main"]?.modelOverrideSource).toBeUndefined();
+    expect(getSessionSettings("main", historyDir).modelRef).toBeUndefined();
+  });
+
+  it("prefers SDK thinkingLevel over JSON residue", async () => {
+    const dir = join(baseDir, ".openclaw", "agents", "main", "sessions");
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(
+      join(dir, "sessions.json"),
+      JSON.stringify({ "agent:main:main": { thinkingLevel: "low" } }),
+      "utf-8",
+    );
+    const sdkStore: Record<string, Record<string, unknown>> = {
+      "agent:main:main": { sessionId: "s1", thinkingLevel: "high" },
+    };
+    wireSdk(sdkStore);
+
+    expect(getSessionSettings("main", historyDir).thinkingLevel).toBe("high");
+  });
+
+  it("thinking-only patch does not touch modelOverrideSource", async () => {
+    const sdkStore: Record<string, Record<string, unknown>> = {
+      "agent:main:main": {
+        sessionId: "s1",
+        modelOverride: "gpt-x",
+        providerOverride: "openai",
+        modelOverrideSource: "user",
+      },
+    };
+    const patches = wireSdk(sdkStore);
+
+    await setSessionSettings("main", { thinkingLevel: "medium" }, historyDir);
+
+    expect(patches).toEqual([{ thinkingLevel: "medium" }]);
+    expect(sdkStore["agent:main:main"]?.modelOverrideSource).toBe("user");
+    expect(sdkStore["agent:main:main"]?.modelOverride).toBe("gpt-x");
+  });
+});
+
 describe("resolveDefaultPermissionMode", () => {
   it("maps tools.exec.mode ask → guarded", () => {
     expect(resolveDefaultPermissionMode({ tools: { exec: { mode: "ask" } } })).toBe("guarded");
