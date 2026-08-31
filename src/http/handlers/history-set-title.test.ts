@@ -121,4 +121,41 @@ describe("handleHistorySetTitle", () => {
     );
     expect(res.statusCode).toBe(503);
   });
+
+  it("writes displayName via patchSessionEntry without loadSessionStore", async () => {
+    captured = null;
+    setFridayAgentForwardRuntime({
+      runtime: {
+        agent: {
+          session: {
+            resolveStorePath: () => "/store/main.json",
+            getSessionEntry: ({ sessionKey }: { sessionKey: string }) =>
+              sessionKey === "agent:main:friday:direct:abcd:9"
+                ? { sessionId: "sess-1" }
+                : undefined,
+            patchSessionEntry: async (params: {
+              sessionKey: string;
+              update: (
+                entry: Record<string, unknown>,
+                context: { existingEntry?: Record<string, unknown> },
+              ) => Record<string, unknown> | null | Promise<Record<string, unknown> | null>;
+            }) => {
+              const patch = await params.update({ sessionId: "sess-1" }, {});
+              captured = { storePath: "identity", sessionKey: params.sessionKey, patch };
+              return { sessionId: "sess-1", ...patch };
+            },
+          },
+        },
+        config: { current: () => CFG },
+      },
+    } as any);
+    const res = new MockRes();
+    await handleHistorySetTitle(
+      makeReq({ sessionKey: "agent:main:friday:direct:ABCD:9", title: "SQLite 名" }, AUTH),
+      res as any,
+    );
+    expect(res.statusCode).toBe(200);
+    expect(captured?.sessionKey).toBe("agent:main:friday:direct:abcd:9");
+    expect(captured?.patch).toEqual({ displayName: "SQLite 名" });
+  });
 });

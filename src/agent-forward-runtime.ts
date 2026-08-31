@@ -1,8 +1,22 @@
+import { createRequire } from "node:module";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
+
+const requireSdk = createRequire(import.meta.url);
+
+export type SessionTranscriptEventLoader = (params: {
+  agentId?: string;
+  sessionId: string;
+  sessionKey?: string;
+  storePath?: string;
+}) => unknown[];
 
 export type FridayAgentForwardRuntime = {
   resolveStorePath: (store?: string, opts?: { agentId?: string }) => string;
-  loadSessionStore: (
+  /**
+   * COMPAT(openclaw<2026.8.1): whole-store JSON map. 2026.8.1+ may omit this
+   * from `api.runtime.agent.session` (SQLite row APIs replaced it).
+   */
+  loadSessionStore?: (
     path: string,
     options?: { skipCache?: boolean; maintenanceConfig?: unknown; clone?: boolean },
   ) => Record<string, unknown>;
@@ -27,7 +41,14 @@ export type FridayAgentForwardRuntime = {
   listSessionEntries?: (params?: {
     agentId?: string;
     storePath?: string;
+    /** 2026.8.1+: skip writable DB lifecycle; safe for GET/introspection. */
+    readOnly?: boolean;
   }) => Array<{ sessionKey: string; entry: Record<string, unknown> }>;
+  /**
+   * SQLite transcript rows (2026.8.1+). Optional: older hosts keep JSONL files
+   * and this export does not exist.
+   */
+  loadTranscriptEventsSync?: SessionTranscriptEventLoader;
   /**
    * Identity-based session patch. Preferred over `updateSessionStoreEntry` for
    * `permissionMode` so the write lands in the canonical store, not legacy JSON.
@@ -58,7 +79,32 @@ export type FridayAgentForwardRuntime = {
 
 let forwardRuntime: FridayAgentForwardRuntime | null = null;
 
-/** Called from `registerFull` so terminal lifecycle forwards can read `sessions.json` after persist. */
+/**
+ * Bind the 2026.8.1 SQLite transcript reader. `api.runtime.agent.session` does
+ * not expose it — it lives on `plugin-sdk/session-store-runtime`. Skip the host
+ * require under Vitest so unit tests cannot accidentally read this machine's
+ * live OpenClaw install.
+ */
+function resolveLoadTranscriptEventsSync(
+  session: Record<string, unknown>,
+): SessionTranscriptEventLoader | undefined {
+  if (typeof session.loadTranscriptEventsSync === "function") {
+    return session.loadTranscriptEventsSync as SessionTranscriptEventLoader;
+  }
+  if (process.env.VITEST === "true") return undefined;
+  try {
+    const mod = requireSdk("openclaw/plugin-sdk/session-store-runtime") as {
+      loadTranscriptEventsSync?: SessionTranscriptEventLoader;
+    };
+    return typeof mod.loadTranscriptEventsSync === "function"
+      ? mod.loadTranscriptEventsSync
+      : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/** Called from `registerFull` so terminal lifecycle forwards can read the session store after persist. */
 export function setFridayAgentForwardRuntime(api: OpenClawPluginApi): void {
   const session = api.runtime.agent.session as Record<string, unknown>;
   forwardRuntime = {
@@ -67,6 +113,7 @@ export function setFridayAgentForwardRuntime(api: OpenClawPluginApi): void {
     updateSessionStoreEntry: session.updateSessionStoreEntry as FridayAgentForwardRuntime["updateSessionStoreEntry"],
     getSessionEntry: session.getSessionEntry as FridayAgentForwardRuntime["getSessionEntry"],
     listSessionEntries: session.listSessionEntries as FridayAgentForwardRuntime["listSessionEntries"],
+    loadTranscriptEventsSync: resolveLoadTranscriptEventsSync(session),
     patchSessionEntry: session.patchSessionEntry as FridayAgentForwardRuntime["patchSessionEntry"],
     resolveAgentWorkspaceDir: (api.runtime.agent as Record<string, unknown>)
       .resolveAgentWorkspaceDir as FridayAgentForwardRuntime["resolveAgentWorkspaceDir"],

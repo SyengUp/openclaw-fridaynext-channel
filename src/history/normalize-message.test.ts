@@ -318,12 +318,26 @@ describe("normalizeHistoryMessages", () => {
     expect(result.map((m) => m.id)).toEqual(["first", "reply"]);
   });
 
-  it("does not collapse distinct messages lacking an idempotencyKey", () => {
+  it("does not collapse distinct user texts lacking an idempotencyKey", () => {
     const result = normalizeHistoryMessages([
-      { role: "user", content: "same text", __openclaw: { id: "u1", seq: 1 } },
-      { role: "user", content: "same text", __openclaw: { id: "u2", seq: 2 } },
+      { role: "user", content: "first", __openclaw: { id: "u1", seq: 1 } },
+      { role: "user", content: "second", __openclaw: { id: "u2", seq: 2 } },
     ]);
     expect(result.map((m) => m.id)).toEqual(["u1", "u2"]);
+  });
+
+  // OpenClaw 8.1 SQLite: inbound user then a run-start replica of the same
+  // prompt (distinct ids, no idempotencyKey). Non-message events between them
+  // (`thinking_level_change` / `leaf` / `custom`) are dropped before normalize,
+  // so the copies become adjacent — history rebuild painted two identical user
+  // bubbles on every session created after the 2026.8.1 host upgrade.
+  it("collapses adjacent identical user prompts (8.1 inbound + run-start replica)", () => {
+    const result = normalizeHistoryMessages([
+      { role: "user", content: "test", __openclaw: { id: "inbound", seq: 1 } },
+      { role: "user", content: "test", __openclaw: { id: "run-start", seq: 6 } },
+      { role: "assistant", content: "ok", __openclaw: { id: "reply", seq: 7 } },
+    ]);
+    expect(result.map((m) => m.id)).toEqual(["inbound", "reply"]);
   });
 
   // Real session agent:operator:fridaynext:mt5mxc5c (2026-08-23): stealth/ox-alpha

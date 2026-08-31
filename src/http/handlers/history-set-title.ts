@@ -3,33 +3,24 @@
  *
  * Syncs the app-set session name to the server session's `displayName` (the
  * field OpenClaw resolves first for a session's display title, ahead of `label`).
- * Writes via `updateSessionStoreEntry` (cache-owning, not request-scoped), so the
- * change is also visible to webui and other clients.
+ * Prefers `patchSessionEntry` (SQLite identity write on 2026.8.1+). Falls back
+ * to `updateSessionStoreEntry` on hosts that only expose the JSON-map writer.
+ *
+ * COMPAT(openclaw<2026.8.1) — the `updateSessionStoreEntry` + `loadSessionStore` path.
  */
 
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { getFridayAgentForwardRuntime } from "../../agent-forward-runtime.js";
 import { extractBearerToken } from "../middleware/auth.js";
 import { readJsonBody } from "../middleware/body.js";
-import { agentIdFromSessionKey, toSessionStoreKey } from "../../session/session-manager.js";
+import { agentIdFromSessionKey } from "../../session/session-manager.js";
+import { findSessionStoreRow } from "../../history/session-store-access.js";
 
 function json(res: ServerResponse, status: number, body: unknown): true {
   res.statusCode = status;
   res.setHeader("Content-Type", "application/json");
   res.end(JSON.stringify(body));
   return true;
-}
-
-/** Real store key matching `sessionKey`, tolerating deviceId case differences. */
-function resolveStoreKey(store: Record<string, unknown>, sessionKey: string): string | undefined {
-  if (store[sessionKey]) return sessionKey;
-  const canonical = toSessionStoreKey(sessionKey);
-  if (store[canonical]) return canonical;
-  const target = canonical.toLowerCase();
-  for (const k of Object.keys(store)) {
-    if (k.toLowerCase() === target) return k;
-  }
-  return undefined;
 }
 
 export async function handleHistorySetTitle(
@@ -51,31 +42,37 @@ export async function handleHistorySetTitle(
   }
 
   const rt = getFridayAgentForwardRuntime();
-  if (!rt?.updateSessionStoreEntry) {
+  if (!rt?.patchSessionEntry && !rt?.updateSessionStoreEntry) {
     return json(res, 503, { error: "Session store write not available" });
   }
 
-  const agentId = agentIdFromSessionKey(sessionKey);
-  let storePath: string;
-  let store: Record<string, unknown>;
-  try {
-    storePath = rt.resolveStorePath(undefined, { agentId });
-    store = rt.loadSessionStore(storePath) ?? {};
-  } catch {
-    return json(res, 500, { error: "Failed to load session store" });
-  }
-
-  const storeKey = resolveStoreKey(store, sessionKey);
-  if (!storeKey) {
+  const row = findSessionStoreRow(sessionKey);
+  if (!row) {
     return json(res, 404, { error: `Session not found: ${sessionKey}` });
   }
 
+  const agentId = agentIdFromSessionKey(row.sessionKey);
+  // Empty title clears the override so the server can derive its own again.
+  const patch = () => ({ displayName: title || undefined });
+
   try {
-    const updated = await rt.updateSessionStoreEntry({
+    if (rt.patchSessionEntry) {
+      const updated = await rt.patchSessionEntry({
+        sessionKey: row.sessionKey,
+        agentId,
+        preserveActivity: true,
+        update: patch,
+      });
+      const sessionId =
+        updated && typeof updated.sessionId === "string" ? updated.sessionId : undefined;
+      return json(res, 200, { ok: true, sessionKey, ...(sessionId ? { sessionId } : {}), title });
+    }
+
+    const storePath = rt.resolveStorePath(undefined, { agentId });
+    const updated = await rt.updateSessionStoreEntry!({
       storePath,
-      sessionKey: storeKey,
-      // Empty title clears the override so the server can derive its own again.
-      update: () => ({ displayName: title || undefined }),
+      sessionKey: row.sessionKey,
+      update: patch,
     });
     const sessionId =
       updated && typeof updated.sessionId === "string" ? updated.sessionId : undefined;

@@ -5,22 +5,20 @@
  * The Friday app uses this to surface sessions created on other platforms /
  * channels in its sidebar before lazily fetching each session's history.
  *
- * Session message bodies are intentionally NOT read here — that is the job of the
- * per-session history endpoint. We only read each agent's `sessions.json` via the
- * forward runtime (`loadSessionStore`), matching the read path already used for
- * terminal lifecycle forwards.
+ * Session message bodies are intentionally NOT read here except for recent cron
+ * runs (title + visible-reply filter). Rows come from `listSessionEntries`
+ * (SQLite, OpenClaw 2026.8.1+) with a `loadSessionStore` fallback for older hosts.
  */
 
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { createRequire } from "node:module";
-import fs from "node:fs";
 import { getFridayAgentForwardRuntime } from "../../agent-forward-runtime.js";
 import { extractBearerToken } from "../middleware/auth.js";
-import { resolveTranscriptPath } from "../../history/read-transcript.js";
+import { hasLiveTranscript, readTranscriptRecords } from "../../history/read-transcript.js";
+import { listSessionStoreRows } from "../../history/session-store-access.js";
+import { listAgentRoster } from "../../agent-roster.js";
+import { DEFAULT_AGENT_ID } from "../../agent-id.js";
 import { hasActiveSession } from "../../agent/active-runs.js";
-
-const DEFAULT_AGENT_ID = "main";
-const SAFE_AGENT_ID = /^[a-z0-9][a-z0-9_-]*$/;
 
 const requireSdk = createRequire(import.meta.url);
 
@@ -77,20 +75,6 @@ export interface FridayHistorySessionSummary {
   hasActiveRun?: boolean;
 }
 
-/** Mirror of OpenClaw's `normalizeAgentId` (also used in agents-list.ts). */
-function normalizeAgentId(value: unknown): string {
-  const trimmed = typeof value === "string" ? value.trim() : "";
-  if (!trimmed) return DEFAULT_AGENT_ID;
-  const lowered = trimmed.toLowerCase();
-  if (SAFE_AGENT_ID.test(lowered)) return lowered;
-  return (
-    lowered
-      .replace(/[^a-z0-9_-]+/g, "-")
-      .replace(/^-+|-+$/g, "")
-      .slice(0, 64) || DEFAULT_AGENT_ID
-  );
-}
-
 function readString(value: unknown): string | undefined {
   return typeof value === "string" && value.trim() ? value.trim() : undefined;
 }
@@ -101,15 +85,9 @@ function readNumber(value: unknown): number | undefined {
 
 /** Configured agent ids (deduped). Falls back to the implicit "main" agent. */
 function resolveConfiguredAgentIds(config: Record<string, unknown> | undefined): string[] {
-  const agents = config?.agents as Record<string, unknown> | undefined;
-  const list = agents?.list as Array<Record<string, unknown>> | undefined;
-  if (!Array.isArray(list) || list.length === 0) return [DEFAULT_AGENT_ID];
-  const ids = new Set<string>();
-  for (const agent of list) {
-    if (agent && typeof agent === "object") ids.add(normalizeAgentId(agent.id));
-  }
-  if (ids.size === 0) ids.add(DEFAULT_AGENT_ID);
-  return [...ids];
+  const roster = listAgentRoster(config);
+  if (roster.length === 0) return [DEFAULT_AGENT_ID];
+  return roster.map((item) => item.id);
 }
 
 /** Build the canonical app session key from an agent + a raw sessions.json key. */
@@ -140,6 +118,7 @@ function isInternalSessionKey(canonicalKey: string, storeKey: string): boolean {
   const rest = sessionRest(canonicalKey);
   return (
     rest === "sessions" || // phantom agent-store entry
+    rest === "__no_session__" ||
     rest.startsWith("subagent:") ||
     rest.startsWith("dreaming-narrative") ||
     rest === "heartbeat" ||
@@ -202,39 +181,26 @@ function assistantRecordHasVisibleReply(message: Record<string, unknown>): boole
  * The final reply is the LAST assistant record, so we scan the whole file (bounded)
  * with an early exit once a visible reply is confirmed.
  */
-function inspectCronTranscript(entry: Record<string, unknown>, storePath: string): CronTranscriptInfo {
-  const filePath = resolveTranscriptPath(entry, storePath);
-  if (!filePath) return { hasVisibleReply: false };
-  let content: string;
-  try {
-    const fd = fs.openSync(filePath, "r");
-    try {
-      const size = fs.fstatSync(fd).size;
-      const toRead = Math.min(size, CRON_TRANSCRIPT_MAX_BYTES);
-      const buf = Buffer.allocUnsafe(toRead);
-      const bytes = fs.readSync(fd, buf, 0, toRead, 0);
-      content = buf.toString("utf-8", 0, bytes);
-    } finally {
-      fs.closeSync(fd);
-    }
-  } catch {
-    return { hasVisibleReply: false };
-  }
+function inspectCronTranscript(
+  entry: Record<string, unknown>,
+  sessionKey: string,
+  agentId: string,
+  storePath: string,
+): CronTranscriptInfo {
+  const records = readTranscriptRecords({
+    entry,
+    sessionKey,
+    agentId,
+    storePath,
+    maxBytes: CRON_TRANSCRIPT_MAX_BYTES,
+  });
 
   let title: string | undefined;
   let hasVisibleReply = false;
   let sawFirstUser = false;
-  for (const line of content.split("\n")) {
-    const trimmed = line.trim();
-    if (!trimmed) continue;
-    let rec: Record<string, unknown>;
-    try {
-      const parsed = JSON.parse(trimmed) as unknown;
-      if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) continue;
-      rec = parsed as Record<string, unknown>;
-    } catch {
-      continue;
-    }
+  for (const recUnknown of records) {
+    if (!recUnknown || typeof recUnknown !== "object" || Array.isArray(recUnknown)) continue;
+    const rec = recUnknown as Record<string, unknown>;
     const message = rec.message as Record<string, unknown> | undefined;
     if (!message || typeof message.role !== "string") continue;
     const role = message.role.toLowerCase();
@@ -282,32 +248,19 @@ function userMessageText(content: unknown): string | undefined {
   return undefined;
 }
 
-/** A session counts as archived/empty when its transcript file is gone or empty. */
-function hasLiveTranscript(entry: Record<string, unknown>, storePath: string): boolean {
-  const filePath = resolveTranscriptPath(entry, storePath);
-  if (!filePath) return false;
-  try {
-    return fs.statSync(filePath).size > 0;
-  } catch {
-    return false; // archived (moved to .deleted/.bak) or never written
-  }
-}
-
 function readAgentSessions(agentId: string): FridayHistorySessionSummary[] {
   const rt = getFridayAgentForwardRuntime();
   if (!rt) return [];
-  let storePath: string;
-  let store: Record<string, unknown>;
+  let storePath = "";
   try {
     storePath = rt.resolveStorePath(undefined, { agentId });
-    store = rt.loadSessionStore(storePath) ?? {};
   } catch {
-    return [];
+    storePath = "";
   }
   const summaries: FridayHistorySessionSummary[] = [];
-  for (const [storeKey, rawEntry] of Object.entries(store)) {
-    if (!rawEntry || typeof rawEntry !== "object") continue;
-    const entry = rawEntry as Record<string, unknown>;
+  for (const row of listSessionStoreRows(agentId)) {
+    const storeKey = row.sessionKey;
+    const entry = row.entry;
     const canonicalKey = toCanonicalSessionKey(agentId, storeKey);
 
     // Drop internal/system sessions and subagent links. We key only on
@@ -317,8 +270,8 @@ function readAgentSessions(agentId: string): FridayHistorySessionSummary[] {
     // carry and which would otherwise be wrongly excluded from the sidebar.
     if (isInternalSessionKey(canonicalKey, storeKey)) continue;
     if (entry.spawnedBy || entry.subagentRole) continue;
-    // Drop archived/empty sessions (transcript moved away or never written).
-    if (!hasLiveTranscript(entry, storePath)) continue;
+    // JSONL store: missing file = archived. SQLite store: `archivedAt` only.
+    if (!hasLiveTranscript(entry, storePath, row.requireTranscriptFile)) continue;
 
     const isCron = isCronSessionKey(canonicalKey);
     const updatedAt = readNumber(entry.updatedAt);
@@ -335,7 +288,7 @@ function readAgentSessions(agentId: string): FridayHistorySessionSummary[] {
     // screen in the app (only a collapsed thought trace, no bubble body).
     let title: string | undefined;
     if (isCron) {
-      const info = inspectCronTranscript(entry, storePath);
+      const info = inspectCronTranscript(entry, canonicalKey, agentId, storePath);
       if (!info.hasVisibleReply) continue;
       title = info.title ?? readString(entry.displayName) ?? readString(entry.label);
     } else {

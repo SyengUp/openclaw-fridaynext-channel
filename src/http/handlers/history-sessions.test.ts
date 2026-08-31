@@ -66,17 +66,43 @@ function cronPreambleOnly(name: string, userText: string): string {
   return file;
 }
 
-function setForward(config: unknown, storesByAgent: Record<string, Record<string, unknown>>): void {
+function setForward(
+  config: unknown,
+  storesByAgent: Record<string, Record<string, unknown>>,
+  opts?: {
+    /** Prefer identity list (SQLite). Rows may omit `sessionFile`. */
+    useListEntries?: boolean;
+    loadTranscriptEventsSync?: (params: {
+      sessionId: string;
+      sessionKey?: string;
+      agentId?: string;
+    }) => unknown[];
+  },
+): void {
+  const loadSessionStore = (p: string) => {
+    const agentId = path.basename(p, ".json");
+    return storesByAgent[agentId] ?? {};
+  };
+  const listSessionEntries = opts?.useListEntries
+    ? (params?: { agentId?: string }) => {
+        const store = storesByAgent[params?.agentId ?? "main"] ?? {};
+        return Object.entries(store).map(([sessionKey, entry]) => ({
+          sessionKey,
+          entry: entry as Record<string, unknown>,
+        }));
+      }
+    : undefined;
   setFridayAgentForwardRuntime({
     runtime: {
       agent: {
         session: {
           resolveStorePath: (_s?: string, opts?: { agentId?: string }) =>
             path.join(tmpDir, `${opts?.agentId ?? "main"}.json`),
-          loadSessionStore: (p: string) => {
-            const agentId = path.basename(p, ".json");
-            return storesByAgent[agentId] ?? {};
-          },
+          loadSessionStore,
+          ...(listSessionEntries ? { listSessionEntries } : {}),
+          ...(opts?.loadTranscriptEventsSync
+            ? { loadTranscriptEventsSync: opts.loadTranscriptEventsSync }
+            : {}),
         },
       },
       config: { current: () => config },
@@ -85,8 +111,9 @@ function setForward(config: unknown, storesByAgent: Record<string, Record<string
 }
 
 describe("handleHistorySessions", () => {
-  // COMPAT(openclaw<2026.8.1): forward-runtime fixtures use agents.list. Rewrite to
-  // agents.entries when dropping the list roster; see src/agent-roster.ts.
+  // COMPAT(openclaw<2026.8.1): several fixtures still use agents.list + JSONL
+  // `sessionFile`. Keep them until no host ships sessions.json; SQLite cases
+  // below cover agents.entries + listSessionEntries.
   beforeEach(() => {
     tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "friday-hs-"));
     setMockRuntime();
@@ -401,5 +428,119 @@ describe("handleHistorySessions", () => {
     }>;
     expect(sessions.find((s) => s.sessionKey === "agent:main:live")?.hasActiveRun).toBe(true);
     expect(sessions.find((s) => s.sessionKey === "agent:main:idle")?.hasActiveRun).toBeUndefined();
+  });
+
+  it("lists SQLite rows with no sessionFile via listSessionEntries + agents.entries", async () => {
+    setForward(
+      { agents: { entries: { main: {}, operator: {} } } },
+      {
+        main: {
+          "agent:main:fridaynext:abc": {
+            sessionId: "s-main",
+            updatedAt: 40,
+            displayName: "主会话",
+          },
+          "agent:main:__no_session__": { sessionId: "no", updatedAt: 99 },
+        },
+        operator: {
+          "agent:operator:webchat:1": {
+            sessionId: "s-op",
+            updatedAt: 50,
+            displayName: "运营会话",
+          },
+        },
+      },
+      { useListEntries: true },
+    );
+    const res = new MockRes();
+    await handleHistorySessions(makeReq(AUTH), res as any);
+    const sessions = JSON.parse(res.body).sessions;
+    expect(sessions.map((s: { sessionKey: string }) => s.sessionKey)).toEqual([
+      "agent:operator:webchat:1",
+      "agent:main:fridaynext:abc",
+    ]);
+    expect(sessions[0]).toMatchObject({ title: "运营会话", agentId: "operator" });
+  });
+
+  it("treats loadSessionStore sqlite: markers as live transcripts", async () => {
+    setForward(
+      { agents: { list: [{ id: "main" }] } },
+      {
+        main: {
+          "agent:main:marked": {
+            sessionId: "sid-1",
+            updatedAt: 3,
+            sessionFile: "sqlite:main:sid-1:/tmp/does-not-exist.json",
+            displayName: "标记会话",
+          },
+        },
+      },
+    );
+    const res = new MockRes();
+    await handleHistorySessions(makeReq(AUTH), res as any);
+    expect(JSON.parse(res.body).sessions).toEqual([
+      expect.objectContaining({ sessionKey: "agent:main:marked", title: "标记会话" }),
+    ]);
+  });
+
+  it("drops SQLite rows with archivedAt set", async () => {
+    setForward(
+      { agents: { entries: { main: {} } } },
+      {
+        main: {
+          "agent:main:live": { sessionId: "a", updatedAt: 2 },
+          "agent:main:archived": { sessionId: "b", updatedAt: 3, archivedAt: 1 },
+        },
+      },
+      { useListEntries: true },
+    );
+    const res = new MockRes();
+    await handleHistorySessions(makeReq(AUTH), res as any);
+    expect(JSON.parse(res.body).sessions.map((s: { sessionKey: string }) => s.sessionKey)).toEqual([
+      "agent:main:live",
+    ]);
+  });
+
+  it("inspects cron transcripts from loadTranscriptEventsSync when there is no JSONL", async () => {
+    const now = Date.now();
+    setForward(
+      { agents: { entries: { main: {} } } },
+      {
+        main: {
+          "agent:main:cron:job-sql": {
+            sessionId: "cron-sid",
+            updatedAt: now - 1000,
+          },
+        },
+      },
+      {
+        useListEntries: true,
+        loadTranscriptEventsSync: ({ sessionId }) => {
+          if (sessionId !== "cron-sid") return [];
+          return [
+            { type: "session", id: "cron-sid" },
+            {
+              type: "message",
+              id: "u",
+              message: {
+                role: "user",
+                content: "[cron:job-sql 每日趣闻] 查询趣闻 Current time: X",
+              },
+            },
+            {
+              type: "message",
+              id: "a",
+              message: { role: "assistant", content: "今日趣闻正文" },
+            },
+          ];
+        },
+      },
+    );
+    const res = new MockRes();
+    await handleHistorySessions(makeReq(AUTH), res as any);
+    const sessions = JSON.parse(res.body).sessions;
+    expect(sessions).toEqual([
+      expect.objectContaining({ sessionKey: "agent:main:cron:job-sql", title: "每日趣闻" }),
+    ]);
   });
 });

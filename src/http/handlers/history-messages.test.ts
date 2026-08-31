@@ -50,7 +50,13 @@ function setRuntime(
 }
 
 /** Forward runtime: store keyed by full session key → entry with a sessionFile. */
-function setForward(store: Record<string, unknown>): void {
+function setForward(
+  store: Record<string, unknown>,
+  extra?: {
+    getSessionEntry?: boolean;
+    loadTranscriptEventsSync?: (params: { sessionId: string; sessionKey?: string }) => unknown[];
+  },
+): void {
   setFridayAgentForwardRuntime({
     runtime: {
       agent: {
@@ -58,6 +64,15 @@ function setForward(store: Record<string, unknown>): void {
           resolveStorePath: (_s?: string, opts?: { agentId?: string }) =>
             path.join(tmpDir, `${opts?.agentId ?? "main"}-sessions.json`),
           loadSessionStore: () => store,
+          ...(extra?.getSessionEntry
+            ? {
+                getSessionEntry: ({ sessionKey }: { sessionKey: string }) =>
+                  (store[sessionKey] as Record<string, unknown> | undefined) ?? undefined,
+              }
+            : {}),
+          ...(extra?.loadTranscriptEventsSync
+            ? { loadTranscriptEventsSync: extra.loadTranscriptEventsSync }
+            : {}),
         },
       },
       config: { current: () => CFG },
@@ -297,6 +312,47 @@ describe("handleHistoryMessages", () => {
     );
     const body = JSON.parse(res.body);
     expect(body.messages.map((m: any) => m.id)).toEqual(["a1"]);
+  });
+
+  it("reads SQLite transcript events when there is no JSONL file", async () => {
+    setForward(
+      {
+        "agent:main:main": { sessionId: "sid-sql", updatedAt: 1 },
+      },
+      {
+        getSessionEntry: true,
+        loadTranscriptEventsSync: ({ sessionId }) => {
+          if (sessionId !== "sid-sql") return [];
+          return [
+            { type: "session", id: "sid-sql" },
+            {
+              type: "message",
+              id: "u1",
+              timestamp: "2026-01-01T00:00:00.000Z",
+              message: { role: "user", content: "from sqlite" },
+            },
+            {
+              type: "message",
+              id: "a1",
+              timestamp: "2026-01-01T00:00:01.000Z",
+              message: { role: "assistant", content: [{ type: "text", text: "ok" }] },
+            },
+          ];
+        },
+      },
+    );
+    const res = new MockRes();
+    await handleHistoryMessages(
+      makeReq("/friday-next/history/messages?sessionKey=agent:main:main", AUTH),
+      res as any,
+    );
+    expect(res.statusCode).toBe(200);
+    const body = JSON.parse(res.body);
+    expect(body.sessionId).toBe("sid-sql");
+    expect(body.messages.map((m: { role: string; text?: string }) => [m.role, m.text])).toEqual([
+      ["user", "from sqlite"],
+      ["assistant", "ok"],
+    ]);
   });
 });
 
