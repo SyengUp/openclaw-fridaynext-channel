@@ -91,6 +91,16 @@ export async function handleSessionDelete(
     return json(res, 400, { error: "Missing required query param: sessionKey" });
   }
 
+  // Optional optimistic-concurrency + multi-agent guards (parity with the Control UI's
+  // 2026.8.1 delete path): `expectedSessionId` makes core reject the delete when the
+  // server-side session was replaced under the same key ("Session X changed before
+  // deletion. Retry."), and `agentId` scopes the request to the owning agent instead of
+  // letting core infer it from the key (required for non-default global sessions).
+  // Blank/absent means "not known" — omit the param entirely so core keeps its default
+  // (unguarded) behavior.
+  const sessionId = (url.searchParams.get("sessionId") ?? "").trim();
+  const agentId = (url.searchParams.get("agentId") ?? "").trim();
+
   let response;
   try {
     response = await dispatchGatewayMethod("sessions.delete", {
@@ -98,6 +108,8 @@ export async function handleSessionDelete(
       // `true` archives the transcript (soft-delete). Misnomer in core: it does
       // not hard-unlink — retention sweeps reap the archive later.
       deleteTranscript: true,
+      ...(sessionId ? { expectedSessionId: sessionId } : {}),
+      ...(agentId ? { agentId } : {}),
     });
   } catch (err) {
     return json(res, 500, {

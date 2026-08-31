@@ -83,6 +83,78 @@ describe("handleSessionDelete", () => {
     });
   });
 
+  it("forwards sessionId and agentId as expectedSessionId/agentId to the gateway method", async () => {
+    dispatchGatewayMethod.mockResolvedValue({
+      ok: true,
+      payload: { ok: true, key: "agent:main:abc", deleted: true },
+    });
+
+    await invoke(
+      "DELETE",
+      "/friday-next-admin/sessions?sessionKey=agent:main:abc&sessionId=s-123&agentId=main",
+    );
+
+    expect(dispatchGatewayMethod).toHaveBeenCalledWith("sessions.delete", {
+      key: "agent:main:abc",
+      deleteTranscript: true,
+      expectedSessionId: "s-123",
+      agentId: "main",
+    });
+  });
+
+  it("forwards only expectedSessionId when agentId is not provided", async () => {
+    dispatchGatewayMethod.mockResolvedValue({
+      ok: true,
+      payload: { ok: true, key: "agent:main:abc", deleted: true },
+    });
+
+    await invoke(
+      "DELETE",
+      "/friday-next-admin/sessions?sessionKey=agent:main:abc&sessionId=s-456",
+    );
+
+    expect(dispatchGatewayMethod).toHaveBeenCalledWith("sessions.delete", {
+      key: "agent:main:abc",
+      deleteTranscript: true,
+      expectedSessionId: "s-456",
+    });
+  });
+
+  it("omits expectedSessionId/agentId when the query params are absent or blank", async () => {
+    dispatchGatewayMethod.mockResolvedValue({
+      ok: true,
+      payload: { ok: true, key: "agent:main:abc", deleted: true },
+    });
+
+    await invoke(
+      "DELETE",
+      "/friday-next-admin/sessions?sessionKey=agent:main:abc&sessionId=%20&agentId=",
+    );
+
+    expect(dispatchGatewayMethod).toHaveBeenCalledWith("sessions.delete", {
+      key: "agent:main:abc",
+      deleteTranscript: true,
+    });
+  });
+
+  it("maps a session-changed INVALID_REQUEST (expectedSessionId mismatch) to 400", async () => {
+    dispatchGatewayMethod.mockResolvedValue({
+      ok: false,
+      error: {
+        code: "INVALID_REQUEST",
+        message: "Session agent:main:abc changed before deletion. Retry.",
+      },
+    });
+
+    const { captured, json } = await invoke(
+      "DELETE",
+      "/friday-next-admin/sessions?sessionKey=agent:main:abc&sessionId=stale-1",
+    );
+
+    expect(captured.statusCode).toBe(400);
+    expect(json).toMatchObject({ ok: false, code: "INVALID_REQUEST" });
+  });
+
   it("returns 400 and does not dispatch when sessionKey is missing", async () => {
     const { captured } = await invoke("DELETE", "/friday-next-admin/sessions");
     expect(captured.statusCode).toBe(400);
