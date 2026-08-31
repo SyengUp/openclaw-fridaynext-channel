@@ -43,11 +43,15 @@ export async function handleApprovalDecision(
 
   const cfg = getHostOpenClawConfigSnapshot(getFridayNextRuntime().config);
   try {
+    // OpenClaw 2026.8.1 treats any of channel/accountId/senderId as reviewer
+    // identity and requires all three; a lone `senderId` (the app's deviceId)
+    // throws before the gateway is contacted. friday-next authorizes the device
+    // owner on this route via the bearer token, so we omit reviewer facts —
+    // fabricating channel+accountId would still fail `approval.resolve` custody.
     await resolveApprovalOverGateway({
       cfg,
       approvalId: approvalId.trim(),
       decision: decision as "allow-once" | "allow-always" | "deny",
-      senderId: deviceId || null,
       allowPluginFallback: true,
       clientDisplayName: deviceId ? `Friday Next (${deviceId})` : "Friday Next",
     });

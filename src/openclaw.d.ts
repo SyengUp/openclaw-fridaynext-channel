@@ -148,9 +148,11 @@ declare module "openclaw/plugin-sdk/approval-gateway-runtime" {
     cfg: unknown;
     approvalId: string;
     decision: "allow-once" | "allow-always" | "deny";
-    senderId: string | null;
-    allowPluginFallback: boolean;
-    clientDisplayName: string;
+    senderId?: string | null;
+    channel?: string;
+    accountId?: string;
+    allowPluginFallback?: boolean;
+    clientDisplayName?: string;
   }) => Promise<unknown>;
 }
 
