@@ -57,9 +57,11 @@ Available now on the App Store for iPhone. Free to download.
 
 `@syengup/friday-channel-next` is the OpenClaw side of FridayNext: a channel plugin that
 connects the app to your own OpenClaw gateway. Install it once, pair your iPhone, and your
-agent is in your pocket — with your phone acting as an OpenClaw **channel and node**, so your
-agent can reach your canvas, location, and interactive UI from anywhere, talk with you by
-voice, and read or write your calendar, reminders, and Apple Health when you allow it.
+agent is in your pocket — with your phone acting as an OpenClaw **channel** (chat, voice,
+calendar/Health/location tools over HTTP + SSE), so your agent can talk with you by voice,
+and read or write your calendar, reminders, Apple Health, and your current location when
+you allow it. (The OpenClaw **node** WebSocket surface is retained as a legacy-compat
+service for un-upgraded clients; current app builds are HTTP + SSE only.)
 
 ```bash
 npx -y @syengup/friday-channel-next

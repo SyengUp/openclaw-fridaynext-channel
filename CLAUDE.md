@@ -62,9 +62,10 @@ iOS App ←--HTTP/SSE--→ Friday Plugin ←--OpenClaw Plugin API--→ Gateway +
    - `GET /friday-next/files/:id` — file download (`handleFilesDownload`)
    - `POST /friday-next/cancel` — abort a run (`handleCancel`)
    - `POST /friday-next/health-query/result` — iPhone HealthKit RPC result (`handleHealthQueryResult`); pairs with `fridaynext_health_query` (SSE `fridaynext-health-query`) and `fridaynext_health_log` (SSE `fridaynext-health-log`). Does not use OpenClaw `nodes`.
+   - `POST /friday-next/location/result` — iPhone location RPC result (`handleLocationQueryResult`); pairs with `fridaynext_location_query` (SSE `fridaynext-location-query`). Same request/response pattern as health; the iPhone resolves one location per call (sharing toggle / system gates) and POSTs it back. Does not use OpenClaw `nodes`.
    - `POST /friday-next/calendar/result` — iPhone EventKit RPC result (`handleCalendarResult`); pairs with `fridaynext_calendar_query` (SSE `fridaynext-calendar-query`) and `fridaynext_calendar_log` (SSE `fridaynext-calendar-log`). Same request/response pattern as health; two tools share one route. Introduced in `1.0.27`.
    - `POST /friday-next/device-approve` — device trust approval (`handleDeviceApprove`)
-   - `POST /friday-next/nodes-approve` — node pairing approval (`handleNodesApprove`)
+   - `POST /friday-next/nodes-approve` — node pairing approval (`handleNodesApprove`); **legacy-compat**: current iOS builds no longer use the OpenClaw node channel, un-upgraded clients still do (`install.js` no longer injects node config on fresh installs)
    - `PUT|GET /friday-next/sessions/settings` — read/write session settings (`handleSessionsSettings`)
    - `GET|PUT /friday-next/prompt-capsules` — durable source of truth for the app's prompt capsules (`handlePromptCapsules`), so a delete+reinstall (or a second device) restores them. Global scope (one list per gateway, all agents share it — matches the app's app-wide `PromptCapsuleStore`). Stored by `src/prompt-capsules/capsules-store.ts` at `~/.openclaw/friday-next/prompt-capsules/capsules.json` (atomic tmp+rename) as `{version, storeId, revision, updatedAt, capsules[]}`. `storeId` is minted once and never changes — the app keys its sync bookkeeping on it so LAN vs public-relay origins count as one data source. A brand-new store is planted with two starter capsules; an existing file (even `capsules: []`) is never re-seeded. PUT replaces the whole list and bumps `revision`; an optional `baseRevision` gives optimistic concurrency (mismatch ⇒ `409` + current state, app re-merges and retries once). Introduced in plugin `1.0.16` — the app feature-gates on `pluginVersion` (an older plugin answers unknown `/friday-next/*` paths with the SPA catch-all's 200 + HTML, so status codes alone can't detect support).
    - `GET|PUT /friday-next/server-name` — this gateway's user-facing display name (`handleServerName`), stored gateway-side so every paired device shows the same name and a delete+reinstall restores it (the iOS app's multi-server list uses it). Stored by `src/server-name/server-name-store.ts` at `~/.openclaw/friday-next/server-info/server-name.json` (atomic tmp+rename) as `{version, name, updatedAt}`. PUT body `{name}` (trimmed, ≤100 chars; empty string clears). The app tolerates old plugins by requiring a JSON `{ok:true,...}` shape — the SPA catch-all's 200 + HTML fails decode and is treated as "unsupported".
@@ -171,6 +172,8 @@ When a sub-agent run completes and `expectsCompletionMessage` is true, this hook
 
 ## Health & node pairing (`GET /health`, `POST /nodes-approve`)
 
+**Scope note:** the node pairing surface is a **legacy-compat service** retained for un-upgraded FridayNext clients. Current clients never send `nodeDeviceId`/`selfHeal` and ignore the `nodePairing` fields; `install.js` no longer injects node configuration for fresh installs. Do not remove this surface while un-upgraded clients are supported.
+
 `handleHealth` checks node-pairing state for the given `deviceId`/`nodeDeviceId` against `REQUIRED_NODE_CAPS` (`location`, `canvas`) and `REQUIRED_NODE_COMMANDS` (location + canvas command set). With `selfHeal=true` it attempts repair actions (e.g. auto-approving a pending node) and reports each as a `RepairAction`. `handleNodesApprove` approves a pending node pairing request (scope-gated, returns `forbidden` with `missingScope` if not permitted). Both go through `node-pairing-bridge.ts`.
 
 ## Config (`src/config.ts`)
@@ -179,9 +182,9 @@ From `channels["friday-next"]`: `authToken`, `historyDir` (default `~/.openclaw/
 
 ### Owner-only tools (`nodes`) from Friday App
 
-OpenClaw filters `nodes` by **profile** and **owner**. To verify or fix visibility:
+Current FridayNext clients never call the OpenClaw `nodes` tool (they use `fridaynext_*` plugin tools over SSE/HTTP instead); `nodes`/`canvas` remain visible only for un-upgraded clients. OpenClaw filters `nodes` by **profile** and **owner**. To verify or fix visibility for those:
 
-1. If using `tools.profile: "coding"` (or similar), add **`tools.alsoAllow: ["nodes", "fridaynext_health_query", "fridaynext_health_log"]`** — profile allowlists do not re-include tools removed at profile resolution; `alsoAllow` does. Both health tools are registered by this plugin (SSE + HTTP); they are not `nodes`.
+1. If using `tools.profile: "coding"` (or similar), add **`tools.alsoAllow: ["nodes", "fridaynext_health_query", "fridaynext_health_log", "fridaynext_location_query"]`** — profile allowlists do not re-include tools removed at profile resolution; `alsoAllow` does. These plugin tools are registered by this plugin (SSE + HTTP); they are not `nodes`.
 2. **Owner:** `POST /friday-next/messages` is Bearer-gated; the plugin sets dispatch **`SenderId`** and **`OwnerAllowFrom: [deviceId]`** (normalized uppercase) so OpenClaw can treat the session as owner when the channel is effectively open (`allowFrom` empty/wildcard) and `commands.ownerAllowFrom` does not override with a fixed list that omits this device.
 3. If you use an explicit **`commands.ownerAllowFrom`** list, include the Friday device id there (or use channel `allowFrom`) — context `OwnerAllowFrom` is only used when that config list is empty.
 

@@ -18,7 +18,8 @@ export type SseEventType =
   | "fridaynext-health-query"
   | "fridaynext-health-log"
   | "fridaynext-calendar-query"
-  | "fridaynext-calendar-log";
+  | "fridaynext-calendar-log"
+  | "fridaynext-location-query";
 
 export interface SseEvent {
   type: SseEventType;

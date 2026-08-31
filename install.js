@@ -359,14 +359,13 @@ function ensureArrayContains(arr, item) {
   }
 }
 
-// Plugins
+// Plugins（新客户端不再使用 canvas 插件/节点画布面）
 if (!config.plugins) config.plugins = {};
 if (!Array.isArray(config.plugins.allow)) config.plugins.allow = [];
 ensureArrayContains(config.plugins.allow, "friday-next");
-ensureArrayContains(config.plugins.allow, "canvas");
 
 if (!config.plugins.entries) config.plugins.entries = {};
-for (const id of ["friday-next", "canvas"]) {
+for (const id of ["friday-next"]) {
   if (!config.plugins.entries[id]) {
     config.plugins.entries[id] = { enabled: true };
     configChanged = true;
@@ -408,25 +407,11 @@ if (!config.channels["friday-next"]) {
   }
 }
 
-// Gateway bind + nodes
+// Gateway bind（HTTP+SSE 需监听 LAN；节点命令不再注入——新客户端纯 HTTP）
 if (!config.gateway) config.gateway = {};
 if (config.gateway.bind !== "lan") {
   config.gateway.bind = "lan";
   configChanged = true;
-}
-if (!config.gateway.nodes) config.gateway.nodes = {};
-if (!Array.isArray(config.gateway.nodes.allowCommands)) config.gateway.nodes.allowCommands = [];
-for (const cmd of [
-  "canvas.navigate",
-  "canvas.present",
-  "canvas.hide",
-  "canvas.eval",
-  "canvas.snapshot",
-  "canvas.a2ui.push",
-  "canvas.a2ui.reset",
-  "canvas.a2ui.pushJSONL",
-]) {
-  ensureArrayContains(config.gateway.nodes.allowCommands, cmd);
 }
 
 // Agent tools
@@ -457,11 +442,21 @@ if (
 }
 if (!mainAgent.tools) mainAgent.tools = {};
 if (!Array.isArray(mainAgent.tools.alsoAllow)) mainAgent.tools.alsoAllow = [];
-for (const tool of ["canvas", "nodes", "fridaynext_health_query", "fridaynext_health_log"]) {
+for (const tool of [
+  "fridaynext_health_query",
+  "fridaynext_health_log",
+  "fridaynext_location_query",
+]) {
   ensureArrayContains(mainAgent.tools.alsoAllow, tool);
 }
 if (Array.isArray(mainAgent.tools.deny)) {
-  for (const tool of ["canvas", "nodes", "fridaynext_health_query", "fridaynext_health_log"]) {
+  for (const tool of [
+    "canvas",
+    "nodes",
+    "fridaynext_health_query",
+    "fridaynext_health_log",
+    "fridaynext_location_query",
+  ]) {
     const idx = mainAgent.tools.deny.indexOf(tool);
     if (idx !== -1) {
       mainAgent.tools.deny.splice(idx, 1);

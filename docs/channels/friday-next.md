@@ -8,8 +8,10 @@ title: FridayNext (iOS)
 
 FridayNext is a native iOS app that turns your iPhone into a full OpenClaw client. The
 community-maintained `@syengup/friday-channel-next` plugin connects the app to your own
-OpenClaw gateway over HTTP + SSE: your phone acts as both a **channel** (chat, share sheet,
-voice, notifications) and a **node** (canvas, location, interactive UI) for your agents.
+OpenClaw gateway over HTTP + SSE: your phone acts as a **channel** (chat, share sheet, voice,
+notifications, and location/calendar/Health tools). The OpenClaw **node** surface (canvas,
+location, interactive UI) is a legacy-compat service retained for un-upgraded clients;
+current app builds are HTTP + SSE only and do not dial it.
 
 **Status:** production-ready for direct messages and interactive sessions. Self-hosted by
 design — the app talks only to your own gateway; no middleman. This plugin is maintained by
@@ -103,5 +105,4 @@ and allowlist policies follow OpenClaw's standard pairing flow. See [Pairing](/c
 
 - [Channels Overview](/channels) - all supported channels
 - [Pairing](/channels/pairing) - DM authentication and pairing flow
-- [Nodes](/nodes) - phone as a node (canvas, location, interactive UI)
 - [Security](/gateway/security) - access model and hardening

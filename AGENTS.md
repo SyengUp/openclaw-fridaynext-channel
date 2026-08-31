@@ -57,7 +57,7 @@ iOS App ←--HTTP/SSE--→ Friday Plugin ←--OpenClaw Plugin API--→ Gateway +
    - `GET /friday-next/files/:id` — file download (`handleFilesDownload`)
    - `POST /friday-next/cancel` — abort a run (`handleCancel`)
    - `POST /friday-next/device-approve` — device trust approval (`handleDeviceApprove`)
-   - `POST /friday-next/nodes-approve` — node pairing approval (`handleNodesApprove`)
+   - `POST /friday-next/nodes-approve` — node pairing approval (`handleNodesApprove`); **retained as a legacy-compat service** — current FridayNext iOS builds no longer use the OpenClaw node channel, but un-upgraded clients still pair/dial through it (`install.js` no longer injects node config for fresh installs)
    - `PUT|GET /friday-next/sessions/settings` — read/write session settings (`handleSessionsSettings`)
    - `GET|PUT /friday-next/prompt-capsules` — durable source of truth for the app's prompt capsules (`handlePromptCapsules`), so a delete+reinstall (or a second device) restores them. Global scope (one list per gateway). Stored by `src/prompt-capsules/capsules-store.ts` at `~/.openclaw/friday-next/prompt-capsules/capsules.json` (atomic tmp+rename) as `{version, storeId, revision, updatedAt, capsules[]}`; `storeId` is minted once and never changes. A brand-new store is planted with two starter capsules; an existing file is never re-seeded. PUT replaces the whole list and bumps `revision`; optional `baseRevision` mismatch ⇒ `409` + current state. Introduced in plugin `1.0.16`; the app feature-gates on `pluginVersion`.
    - `GET /friday-next/models` — list available models (`handleModelsList`)
@@ -66,7 +66,7 @@ iOS App ←--HTTP/SSE--→ Friday Plugin ←--OpenClaw Plugin API--→ Gateway +
    - `GET /friday-next/agents/{id}/files` · `GET|PUT /friday-next/agents/{id}/files/{name}` — list/read/write the agent's whitelisted core `.md` workspace files (`handleAgentFiles`): `AGENTS/IDENTITY/SOUL/TOOLS/MEMORY/USER/HEARTBEAT/BOOTSTRAP.md`. Direct fs write into `resolveAgentWorkspaceDir(cfg, id)` (main → workspace root; others → `workspace/agents/{id}`), traversal-guarded, 256 KiB cap, no restart.
    - `GET /friday-next/agents/{id}/tools/catalog` — full tool catalog for the toolbox editor (`handleAgentToolsCatalog`): core + plugin tools grouped by category, with descriptions, the 4 profiles (minimal/coding/messaging/full), and per-tool `enabled`/`inProfile`. Built from core's `buildToolsCatalogResult`.
    - `GET /friday-next/status` — active runs + connection count (`handleStatus`)
-   - `GET /friday-next/health` — node-pairing health + optional self-heal (`handleHealth`; query: `deviceId`, `nodeDeviceId`, `selfHeal`)
+   - `GET /friday-next/health` — node-pairing health + optional self-heal (`handleHealth`; query: `deviceId`, `nodeDeviceId`, `selfHeal`); node pair half is optional: the current iOS client omits `nodeDeviceId`/`selfHeal` and decodes without the fields (legacy-compat service for un-upgraded clients)
    - `GET /friday-next/history/sessions` · `GET /friday-next/history/messages` · `PUT|POST /friday-next/sessions/title` — history sync (list sessions across agents, read a session's messages, sync app title → server `displayName`).
    - `GET /friday-next/link-preview?url=...` — Open Graph metadata for link-preview cards.
    - `GET /friday-next/plugin/info` · `POST /friday-next/plugin/upgrade` — self-version report + in-process npm upgrade & safe restart (npm installs only; dev/`--link` installs return 409).
@@ -141,6 +141,8 @@ When a sub-agent run completes and `expectsCompletionMessage` is true, this hook
 
 ## Health & node pairing (`GET /health`, `POST /nodes-approve`)
 
+**Scope note:** the node pairing surface is a **legacy-compat service** retained for un-upgraded FridayNext clients (their chat over HTTP/SSE keeps working, and they still dial the node WebSocket). Current clients never send `nodeDeviceId`/`selfHeal` and ignore the `nodePairing` fields; `install.js` no longer injects node configuration for fresh installs. Do not remove this surface while un-upgraded clients are supported.
+
 `handleHealth` checks node-pairing state for the given `deviceId`/`nodeDeviceId` against `REQUIRED_NODE_CAPS` (`location`, `canvas`) and `REQUIRED_NODE_COMMANDS` (location + canvas command set). With `selfHeal=true` it attempts repair actions (e.g. auto-approving a pending node) and reports each as a `RepairAction`. `handleNodesApprove` approves a pending node pairing request (scope-gated, returns `forbidden` with `missingScope` if not permitted). Both go through `node-pairing-bridge.ts`.
 
 ## Config (`src/config.ts`)
@@ -149,9 +151,9 @@ From `channels["friday-next"]`: `authToken`, `historyDir` (default `~/.openclaw/
 
 ### Owner-only tools (`nodes`) from Friday App
 
-OpenClaw filters `nodes` by **profile** and **owner**. To verify or fix visibility:
+Current FridayNext clients never call the OpenClaw `nodes` tool (they use `fridaynext_*` plugin tools over SSE/HTTP instead); `nodes`/`canvas` remain visible only for un-upgraded clients. OpenClaw filters `nodes` by **profile** and **owner**. To verify or fix visibility for those:
 
-1. If using `tools.profile: "coding"` (or similar), add **`tools.alsoAllow: ["nodes", "fridaynext_health_query", "fridaynext_health_log"]`** — profile allowlists do not re-include tools removed at profile resolution; `alsoAllow` does. Both are plugin tools (SSE + `POST /friday-next/health-query/result`); they are **not** `nodes` / `node.invoke`.
+1. If using `tools.profile: "coding"` (or similar), add **`tools.alsoAllow: ["nodes", "fridaynext_health_query", "fridaynext_health_log", "fridaynext_location_query"]`** — profile allowlists do not re-include tools removed at profile resolution; `alsoAllow` does. These are plugin tools (SSE + `POST /friday-next/health-query/result` / `POST /friday-next/location/result`); they are **not** `nodes` / `node.invoke`.
 2. **Owner:** `POST /friday-next/messages` is Bearer-gated; the plugin sets dispatch **`SenderId`** and **`OwnerAllowFrom: [deviceId]`** (normalized uppercase) so OpenClaw can treat the session as owner when the channel is effectively open (`allowFrom` empty/wildcard) and `commands.ownerAllowFrom` does not override with a fixed list that omits this device.
 3. If you use an explicit **`commands.ownerAllowFrom`** list, include the Friday device id there (or use channel `allowFrom`) — context `OwnerAllowFrom` is only used when that config list is empty.
 
