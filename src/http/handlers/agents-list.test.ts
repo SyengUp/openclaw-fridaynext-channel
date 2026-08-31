@@ -81,6 +81,17 @@ describe("handleAgentsList", () => {
     expect(body.agents).toEqual([{ id: "main", isDefault: true }]);
   });
 
+  it("maps tools.exec.mode ask → defaultPermissionMode guarded", async () => {
+    setConfig({ tools: { exec: { mode: "ask" } } });
+    const res = new MockRes();
+    await handleAgentsList(makeReq(AUTH), res as any);
+
+    expect(res.statusCode).toBe(200);
+    expect(JSON.parse(res.body).agents).toEqual([
+      { id: "main", isDefault: true, defaultPermissionMode: "guarded" },
+    ]);
+  });
+
   it("COMPAT(openclaw<2026.8.1): resolves the implicit main name from IDENTITY.md when no agents.list exists", async () => {
     const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "friday-identity-main-"));
     fs.writeFileSync(

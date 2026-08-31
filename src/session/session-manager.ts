@@ -3,6 +3,9 @@ import os from "node:os";
 import { readFileSync, writeFileSync } from "node:fs";
 import { getFridayAgentForwardRuntime } from "../agent-forward-runtime.js";
 import { findAgentRosterConfig } from "../agent-roster.js";
+import { createFridayNextLogger } from "../logging.js";
+
+const log = createFridayNextLogger("session");
 
 const FRIDAY_AGENT_ID = "main";
 const SESSION_ID_RE = /^[a-z0-9][a-z0-9._-]{0,127}$/i;
@@ -117,13 +120,62 @@ function upsertSessionEntry(
   }
 }
 
-export function ensureSessionLevels(
+export const SESSION_PERMISSION_MODES = ["read-only", "guarded", "workspace", "full"] as const;
+export type SessionPermissionMode = (typeof SESSION_PERMISSION_MODES)[number];
+
+export function isSessionPermissionMode(value: unknown): value is SessionPermissionMode {
+  return (
+    typeof value === "string" &&
+    (SESSION_PERMISSION_MODES as readonly string[]).includes(value)
+  );
+}
+
+const EXEC_MODE_TO_PERMISSION: Record<string, SessionPermissionMode> = {
+  deny: "read-only",
+  ask: "guarded",
+  auto: "workspace",
+  full: "full",
+};
+
+function readNestedString(obj: unknown, path: string[]): string | undefined {
+  let cur: unknown = obj;
+  for (const key of path) {
+    if (!cur || typeof cur !== "object" || Array.isArray(cur)) return undefined;
+    cur = (cur as Record<string, unknown>)[key];
+  }
+  return typeof cur === "string" && cur.trim() ? cur.trim() : undefined;
+}
+
+/**
+ * Display-only mapping of configured exec policy → session permission label.
+ * Omits `allowlist` and any agent whose sandbox is not `off`, matching Control UI:
+ * those cases cannot be stated truthfully at agent scope.
+ */
+export function resolveDefaultPermissionMode(
+  cfg: unknown,
+  agentConfig?: Record<string, unknown>,
+): SessionPermissionMode | undefined {
+  const sandbox =
+    readNestedString(agentConfig, ["sandbox", "mode"]) ??
+    readNestedString(cfg, ["agents", "defaults", "sandbox", "mode"]) ??
+    readNestedString(cfg, ["sandbox", "mode"]);
+  if (sandbox && sandbox !== "off") return undefined;
+
+  const execMode =
+    readNestedString(agentConfig, ["tools", "exec", "mode"]) ??
+    readNestedString(cfg, ["agents", "defaults", "tools", "exec", "mode"]) ??
+    readNestedString(cfg, ["tools", "exec", "mode"]);
+  if (!execMode || execMode === "allowlist") return undefined;
+  return EXEC_MODE_TO_PERMISSION[execMode];
+}
+
+export async function ensureSessionLevels(
   sessionKey: string,
   reasoningLevel: string,
   thinkingLevel: string,
   historyDir?: string,
-): void {
-  setSessionSettings(sessionKey, { reasoningLevel, thinkingLevel }, historyDir);
+): Promise<void> {
+  await setSessionSettings(sessionKey, { reasoningLevel, thinkingLevel }, historyDir);
 }
 
 export interface FridaySessionSettings {
@@ -132,6 +184,7 @@ export interface FridaySessionSettings {
   modelRef?: string;
   providerOverride?: string;
   modelOverride?: string;
+  permissionMode?: SessionPermissionMode;
 }
 
 /**
@@ -147,9 +200,22 @@ export type FridaySessionSettingsUpdate = {
   modelRef?: string | null;
   providerOverride?: string | null;
   modelOverride?: string | null;
+  permissionMode?: SessionPermissionMode | null;
 };
 
-export function setSessionSettings(
+export async function setSessionSettings(
+  sessionKey: string,
+  settings: FridaySessionSettingsUpdate,
+  historyDir?: string,
+): Promise<FridaySessionSettings> {
+  const jsonResult = writeJsonSessionSettings(sessionKey, settings, historyDir);
+  if (settings.permissionMode !== undefined) {
+    await writeSdkPermissionMode(sessionKey, settings.permissionMode);
+  }
+  return overlaySdkPermissionMode(sessionKey, jsonResult);
+}
+
+function writeJsonSessionSettings(
   sessionKey: string,
   settings: FridaySessionSettingsUpdate,
   historyDir?: string,
@@ -168,6 +234,7 @@ export function setSessionSettings(
       "modelRef",
       "providerOverride",
       "modelOverride",
+      "permissionMode",
     ];
     let updated = false;
     for (const key of fieldKeys) {
@@ -209,7 +276,169 @@ function readSettingsFromEntry(entry: Record<string, unknown>): FridaySessionSet
       typeof entry["reasoningLevel"] === "string" ? entry["reasoningLevel"] : undefined,
     thinkingLevel: typeof entry["thinkingLevel"] === "string" ? entry["thinkingLevel"] : undefined,
     modelRef,
+    permissionMode: isSessionPermissionMode(entry["permissionMode"])
+      ? entry["permissionMode"]
+      : undefined,
   };
+}
+
+function readSdkSessionEntry(sessionKey: string): Record<string, unknown> | undefined {
+  try {
+    const rt = getFridayAgentForwardRuntime();
+    if (!rt?.getSessionEntry) return undefined;
+    const resolved = resolveCanonicalSessionTarget(sessionKey);
+    if (!resolved) return undefined;
+    return (
+      rt.getSessionEntry({ sessionKey: resolved.sessionKey, agentId: resolved.agentId }) ??
+      rt.getSessionEntry({ sessionKey, agentId: resolved.agentId })
+    );
+  } catch {
+    return undefined;
+  }
+}
+
+function overlaySdkPermissionMode(
+  sessionKey: string,
+  json: FridaySessionSettings,
+): FridaySessionSettings {
+  const sdkEntry = readSdkSessionEntry(sessionKey);
+  if (!sdkEntry) return json;
+  return {
+    ...json,
+    permissionMode: isSessionPermissionMode(sdkEntry["permissionMode"])
+      ? sdkEntry["permissionMode"]
+      : undefined,
+  };
+}
+
+function sessionRestOf(canonicalKey: string): string | undefined {
+  return canonicalKey.match(/^agent:[^:]+:(.+)$/)?.[1];
+}
+
+/**
+ * Find the store key Control UI / the agent actually use. `toSessionStoreKey` lowercases and
+ * may rewrite the id; the SQLite row might still be the original key, or keyed by a
+ * `friday:direct:…` id whose `sessionId` is the short Control UI id (e.g. `mth7v8za`).
+ */
+function resolveCanonicalSessionTarget(
+  sessionKey: string,
+): { sessionKey: string; agentId: string } | undefined {
+  const rt = getFridayAgentForwardRuntime();
+  if (!rt) return undefined;
+  const fileKey = toSessionStoreKey(sessionKey);
+  const agentId = agentIdFromSessionKey(fileKey);
+  const candidates = [fileKey, sessionKey].filter((k, i, arr) => arr.indexOf(k) === i);
+
+  for (const key of candidates) {
+    try {
+      if (rt.getSessionEntry?.({ sessionKey: key, agentId })) {
+        return { sessionKey: key, agentId };
+      }
+    } catch {
+      // Keep looking; a bad candidate must not hide a later match.
+    }
+  }
+
+  const rest = sessionRestOf(fileKey);
+  const rawRest = sessionRestOf(toSessionStoreKey(sessionKey)) ?? sessionKey.trim();
+  const ids = new Set(
+    [rest, rawRest, sessionKey.trim()].filter((id) => id && SESSION_ID_RE.test(id)),
+  );
+  try {
+    const listed = rt.listSessionEntries?.({ agentId }) ?? [];
+    for (const row of listed) {
+      if (candidates.some((k) => k.toLowerCase() === row.sessionKey.toLowerCase())) {
+        return { sessionKey: row.sessionKey, agentId };
+      }
+    }
+    for (const row of listed) {
+      const sessionId =
+        typeof row.entry?.sessionId === "string" ? row.entry.sessionId : undefined;
+      if (sessionId && ids.has(sessionId)) {
+        return { sessionKey: row.sessionKey, agentId };
+      }
+      // `agent:main:fridaynext:mth7v8za` is the store key; Control UI / users quote `mth7v8za`.
+      const lastSeg = row.sessionKey.split(":").pop();
+      if (lastSeg && ids.has(lastSeg)) {
+        return { sessionKey: row.sessionKey, agentId };
+      }
+    }
+  } catch {
+    // list is best-effort
+  }
+
+  return { sessionKey: fileKey, agentId };
+}
+
+function permissionModePatch(mode: SessionPermissionMode | null): Record<string, unknown> {
+  return mode === null ? { permissionMode: null } : { permissionMode: mode };
+}
+
+function sdkPermissionModeMatches(
+  entry: Record<string, unknown> | null | undefined,
+  mode: SessionPermissionMode | null,
+): boolean {
+  if (!entry) return false;
+  if (mode === null) return !isSessionPermissionMode(entry["permissionMode"]);
+  return entry["permissionMode"] === mode;
+}
+
+async function writeSdkPermissionMode(
+  sessionKey: string,
+  mode: SessionPermissionMode | null,
+): Promise<void> {
+  const rt = getFridayAgentForwardRuntime();
+  if (!rt) return;
+  const target = resolveCanonicalSessionTarget(sessionKey);
+  if (!target) return;
+  const patch = () => permissionModePatch(mode);
+
+  try {
+    if (rt.patchSessionEntry) {
+      const updated = await rt.patchSessionEntry({
+        sessionKey: target.sessionKey,
+        agentId: target.agentId,
+        preserveActivity: true,
+        update: patch,
+      });
+      if (sdkPermissionModeMatches(updated, mode)) return;
+      log.warn(
+        `patchSessionEntry did not persist permissionMode=${mode ?? "default"} key=${target.sessionKey}`,
+      );
+    }
+  } catch (err) {
+    log.warn(
+      `patchSessionEntry failed for ${target.sessionKey}: ${err instanceof Error ? err.message : String(err)}`,
+    );
+  }
+
+  if (!rt.updateSessionStoreEntry) return;
+  try {
+    const storePath = rt.resolveStorePath(undefined, { agentId: target.agentId });
+    const load = rt.loadSessionStore;
+    const store = typeof load === "function" ? (load(storePath) ?? {}) : {};
+    const storeKey =
+      store[target.sessionKey] !== undefined
+        ? target.sessionKey
+        : store[sessionKey] !== undefined
+          ? sessionKey
+          : Object.keys(store).find((k) => k.toLowerCase() === target.sessionKey.toLowerCase()) ??
+            target.sessionKey;
+    const updated = await rt.updateSessionStoreEntry({
+      storePath,
+      sessionKey: storeKey,
+      update: patch,
+    });
+    if (!sdkPermissionModeMatches(updated, mode)) {
+      log.warn(
+        `updateSessionStoreEntry did not persist permissionMode=${mode ?? "default"} key=${storeKey}`,
+      );
+    }
+  } catch (err) {
+    log.warn(
+      `updateSessionStoreEntry failed for ${target.sessionKey}: ${err instanceof Error ? err.message : String(err)}`,
+    );
+  }
 }
 
 export function getSessionSettings(sessionKey: string, historyDir?: string): FridaySessionSettings {
@@ -217,13 +446,10 @@ export function getSessionSettings(sessionKey: string, historyDir?: string): Fri
     const fileKey = toSessionStoreKey(sessionKey);
     const sessionsFile = resolveSessionsFilePath(historyDir, agentIdFromSessionKey(fileKey));
     const data = readSessionsData(sessionsFile);
-    if (!data) return {};
-
-    const entry = data[fileKey];
-    if (!entry) return {};
-    return readSettingsFromEntry(entry);
+    const json = data?.[fileKey] ? readSettingsFromEntry(data[fileKey]) : {};
+    return overlaySdkPermissionMode(sessionKey, json);
   } catch {
-    return {};
+    return overlaySdkPermissionMode(sessionKey, {});
   }
 }
 

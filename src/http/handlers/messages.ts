@@ -33,6 +33,7 @@ import {
   setSessionSettings,
   splitModelRef,
   toSessionStoreKey,
+  isSessionPermissionMode,
   type FridaySessionSettingsUpdate,
 } from "../../session/session-manager.js";
 import { sseEmitter } from "../../sse/emitter.js";
@@ -410,6 +411,7 @@ export interface FridayMessagePayload {
   modelRef?: string;
   reasoningLevel?: string;
   thinkingLevel?: string;
+  permissionMode?: string | null;
 }
 
 /**
@@ -597,16 +599,21 @@ export async function handleMessages(req: IncomingMessage, res: ServerResponse):
   }
   if (reasoningLevel) settings.reasoningLevel = reasoningLevel;
   if (thinkingLevel) settings.thinkingLevel = thinkingLevel;
+  if (payload.permissionMode === null) {
+    settings.permissionMode = null;
+  } else if (isSessionPermissionMode(payload.permissionMode)) {
+    settings.permissionMode = payload.permissionMode;
+  }
 
   if (Object.keys(settings).length > 0) {
-    setSessionSettings(baseSessionKey, settings, cfg.historyDir);
+    await setSessionSettings(baseSessionKey, settings, cfg.historyDir);
   }
 
   log(
     "SESSION_SETTINGS",
     normalizedDeviceId,
     runId,
-    `sessionKey=${baseSessionKey} modelRef=${modelRef ?? "(default)"} reasoning=${reasoningLevel ?? "(default)"} thinking=${thinkingLevel ?? "(default)"}`,
+    `sessionKey=${baseSessionKey} modelRef=${modelRef ?? "(default)"} reasoning=${reasoningLevel ?? "(default)"} thinking=${thinkingLevel ?? "(default)"} permission=${payload.permissionMode === undefined ? "(unchanged)" : payload.permissionMode ?? "(default)"}`,
   );
 
   registerFridaySessionDeviceMapping(appSessionKey, normalizedDeviceId);

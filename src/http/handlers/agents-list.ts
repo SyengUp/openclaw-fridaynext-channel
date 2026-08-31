@@ -12,6 +12,7 @@ import {
   resolveRosterDefaultAgentId,
 } from "../../agent-roster.js";
 import { readGreetingFor } from "../../agent-greetings/greetings-store.js";
+import { resolveDefaultPermissionMode } from "../../session/session-manager.js";
 
 export interface FridayAgentEntry {
   id: string;
@@ -25,6 +26,11 @@ export interface FridayAgentEntry {
   avatar?: string;
   /** Custom home-greeting override (undefined = none → app falls back to its localized default). */
   greeting?: string;
+  /**
+   * Display-only inherited session permission (Control UI "Default (Guarded)" label).
+   * Omitted when the effective policy cannot be stated at agent scope.
+   */
+  defaultPermissionMode?: string;
 }
 
 interface ResolvedAgents {
@@ -127,6 +133,7 @@ export function resolveConfiguredAgents(): ResolvedAgents {
     // back to the workspace IDENTITY.md `Name` — the same source ControlUI and
     // the list branch below use — instead of letting the app show the raw id.
     const name = readWorkspaceIdentityName(rt, cfg, DEFAULT_AGENT_ID);
+    const defaultPermissionMode = resolveDefaultPermissionMode(cfg);
     return {
       agents: [
         {
@@ -137,6 +144,7 @@ export function resolveConfiguredAgents(): ResolvedAgents {
           ...(readGreetingFor(DEFAULT_AGENT_ID)
             ? { greeting: readGreetingFor(DEFAULT_AGENT_ID) }
             : {}),
+          ...(defaultPermissionMode ? { defaultPermissionMode } : {}),
         },
       ],
       defaultAgentId: DEFAULT_AGENT_ID,
@@ -147,6 +155,7 @@ export function resolveConfiguredAgents(): ResolvedAgents {
   const entries: FridayAgentEntry[] = [];
   for (const { id, config: agent } of roster) {
     const identity = agent.identity as Record<string, unknown> | undefined;
+    const defaultPermissionMode = resolveDefaultPermissionMode(cfg, agent);
     entries.push({
       id,
       name:
@@ -160,6 +169,7 @@ export function resolveConfiguredAgents(): ResolvedAgents {
       emoji: readString(identity?.emoji),
       avatar: readString(identity?.avatar) ?? readString(identity?.avatarUrl),
       greeting: readGreetingFor(id),
+      ...(defaultPermissionMode ? { defaultPermissionMode } : {}),
     });
   }
 

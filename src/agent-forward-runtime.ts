@@ -14,6 +14,34 @@ export type FridayAgentForwardRuntime = {
       entry: Record<string, unknown>,
     ) => Record<string, unknown> | null | Promise<Record<string, unknown> | null>;
   }) => Promise<Record<string, unknown> | null>;
+  /**
+   * Canonical session-store read (SQLite-first on OpenClaw 2026.8.1+). Optional on
+   * older hosts that only expose `loadSessionStore`.
+   */
+  getSessionEntry?: (params: {
+    sessionKey: string;
+    agentId?: string;
+    storePath?: string;
+  }) => Record<string, unknown> | undefined;
+  /** Identity-based list; used to resolve Control UI sessionId → store key. */
+  listSessionEntries?: (params?: {
+    agentId?: string;
+    storePath?: string;
+  }) => Array<{ sessionKey: string; entry: Record<string, unknown> }>;
+  /**
+   * Identity-based session patch. Preferred over `updateSessionStoreEntry` for
+   * `permissionMode` so the write lands in the canonical store, not legacy JSON.
+   */
+  patchSessionEntry?: (params: {
+    sessionKey: string;
+    agentId?: string;
+    storePath?: string;
+    preserveActivity?: boolean;
+    update: (
+      entry: Record<string, unknown>,
+      context: { existingEntry?: Record<string, unknown> },
+    ) => Record<string, unknown> | null | Promise<Record<string, unknown> | null>;
+  }) => Promise<Record<string, unknown> | null>;
   /** Resolves an agent's workspace dir — used to read IDENTITY.md for the name fallback. */
   resolveAgentWorkspaceDir?: (cfg: unknown, agentId: string) => string;
   /**
@@ -32,11 +60,14 @@ let forwardRuntime: FridayAgentForwardRuntime | null = null;
 
 /** Called from `registerFull` so terminal lifecycle forwards can read `sessions.json` after persist. */
 export function setFridayAgentForwardRuntime(api: OpenClawPluginApi): void {
+  const session = api.runtime.agent.session as Record<string, unknown>;
   forwardRuntime = {
     resolveStorePath: api.runtime.agent.session.resolveStorePath,
     loadSessionStore: api.runtime.agent.session.loadSessionStore,
-    updateSessionStoreEntry: (api.runtime.agent.session as Record<string, unknown>)
-      .updateSessionStoreEntry as FridayAgentForwardRuntime["updateSessionStoreEntry"],
+    updateSessionStoreEntry: session.updateSessionStoreEntry as FridayAgentForwardRuntime["updateSessionStoreEntry"],
+    getSessionEntry: session.getSessionEntry as FridayAgentForwardRuntime["getSessionEntry"],
+    listSessionEntries: session.listSessionEntries as FridayAgentForwardRuntime["listSessionEntries"],
+    patchSessionEntry: session.patchSessionEntry as FridayAgentForwardRuntime["patchSessionEntry"],
     resolveAgentWorkspaceDir: (api.runtime.agent as Record<string, unknown>)
       .resolveAgentWorkspaceDir as FridayAgentForwardRuntime["resolveAgentWorkspaceDir"],
     resolveThinkingPolicy: (api.runtime.agent as Record<string, unknown>)
