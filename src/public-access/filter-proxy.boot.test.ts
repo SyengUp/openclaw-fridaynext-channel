@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { createServer, request, type Server } from "node:http";
+import { createServer, request, type IncomingHttpHeaders, type Server } from "node:http";
 import type { AddressInfo, Socket } from "node:net";
 import { startFilterProxy } from "./filter-proxy.js";
 import { ATTEST_COOKIE, ATTEST_HEADER } from "../attest/attest-gate.js";
@@ -18,6 +18,7 @@ let proxyPort = 0;
 let gateEnabled = true;
 let coreHits: string[] = [];
 const coreUpgradedSockets: Socket[] = [];
+let lastCoreHeaders: IncomingHttpHeaders = {};
 
 function listen(server: Server, port: number): Promise<number> {
   return new Promise((resolve) => {
@@ -67,11 +68,13 @@ function upgrade(path: string, headers: Record<string, string> = {}): Promise<nu
 beforeAll(async () => {
   core = createServer((req, res) => {
     coreHits.push(req.url ?? "");
+    lastCoreHeaders = { ...req.headers };
     res.writeHead(200, { "content-type": "text/plain" });
     res.end("core");
   });
   core.on("upgrade", (req, socket) => {
     coreHits.push(`UPGRADE ${req.url ?? ""}`);
+    lastCoreHeaders = { ...req.headers };
     // An upgraded socket is detached from the http server, so closeAllConnections() can't reach
     // it — the stub has to hold on to it and destroy it itself at teardown.
     coreUpgradedSockets.push(socket);
@@ -147,6 +150,36 @@ describe("filter proxy attest gate — WebSocket upgrade", () => {
 
   it("upgrades with a valid token", async () => {
     expect(await upgrade("/gateway", { [ATTEST_HEADER]: GOOD })).toBe(101);
+  });
+});
+
+describe("filter proxy strips forwarded client headers before core", () => {
+  const frpcHeaders = {
+    "X-Forwarded-For": "1.2.3.4",
+    "X-Real-IP": "1.2.3.4",
+    Forwarded: "for=1.2.3.4",
+    "X-Forwarded-Proto": "https",
+    "X-Forwarded-Host": "fn.example.host",
+  };
+
+  function expectCoreDidNotSeeForwardedHeaders() {
+    expect(lastCoreHeaders["x-forwarded-for"]).toBeUndefined();
+    expect(lastCoreHeaders["x-real-ip"]).toBeUndefined();
+    expect(lastCoreHeaders.forwarded).toBeUndefined();
+    expect(lastCoreHeaders["x-forwarded-proto"]).toBeUndefined();
+    expect(lastCoreHeaders["x-forwarded-host"]).toBeUndefined();
+    expect(lastCoreHeaders["x-fridaynext-public"]).toBe("1");
+  }
+
+  it("HTTP hop looks local-direct to OpenClaw 2026.8.1", async () => {
+    const res = await get("/friday-next/health", frpcHeaders);
+    expect(res.status).toBe(200);
+    expectCoreDidNotSeeForwardedHeaders();
+  });
+
+  it("WebSocket hop looks local-direct to OpenClaw 2026.8.1", async () => {
+    expect(await upgrade("/gateway", { [ATTEST_HEADER]: GOOD, ...frpcHeaders })).toBe(101);
+    expectCoreDidNotSeeForwardedHeaders();
   });
 });
 

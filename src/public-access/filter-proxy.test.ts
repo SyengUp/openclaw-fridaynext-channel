@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { allowed, normalizedPath } from "./filter-proxy.js";
+import { allowed, isForwardedClientHeader, normalizedPath } from "./filter-proxy.js";
 
 // The filter proxy IS the public-surface security boundary: everything reachable through the
 // tunnel goes through `allowed()`. These tests pin the allowlist/denylist semantics and the
@@ -63,5 +63,18 @@ describe("filter-proxy allowed", () => {
     expect(allowed("/friday-next/../__openclaw__/control")).toBe(false);
     expect(allowed("/friday-next/%2e%2e/__openclaw__/control")).toBe(false);
     expect(allowed("/__openclaw__//control")).toBe(false);
+  });
+});
+
+describe("filter-proxy isForwardedClientHeader", () => {
+  it.each(["X-Forwarded-For", "x-forwarded-proto", "x-forwarded-host", "X-Real-IP", "Forwarded"])(
+    "matches OpenClaw proxy-shaped header %s",
+    (name) => {
+      expect(isForwardedClientHeader(name)).toBe(true);
+    },
+  );
+
+  it("does not strip the public-surface marker we stamp ourselves", () => {
+    expect(isForwardedClientHeader("x-fridaynext-public")).toBe(false);
   });
 });

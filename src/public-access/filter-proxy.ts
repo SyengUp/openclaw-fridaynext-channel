@@ -10,7 +10,7 @@
  * rest, so the public tunnel exposes just the FridayNext API + node WebSocket.
  * LAN clients hit core directly and are unaffected.
  */
-import { createServer, request as httpRequest, type Server } from "node:http";
+import { createServer, request as httpRequest, type IncomingHttpHeaders, type Server } from "node:http";
 import { connect as netConnect } from "node:net";
 import type { Duplex } from "node:stream";
 import { attestGateDecision, ATTEST_REJECTION_BODY } from "../attest/attest-gate.js";
@@ -47,6 +47,26 @@ export function stopFilterProxy(server: Server): void {
 // plugin's App Attest gate enforces ONLY when this marker is present, so the gate
 // scopes to the public surface and never touches LAN clients hitting core directly.
 const PUBLIC_MARKER = "x-fridaynext-public";
+
+/**
+ * Headers OpenClaw 2026.8.1 treats as "proxy-shaped" (`hasForwardedRequestHeaders`).
+ * frpc `https2http` injects these on the loopback hop into this proxy; if we
+ * forward them to core, core sees `127.0.0.1` + X-Forwarded-* and rejects
+ * Gateway-authenticated routes (`/gateway` node WS) with
+ * `proxy_attribution_required`. This proxy is already the trust boundary
+ * (allowlist + attest), so strip them and let core treat the hop as local-direct.
+ * Plugin routes (`/friday-next/*`) ignore untrusted forwarded claims anyway.
+ */
+export function isForwardedClientHeader(name: string): boolean {
+  const n = name.toLowerCase();
+  return n === "forwarded" || n === "x-real-ip" || n.startsWith("x-forwarded-");
+}
+
+function stripForwardedClientHeaders(headers: IncomingHttpHeaders): void {
+  for (const key of Object.keys(headers)) {
+    if (isForwardedClientHeader(key)) delete headers[key];
+  }
+}
 
 // Everything the app needs over the public relay; nothing else reaches core.
 //   /friday-next/*        REST + SSE (attest-gated by the plugin, downstream)
@@ -150,6 +170,7 @@ export function startFilterProxy(
     // Overwrite any client-supplied marker with our trusted one (Node lowercases
     // header keys, so this covers every casing the client could have sent).
     req.headers[PUBLIC_MARKER] = "1";
+    stripForwardedClientHeaders(req.headers);
     const upstream = httpRequest(
       { host: "127.0.0.1", port: corePort, method: req.method, path: url, headers: req.headers },
       (up) => {
@@ -189,9 +210,11 @@ export function startFilterProxy(
     const up = netConnect(corePort, "127.0.0.1", () => {
       up.write(`${req.method} ${url} HTTP/1.1\r\n`);
       for (let i = 0; i < req.rawHeaders.length; i += 2) {
+        const name = req.rawHeaders[i];
         // Drop any client-supplied marker; we append our own trusted one below.
-        if (req.rawHeaders[i].toLowerCase() === PUBLIC_MARKER) continue;
-        up.write(`${req.rawHeaders[i]}: ${req.rawHeaders[i + 1]}\r\n`);
+        if (name.toLowerCase() === PUBLIC_MARKER) continue;
+        if (isForwardedClientHeader(name)) continue;
+        up.write(`${name}: ${req.rawHeaders[i + 1]}\r\n`);
       }
       up.write(`X-FridayNext-Public: 1\r\n`);
       up.write("\r\n");

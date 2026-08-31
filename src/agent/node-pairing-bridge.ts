@@ -68,18 +68,26 @@ function resolveOpenClawDist(): string {
   throw new Error("OpenClaw dist directory not found. Set OPENCLAW_DIST env var.");
 }
 
-export async function loadNodePairingModule(): Promise<NodePairingModule> {
-  if (cache) return cache;
-  const dist = resolveOpenClawDist();
-  const file = readdirSync(dist).find(
-    (f) => f.startsWith("node-pairing-") && f.endsWith(".js") && !f.includes("authz"),
+/**
+ * OpenClaw hashed the pairing helpers into `node-pairing-*.js` through 2026.7.x.
+ * 2026.8.1 renamed the chunk to `device-pairing-node-*.js` and left
+ * `node-pairing-migration-*.js` / `node-pairing-authz-*.js` in dist — those
+ * must not be picked as the live module.
+ */
+export function nodePairingModuleCandidates(filenames: string[]): string[] {
+  const js = filenames.filter((f) => f.endsWith(".js"));
+  const current = js.filter((f) => f.startsWith("device-pairing-node-"));
+  const legacy = js.filter(
+    (f) =>
+      f.startsWith("node-pairing-") && !f.includes("authz") && !f.includes("migration"),
   );
-  if (!file) throw new Error("node-pairing module not found in OpenClaw dist");
+  return [...current, ...legacy];
+}
 
+function readPairingExports(mod: Record<string, unknown>): NodePairingModule | null {
   // ESM import() returns the minified export names (r, t, …) because the
   // bundled module uses `export { listNodePairing as r, … }`.  Resolve the
   // correct functions by Function.name, which preserves the original name.
-  const mod = (await importAbsoluteModule(join(dist, file))) as Record<string, unknown>;
   let listNodePairing: ListNodePairingFn | undefined;
   let approveNodePairing: ApproveNodePairingFn | undefined;
   for (const value of Object.values(mod)) {
@@ -89,11 +97,25 @@ export async function loadNodePairingModule(): Promise<NodePairingModule> {
         approveNodePairing = value as ApproveNodePairingFn;
     }
   }
-  if (!listNodePairing || !approveNodePairing) {
-    throw new Error("node-pairing module did not export expected functions");
+  if (!listNodePairing || !approveNodePairing) return null;
+  return { listNodePairing, approveNodePairing };
+}
+
+export async function loadNodePairingModule(): Promise<NodePairingModule> {
+  if (cache) return cache;
+  const dist = resolveOpenClawDist();
+  const candidates = nodePairingModuleCandidates(readdirSync(dist));
+  if (candidates.length === 0) throw new Error("node-pairing module not found in OpenClaw dist");
+
+  for (const file of candidates) {
+    const mod = (await importAbsoluteModule(join(dist, file))) as Record<string, unknown>;
+    const resolved = readPairingExports(mod);
+    if (resolved) {
+      cache = resolved;
+      return cache;
+    }
   }
-  cache = { listNodePairing, approveNodePairing };
-  return cache;
+  throw new Error("node-pairing module did not export expected functions");
 }
 
 /** Vitest-only: inject mock pairing functions. */
