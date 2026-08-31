@@ -190,6 +190,14 @@ declare module "openclaw/plugin-sdk/reply-dispatch-runtime" {
   export const dispatchReplyWithDispatcher: (...args: any[]) => any;
 }
 
+declare module "openclaw/plugin-sdk/webhook-request-guards" {
+  /**
+   * Reserves an independent gateway work root for ack-first HTTP handlers.
+   * Must be called synchronously while the request is still admitted.
+   */
+  export function runDetachedWebhookWork<T>(run: () => Promise<T>): Promise<T>;
+}
+
 declare module "openclaw/plugin-sdk/plugin-runtime" {
   /**
    * Returns the request-local plugin gateway-request-scope (operator client/scopes,

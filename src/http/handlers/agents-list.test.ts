@@ -40,6 +40,8 @@ function setConfig(config: unknown): void {
 }
 
 describe("handleAgentsList", () => {
+  // COMPAT(openclaw<2026.8.1): list-shaped fixtures. Rewrite to agents.entries
+  // when dropping the list roster; see src/agent-roster.ts.
   let greetingsDir: string;
 
   beforeEach(() => {
@@ -79,7 +81,7 @@ describe("handleAgentsList", () => {
     expect(body.agents).toEqual([{ id: "main", isDefault: true }]);
   });
 
-  it("resolves the implicit main name from IDENTITY.md when no agents.list exists", async () => {
+  it("COMPAT(openclaw<2026.8.1): resolves the implicit main name from IDENTITY.md when no agents.list exists", async () => {
     const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "friday-identity-main-"));
     fs.writeFileSync(
       path.join(workspace, "IDENTITY.md"),
@@ -201,6 +203,43 @@ describe("handleAgentsList", () => {
     } finally {
       fs.rmSync(workspace, { recursive: true, force: true });
     }
+  });
+
+  it("lists agents.entries on an OpenClaw ≥2026.8.1 roster", async () => {
+    setConfig({
+      agents: {
+        ownership: "explicit",
+        defaults: { thinkingDefault: "high" },
+        entries: {
+          main: { name: "F.R.I.D.A.Y", model: "anthropic/claude" },
+          operator: {
+            name: "FridayNext",
+            description: "ops",
+            identity: { emoji: "🛠️" },
+          },
+        },
+      },
+    });
+    const res = new MockRes();
+    await handleAgentsList(makeReq(AUTH), res as any);
+    const body = JSON.parse(res.body);
+    expect(body.defaultAgentId).toBe("main");
+    expect(body.agents.map((a: { id: string }) => a.id)).toEqual(["main", "operator"]);
+    expect(body.agents[0]).toMatchObject({
+      id: "main",
+      name: "F.R.I.D.A.Y",
+      model: "anthropic/claude",
+      thinkingDefault: "high",
+      isDefault: true,
+    });
+    expect(body.agents[1]).toMatchObject({
+      id: "operator",
+      name: "FridayNext",
+      description: "ops",
+      emoji: "🛠️",
+      isDefault: false,
+      thinkingDefault: "high",
+    });
   });
 
   it("defaults to the first entry when none is marked default and dedups ids", async () => {

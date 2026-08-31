@@ -2,6 +2,7 @@ import { join } from "node:path";
 import os from "node:os";
 import { readFileSync, writeFileSync } from "node:fs";
 import { getFridayAgentForwardRuntime } from "../agent-forward-runtime.js";
+import { findAgentRosterConfig } from "../agent-roster.js";
 
 const FRIDAY_AGENT_ID = "main";
 const SESSION_ID_RE = /^[a-z0-9][a-z0-9._-]{0,127}$/i;
@@ -245,12 +246,7 @@ export function resolveAgentDefaults(sessionKey: string): { model?: string; thin
     const agents = ocCfg.agents as Record<string, unknown> | undefined;
     const targetAgentId = agentIdFromSessionKey(sessionKey);
 
-    const agentEntry = (agents?.list as Array<Record<string, unknown>> | undefined)?.find(
-      (a) =>
-        agentIdFromSessionKey(
-          `agent:${typeof a?.id === "string" ? a.id : typeof a?.id === "number" ? String(a.id) : ""}:x`,
-        ) === targetAgentId,
-    );
+    const agentEntry = findAgentRosterConfig(ocCfg, targetAgentId);
     const agentModel = agentEntry?.model;
     const perAgentModel =
       typeof agentModel === "string"

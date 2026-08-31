@@ -4,14 +4,16 @@
  * Reads and edits a single agent's runtime configuration — the same fields
  * OpenClaw's ControlUI manages, but written through the plugin's own config
  * channel (`api.runtime.config.mutateConfigFile`, proven by plugin-upgrade) so
- * NO OpenClaw core changes are needed. All edits land in `agents.list[]` of the
- * host config file (`~/.clawrc`), exactly where ControlUI's `config.set` writes.
+ * NO OpenClaw core changes are needed. All edits land in the host agent roster
+ * (`agents.entries` on OpenClaw ≥2026.8.1;
+ * COMPAT(openclaw<2026.8.1): `agents.list[]` on older hosts — see `agent-roster.ts`),
+ * exactly where ControlUI's `config.set` writes.
  *
  * Editable fields:
- *  - model           → agents.list[i].model        (string | {primary,fallbacks})
- *  - thinkingDefault → agents.list[i].thinkingDefault
- *  - tools           → agents.list[i].tools        ({profile,allow,alsoAllow,deny})
- *  - skills          → agents.list[i].skills       (string[]; [] disables all, absent inherits defaults)
+ *  - model           → roster entry `.model`        (string | {primary,fallbacks})
+ *  - thinkingDefault → roster entry `.thinkingDefault`
+ *  - tools           → roster entry `.tools`        ({profile,allow,alsoAllow,deny})
+ *  - skills          → roster entry `.skills`       (string[]; [] disables all, absent inherits defaults)
  *
  * Clearing an override MUST delete the field (not leave a stale value) so the
  * core's config merge falls back to `agents.defaults` — same hazard documented
@@ -22,6 +24,7 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import { getFridayAgentForwardRuntime } from "../../agent-forward-runtime.js";
 import { getUpgradeRuntime } from "../../upgrade-runtime.js";
 import { normalizeAgentId } from "../../agent-id.js";
+import { ensureAgentRosterConfig, findAgentRosterConfig } from "../../agent-roster.js";
 import { discoverAvailableSkills, type DiscoveredSkill } from "../../skills-discovery.js";
 import { extractBearerToken } from "../middleware/auth.js";
 import { readJsonBody } from "../middleware/body.js";
@@ -81,20 +84,10 @@ function readToolsConfig(value: unknown): AgentToolsConfig | undefined {
   return view;
 }
 
-/** Locate the configured `agents.list[]` entry whose normalized id matches `agentId`. */
-function findAgentEntry(cfg: unknown, agentId: string): Record<string, unknown> | undefined {
-  const agents = (cfg as Record<string, unknown> | undefined)?.agents as
-    | Record<string, unknown>
-    | undefined;
-  const list = agents?.list as Array<Record<string, unknown>> | undefined;
-  if (!Array.isArray(list)) return undefined;
-  return list.find((a) => a && typeof a === "object" && normalizeAgentId(a.id) === agentId);
-}
-
 function buildConfigView(agentId: string): AgentConfigView {
   const rt = getFridayAgentForwardRuntime();
   const cfg = rt?.getConfig();
-  const entry = cfg ? findAgentEntry(cfg, agentId) : undefined;
+  const entry = cfg ? findAgentRosterConfig(cfg, agentId) : undefined;
   return {
     id: agentId,
     exists: entry !== undefined,
@@ -224,17 +217,7 @@ export async function handleAgentConfig(
       afterWrite: { mode: "auto" },
       mutate: (draftRaw) => {
         const draft = draftRaw as Record<string, unknown>;
-        const agents = (draft.agents ??= {}) as Record<string, unknown>;
-        const list = (agents.list ??= []) as Array<Record<string, unknown>>;
-        let entry = list.find(
-          (a) => a && typeof a === "object" && normalizeAgentId(a.id) === agentId,
-        );
-        if (!entry) {
-          // Implicit agent (e.g. "main") with no list entry yet — create a bare one.
-          // Never set `default: true`: that would change default-agent resolution.
-          entry = { id: agentId };
-          list.push(entry);
-        }
+        const entry = ensureAgentRosterConfig(draft, agentId);
         applyField(entry, "model", model);
         applyField(entry, "thinkingDefault", thinkingDefault);
         applyField(entry, "tools", tools);

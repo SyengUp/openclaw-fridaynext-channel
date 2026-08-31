@@ -21,6 +21,8 @@ function makeSkills(parent: string, ids: string[]): void {
 }
 
 describe("discoverAvailableSkills", () => {
+  // COMPAT(openclaw<2026.8.1): fixtures use agents.list. Rewrite to agents.entries
+  // when dropping the list roster; see src/agent-roster.ts.
   let root: string;
   let emptyHome: string;
   let savedHome: string | undefined;

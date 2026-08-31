@@ -58,6 +58,9 @@ function setRuntimes(config: Record<string, unknown>, workspace?: string): void 
 }
 
 describe("handleAgentConfig", () => {
+  // COMPAT(openclaw<2026.8.1): list-shaped fixtures. Rewrite to agents.entries
+  // (id is the map key, no `id` field inside) when dropping the list roster;
+  // see src/agent-roster.ts. Keep the dedicated entries tests below.
   // Skill discovery scans the personal `~/.agents/skills` dir (an "extra" source),
   // so real skills on the dev machine leak into availableSkills assertions unless
   // HOME points at an isolated temp dir (os.homedir() honors $HOME on POSIX).
@@ -195,7 +198,63 @@ describe("handleAgentConfig", () => {
     expect("skills" in (config.agents as any).list[0]).toBe(false);
   });
 
-  it("PUT creates a bare list entry for an implicit agent, never marking it default", async () => {
+  it("GET reads tools/skills from agents.entries (OpenClaw ≥2026.8.1 roster)", async () => {
+    setRuntimes({
+      agents: {
+        ownership: "explicit",
+        entries: {
+          main: {
+            name: "F.R.I.D.A.Y",
+            model: "anthropic/claude",
+            thinkingDefault: "high",
+            tools: { profile: "full", deny: ["bash"] },
+            skills: ["github", "weather"],
+          },
+        },
+      },
+    });
+    const res = new MockRes();
+    await handleAgentConfig(makeReq(AUTH), res as any, "main");
+    expect(res.statusCode).toBe(200);
+    const body = JSON.parse(res.body);
+    expect(body.exists).toBe(true);
+    expect(body.model).toBe("anthropic/claude");
+    expect(body.thinkingDefault).toBe("high");
+    expect(body.tools).toEqual({ profile: "full", deny: ["bash"] });
+    expect(body.skills).toEqual(["github", "weather"]);
+  });
+
+  it("PUT writes into agents.entries and does not create agents.list", async () => {
+    const config: Record<string, unknown> = {
+      agents: {
+        ownership: "explicit",
+        entries: {
+          main: { name: "F.R.I.D.A.Y", skills: ["github"] },
+        },
+      },
+    };
+    setRuntimes(config);
+    const res = new MockRes();
+    await handleAgentConfig(
+      makeReq(AUTH, "PUT", { tools: { profile: "coding", alsoAllow: ["canvas"] } }),
+      res as any,
+      "main",
+    );
+    expect(res.statusCode).toBe(200);
+    const body = JSON.parse(res.body);
+    expect(body.exists).toBe(true);
+    expect(body.tools).toEqual({ profile: "coding", alsoAllow: ["canvas"] });
+    const agents = config.agents as {
+      list?: unknown;
+      entries: Record<string, Record<string, unknown>>;
+    };
+    expect(agents.list).toBeUndefined();
+    expect(agents.entries.main.tools).toEqual({ profile: "coding", alsoAllow: ["canvas"] });
+    expect("id" in agents.entries.main).toBe(false);
+    expect(agents.entries.main.skills).toEqual(["github"]);
+  });
+
+  it("COMPAT(openclaw<2026.8.1): PUT creates a bare list entry for an implicit agent, never marking it default", async () => {
     const config: Record<string, unknown> = { agents: { defaults: {} } };
     setRuntimes(config);
     const res = new MockRes();

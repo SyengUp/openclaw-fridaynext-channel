@@ -6,7 +6,11 @@ import {
   type FridayAgentForwardRuntime,
 } from "../../agent-forward-runtime.js";
 import { extractBearerToken } from "../middleware/auth.js";
-import { DEFAULT_AGENT_ID, normalizeAgentId } from "../../agent-id.js";
+import { DEFAULT_AGENT_ID } from "../../agent-id.js";
+import {
+  listAgentRoster,
+  resolveRosterDefaultAgentId,
+} from "../../agent-roster.js";
 import { readGreetingFor } from "../../agent-greetings/greetings-store.js";
 
 export interface FridayAgentEntry {
@@ -97,8 +101,10 @@ function readWorkspaceIdentityName(
 
 /**
  * Reads the configured agents directly from the runtime config (same approach as
- * models-list.ts). When no agents are configured OpenClaw runs an implicit "main"
- * agent, so we return a single default entry to match that behaviour.
+ * models-list.ts). OpenClaw ≥2026.8.1 stores the roster at `agents.entries`.
+ * COMPAT(openclaw<2026.8.1): older hosts keep `agents.list` (see `agent-roster.ts`).
+ * When neither is present OpenClaw runs an implicit "main" agent, so we return a
+ * single default entry to match that behaviour.
  */
 export function resolveConfiguredAgents(): ResolvedAgents {
   const rt = getFridayAgentForwardRuntime();
@@ -106,7 +112,7 @@ export function resolveConfiguredAgents(): ResolvedAgents {
 
   const cfg = rt.getConfig() as Record<string, unknown>;
   const agents = cfg?.agents as Record<string, unknown> | undefined;
-  const list = agents?.list as Array<Record<string, unknown>> | undefined;
+  const roster = listAgentRoster(cfg);
 
   // Agent-level default thinking level inherited by every agent that doesn't set
   // its own `thinkingDefault` (e.g. the built-in `main`, which relies on this).
@@ -116,8 +122,8 @@ export function resolveConfiguredAgents(): ResolvedAgents {
   const agentDefaults = agents?.defaults as Record<string, unknown> | undefined;
   const inheritedThinkingDefault = readString(agentDefaults?.thinkingDefault);
 
-  if (!Array.isArray(list) || list.length === 0) {
-    // Implicit `main` agent (no `agents.list`): config carries no name, so fall
+  if (roster.length === 0) {
+    // Implicit `main` agent (no roster): config carries no name, so fall
     // back to the workspace IDENTITY.md `Name` — the same source ControlUI and
     // the list branch below use — instead of letting the app show the raw id.
     const name = readWorkspaceIdentityName(rt, cfg, DEFAULT_AGENT_ID);
@@ -137,18 +143,9 @@ export function resolveConfiguredAgents(): ResolvedAgents {
     };
   }
 
-  // Default agent: first entry marked `default: true`, else the first entry.
-  const explicitDefault = list.find((a) => a?.default === true);
-  const defaultAgentId = normalizeAgentId((explicitDefault ?? list[0])?.id);
-
-  const seen = new Set<string>();
+  const defaultAgentId = resolveRosterDefaultAgentId(cfg);
   const entries: FridayAgentEntry[] = [];
-  for (const agent of list) {
-    if (!agent || typeof agent !== "object") continue;
-    const id = normalizeAgentId(agent.id);
-    if (seen.has(id)) continue;
-    seen.add(id);
-
+  for (const { id, config: agent } of roster) {
     const identity = agent.identity as Record<string, unknown> | undefined;
     entries.push({
       id,

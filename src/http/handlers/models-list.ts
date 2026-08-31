@@ -1,6 +1,7 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { getFridayAgentForwardRuntime } from "../../agent-forward-runtime.js";
 import { normalizeAgentId } from "../../agent-id.js";
+import { listAgentRoster } from "../../agent-roster.js";
 import { resolveModelRuntime } from "../../model-runtime.js";
 import { splitModelRef } from "../../session/session-manager.js";
 import { resolveModelThinking, type ThinkingLevelOption } from "../../thinking-levels.js";
@@ -61,7 +62,7 @@ function resolveConfiguredModels(agentId?: string): ResolvedModels {
     }
   }
 
-  for (const agent of (agents?.list as Array<Record<string, unknown>> | undefined) ?? []) {
+  for (const { config: agent } of listAgentRoster(cfg)) {
     const primaryModel = typeof agent?.model === "string" ? agent.model : undefined;
     if (primaryModel && !seen.has(primaryModel)) {
       const split = splitModelRef(primaryModel);

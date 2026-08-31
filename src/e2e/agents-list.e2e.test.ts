@@ -33,6 +33,8 @@ async function getAgents(
 }
 
 describe("e2e agents list", () => {
+  // COMPAT(openclaw<2026.8.1): setForwardConfig uses agents.list. Rewrite to
+  // agents.entries when dropping the list roster; see src/agent-roster.ts.
   let historyDir = "";
 
   beforeEach(() => {

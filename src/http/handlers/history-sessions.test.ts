@@ -85,6 +85,8 @@ function setForward(config: unknown, storesByAgent: Record<string, Record<string
 }
 
 describe("handleHistorySessions", () => {
+  // COMPAT(openclaw<2026.8.1): forward-runtime fixtures use agents.list. Rewrite to
+  // agents.entries when dropping the list roster; see src/agent-roster.ts.
   beforeEach(() => {
     tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "friday-hs-"));
     setMockRuntime();

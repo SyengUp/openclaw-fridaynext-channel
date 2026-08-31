@@ -407,12 +407,29 @@ for (const cmd of [
 
 // Agent tools
 if (!config.agents) config.agents = {};
-if (!Array.isArray(config.agents.list)) config.agents.list = [];
-let mainAgent = config.agents.list.find((a) => a.id === "main");
-if (!mainAgent) {
-  mainAgent = { id: "main" };
-  config.agents.list.push(mainAgent);
-  configChanged = true;
+let mainAgent;
+if (
+  config.agents.entries &&
+  typeof config.agents.entries === "object" &&
+  !Array.isArray(config.agents.entries)
+) {
+  // OpenClaw ≥2026.8.1: writing agents.list into an entries roster fails the strict schema.
+  mainAgent = config.agents.entries.main;
+  if (!mainAgent || typeof mainAgent !== "object") {
+    mainAgent = {};
+    config.agents.entries.main = mainAgent;
+    configChanged = true;
+  }
+} else {
+  // COMPAT(openclaw<2026.8.1): pre-entries array roster. Drop this branch (and
+  // never create `agents.list`) when no install still uses list — see src/agent-roster.ts.
+  if (!Array.isArray(config.agents.list)) config.agents.list = [];
+  mainAgent = config.agents.list.find((a) => a && a.id === "main");
+  if (!mainAgent) {
+    mainAgent = { id: "main" };
+    config.agents.list.push(mainAgent);
+    configChanged = true;
+  }
 }
 if (!mainAgent.tools) mainAgent.tools = {};
 if (!Array.isArray(mainAgent.tools.alsoAllow)) mainAgent.tools.alsoAllow = [];

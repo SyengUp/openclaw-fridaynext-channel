@@ -48,7 +48,7 @@ import os from "node:os";
 import path from "node:path";
 import { createRequire } from "node:module";
 import { getFridayAgentForwardRuntime } from "./agent-forward-runtime.js";
-import { DEFAULT_AGENT_ID, normalizeAgentId } from "./agent-id.js";
+import { resolveRosterDefaultAgentId } from "./agent-roster.js";
 
 /** Depth limit for the recursive walk under each source dir (skills nest a few levels). */
 const MAX_SKILL_WALK_DEPTH = 6;
@@ -220,14 +220,7 @@ function bundledSkillSources(
 }
 
 function resolveDefaultAgentId(cfg: Record<string, unknown> | undefined): string {
-  const list = (cfg?.agents as Record<string, unknown> | undefined)?.list as
-    | Array<Record<string, unknown>>
-    | undefined;
-  if (Array.isArray(list) && list.length > 0) {
-    const def = list.find((a) => a?.default === true) ?? list[0];
-    if (def?.id) return normalizeAgentId(def.id);
-  }
-  return DEFAULT_AGENT_ID;
+  return resolveRosterDefaultAgentId(cfg);
 }
 
 /**

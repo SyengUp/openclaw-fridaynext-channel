@@ -3,8 +3,8 @@
  *
  * Renames an agent through OpenClaw's **canonical** path: the gateway method
  * `agents.update`. That one call does all three writes core does for a rename —
- *   1. `agents.list[i].name`            (the list label)
- *   2. `agents.list[i].identity.name`   (the identity block)
+ *   1. the roster entry `.name`             (the list label)
+ *   2. the roster entry `.identity.name`    (the identity block)
  *   3. the workspace `IDENTITY.md` `- **Name:**` line (merged, other content kept)
  * — which is exactly what `openclaw agents set-identity` and ControlUI produce.
  * None of those helpers (`updateAgentConfigEntry`, `mergeIdentityMarkdownContent`)
@@ -21,11 +21,14 @@
  *
  * TWO WAYS THE DEFAULT ("main") AGENT DIFFERS — both handled here:
  *
- * (a) `agents.update` rejects agents that aren't in `agents.list`
- *     (`isConfiguredAgent` = "has a list entry"). The common `main` is IMPLICIT:
- *     config carries `agents: { defaults: {…} }` and no list at all, so a bare
- *     rename would 400 with `agent "main" not found`. We materialize `{ id }`
- *     first (never `default: true` — that would move default-agent resolution).
+ * (a) `agents.update` rejects agents that aren't in the host roster
+ *     (`isConfiguredAgent`). COMPAT(openclaw<2026.8.1): the common `main` is
+ *     IMPLICIT — config carries `agents: { defaults: {…} }` and no list at all,
+ *     so a bare rename would 400 with `agent "main" not found`. We materialize a
+ *     bare roster row first (never `default: true` — that would move default-agent
+ *     resolution; on old hosts that row is `{ id }` in `agents.list`, see
+ *     `agent-roster.ts`). On OpenClaw ≥2026.8.1 the roster is `agents.entries`
+ *     and `main` is usually already present.
  *
  * (b) For the DEFAULT agent, core's `resolveAssistantIdentity` ranks
  *     `ui.assistant.name` ABOVE `identity.name` (non-default agents rank it last).
@@ -47,6 +50,11 @@ import { getFridayNextRuntime } from "../../runtime.js";
 import { getFridayAgentForwardRuntime } from "../../agent-forward-runtime.js";
 import { getUpgradeRuntime } from "../../upgrade-runtime.js";
 import { normalizeAgentId } from "../../agent-id.js";
+import {
+  ensureAgentRosterConfig,
+  findAgentRosterConfig,
+  resolveRosterDefaultAgentId,
+} from "../../agent-roster.js";
 import { createFridayNextLogger } from "../../logging.js";
 
 /** Core caps assistant display names at 50 chars (MAX_ASSISTANT_NAME); reject rather than truncate. */
@@ -86,38 +94,21 @@ function readConfig(): Record<string, unknown> | undefined {
   return cfg && typeof cfg === "object" ? (cfg as Record<string, unknown>) : undefined;
 }
 
-function agentList(cfg: Record<string, unknown> | undefined): Array<Record<string, unknown>> {
-  const agents = cfg?.agents as Record<string, unknown> | undefined;
-  const list = agents?.list;
-  return Array.isArray(list) ? (list as Array<Record<string, unknown>>) : [];
-}
-
 /** The default agent is the entry flagged `default: true`, else the first one, else `main`. */
 function resolveDefaultAgentId(cfg: Record<string, unknown> | undefined): string {
-  const list = agentList(cfg);
-  if (list.length === 0) return "main";
-  const explicit = list.find((entry) => entry?.default === true);
-  return normalizeAgentId((explicit ?? list[0])?.id);
+  return resolveRosterDefaultAgentId(cfg);
 }
 
-/** `agents.update` 400s on agents with no `agents.list` entry — materialize a bare one first. */
+/** `agents.update` 400s on agents with no roster entry — materialize a bare one first.
+ * COMPAT(openclaw<2026.8.1): `ensureAgentRosterConfig` writes `agents.list` on old hosts. */
 async function ensureAgentListEntry(agentId: string): Promise<void> {
-  const hasEntry = agentList(readConfig()).some(
-    (entry) => entry && typeof entry === "object" && normalizeAgentId(entry.id) === agentId,
-  );
-  if (hasEntry) return;
+  if (findAgentRosterConfig(readConfig(), agentId)) return;
   const upgrade = getUpgradeRuntime();
   if (!upgrade) throw new Error("Config write runtime unavailable");
   await upgrade.mutateConfigFile({
     afterWrite: { mode: "auto" },
     mutate: (draftRaw) => {
-      const draft = draftRaw as Record<string, unknown>;
-      const agents = (draft.agents ??= {}) as Record<string, unknown>;
-      const list = (agents.list ??= []) as Array<Record<string, unknown>>;
-      if (list.some((e) => e && typeof e === "object" && normalizeAgentId(e.id) === agentId)) return;
-      // Never `default: true`: an implicit main is already the default by position,
-      // and flagging it would pin default resolution to this entry.
-      list.push({ id: agentId });
+      ensureAgentRosterConfig(draftRaw as Record<string, unknown>, agentId);
     },
   });
 }
@@ -197,7 +188,7 @@ export async function handleAgentIdentity(
     await ensureAgentListEntry(agentId);
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
-    log.error(`failed to materialize agents.list entry for "${agentId}": ${msg}`);
+    log.error(`failed to materialize agent roster entry for "${agentId}": ${msg}`);
     return json(res, 500, { ok: false, error: "Failed to prepare agent config", detail: msg });
   }
 

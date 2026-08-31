@@ -67,6 +67,8 @@ function runMutations(draft: Record<string, unknown>): Record<string, unknown> {
 }
 
 describe("handleAgentIdentity", () => {
+  // COMPAT(openclaw<2026.8.1): default getConfig mock and several cases use agents.list.
+  // Rewrite to agents.entries when dropping the list roster; see src/agent-roster.ts.
   beforeEach(() => {
     dispatchGatewayMethod.mockReset();
     dispatchGatewayMethod.mockResolvedValue({ ok: true, payload: { ok: true, agentId: "main" } });
@@ -102,7 +104,7 @@ describe("handleAgentIdentity", () => {
     });
   });
 
-  it("materializes an agents.list entry for an implicit main before dispatching", async () => {
+  it("COMPAT(openclaw<2026.8.1): materializes an agents.list entry for an implicit main before dispatching", async () => {
     getConfig.mockReturnValue({ agents: { defaults: {} } });
     await invoke("PUT", { agentId: "main", name: "Friday" });
     const draft = runMutations({ agents: { defaults: {} } });
@@ -113,7 +115,16 @@ describe("handleAgentIdentity", () => {
     expect(dispatchGatewayMethod).toHaveBeenCalled();
   });
 
-  it("does not touch agents.list when the entry already exists", async () => {
+  it("does not materialize a roster row when the agent already exists in agents.entries", async () => {
+    getConfig.mockReturnValue({
+      agents: { ownership: "explicit", entries: { main: { name: "F" } } },
+    });
+    await invoke("PUT", { agentId: "main", name: "Friday" });
+    expect(mutateConfigFile).not.toHaveBeenCalled();
+    expect(dispatchGatewayMethod).toHaveBeenCalled();
+  });
+
+  it("COMPAT(openclaw<2026.8.1): does not touch agents.list when the entry already exists", async () => {
     await invoke("PUT", { agentId: "main", name: "Friday" });
     expect(mutateConfigFile).not.toHaveBeenCalled();
   });

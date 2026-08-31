@@ -4,15 +4,16 @@
  *
  * Why re-derive it here: the gateway's `models.list` RPC returns `ModelChoice` (id/alias/context/
  * reasoning) with no runtime field, and plugin-sdk exposes no resolver — the only core surface that
- * reports a runtime is `agents.list`, and that is per *agent* (resolved for the agent's default
+ * reports a runtime is the agent roster, and that is per *agent* (resolved for the agent's default
  * model), not per model. Everything the resolution needs is in the host config, which this plugin
  * already reads for the model/agent catalogs, so we mirror core's precedence
  * (`src/agents/model-runtime-policy.ts` + `harness/policy.ts`), highest first:
  *
- *   1. agents.list[agent].models["<provider>/<model>"].agentRuntime   (exact)
+ *   1. agent roster entry `.models["<provider>/<model>"].agentRuntime`  (exact)
+ *      COMPAT(openclaw<2026.8.1): that entry used to live at `agents.list[i]`
  *   2. agents.defaults.models["<provider>/<model>"].agentRuntime      (exact)
  *   3. models.providers[<provider>].models[].agentRuntime             (exact catalog entry)
- *   4. agents.(list[agent]|defaults).models["<provider>/*"].agentRuntime  (provider wildcard)
+ *   4. agent roster or defaults `.models["<provider>/*"].agentRuntime` (provider wildcard)
  *   5. models.providers[<provider>].agentRuntime
  *
  * A missing / `auto` / `default` policy means the embedded `openclaw` runtime — except OpenAI on the
@@ -24,7 +25,7 @@
  * report it" (not "embedded") — don't paper over that with a default on the client.
  */
 
-import { normalizeAgentId } from "./agent-id.js";
+import { findAgentRosterConfig } from "./agent-roster.js";
 
 /** Resolved runtime for one model, plus the config surface that supplied it. */
 export interface ResolvedModelRuntime {
@@ -96,12 +97,7 @@ function matchKindForKey(key: string, provider: string, modelId: string): MatchK
 
 function agentEntryFor(cfg: Record<string, unknown>, agentId: string | undefined) {
   if (!agentId?.trim()) return undefined;
-  const normalized = normalizeAgentId(agentId);
-  const list = (cfg.agents as Record<string, unknown> | undefined)?.list;
-  if (!Array.isArray(list)) return undefined;
-  return (list as Array<Record<string, unknown>>).find(
-    (entry) => entry && typeof entry === "object" && normalizeAgentId(entry.id) === normalized,
-  );
+  return findAgentRosterConfig(cfg, agentId);
 }
 
 /**

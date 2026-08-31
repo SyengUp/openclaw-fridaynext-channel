@@ -17,7 +17,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { importAbsoluteModule } from "./import-absolute-module.js";
 import { resolveOpenClawRoot } from "./skills-discovery.js";
-import { normalizeAgentId } from "./agent-id.js";
+import { findAgentRosterConfig } from "./agent-roster.js";
 
 interface CoreCatalogTool {
   id: string;
@@ -216,11 +216,7 @@ function readStringArray(value: unknown): string[] {
 
 /** Read an agent's `tools` config block from the host config. */
 function findAgentTools(cfg: unknown, agentId: string): AgentToolsConfigShape | undefined {
-  const list = (
-    (cfg as Record<string, unknown> | undefined)?.agents as Record<string, unknown> | undefined
-  )?.list as Array<Record<string, unknown>> | undefined;
-  if (!Array.isArray(list)) return undefined;
-  const entry = list.find((a) => a && typeof a === "object" && normalizeAgentId(a.id) === agentId);
+  const entry = findAgentRosterConfig(cfg, agentId);
   return entry?.tools as AgentToolsConfigShape | undefined;
 }
 

@@ -51,6 +51,10 @@ export default defineConfig({
         __dirname,
         "src/test-support/mock-plugin-runtime.ts",
       ),
+      "openclaw/plugin-sdk/webhook-request-guards": path.resolve(
+        __dirname,
+        "src/test-support/mock-webhook-request-guards.ts",
+      ),
       openclaw: openclawDist,
     },
   },

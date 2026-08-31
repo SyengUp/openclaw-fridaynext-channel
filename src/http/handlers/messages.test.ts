@@ -9,6 +9,8 @@ import {
   __setMockFridayDispatchForTests,
 } from "../../agent/dispatch-bridge.js";
 import { sseEmitter } from "../../sse/emitter.js";
+import { runDetachedWebhookWork } from "openclaw/plugin-sdk/webhook-request-guards";
+import { __setDetachedWebhookWorkImporterForTests } from "../../agent/detached-webhook-work.js";
 
 class MockRes extends EventEmitter {
   statusCode = 0;
@@ -45,6 +47,8 @@ describe("handleMessages dispatch context", () => {
   afterEach(() => {
     clearFridayNextRuntime();
     __resetMockFridayDispatchForTests();
+    vi.mocked(runDetachedWebhookWork).mockClear();
+    __setDetachedWebhookWorkImporterForTests(null);
   });
 
   it("matches bundled-provider inbound routing metadata and preserves owner fields", async () => {
@@ -94,6 +98,7 @@ describe("handleMessages dispatch context", () => {
     expect(capturedCtx!.AccountId).toBe("default");
     expect(capturedCtx!.SessionKey).toBe("agent:main:default");
     expect(capturedCtx!.CommandSource).toBeUndefined();
+    expect(runDetachedWebhookWork).toHaveBeenCalledTimes(1);
   });
 
   // Regression guard: `"native"` routes the turn into core's native slash FAST PATH, which returns

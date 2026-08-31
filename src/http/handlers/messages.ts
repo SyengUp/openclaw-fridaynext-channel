@@ -53,6 +53,7 @@ import {
   resolveMediaUrl,
 } from "./files.js";
 import { runFridayDispatch } from "../../agent/dispatch-bridge.js";
+import { loadDetachedWebhookWork } from "../../agent/detached-webhook-work.js";
 import { ensureSubagentSpawnScope } from "../../agent/operator-scope.js";
 import { saveInboundMediaBuffer } from "../../agent/media-bridge.js";
 import { pathToFileURL } from "node:url";
@@ -828,7 +829,15 @@ export async function handleMessages(req: IncomingMessage, res: ServerResponse):
     log("SCOPE_ELEVATED", normalizedDeviceId, runId, elevatedScopes.join(","));
   }
 
-  runAgent().catch((err) => {
+  // 202 is written before dispatch. OpenClaw 2026.8.1 wraps plugin HTTP in
+  // root-work admission and releases it when this handler returns; a bare
+  // fire-and-forget then inherits the released ALS and enqueue is refused as
+  // GatewayDrainingError. Await the helper *before* returning so 2026.8.1
+  // can reserve an independent root while this request is still admitted.
+  // COMPAT(openclaw<2026.8.1): loadDetachedWebhookWork falls back to identity
+  // on hosts without the helper. See detached-webhook-work.ts for removal.
+  const startDetached = await loadDetachedWebhookWork();
+  void startDetached(() => runAgent()).catch((err) => {
     log("RUN_ERROR", normalizedDeviceId, runId, String(err), "error");
     sseEmitter.untrackRun(runId);
   });
