@@ -260,8 +260,32 @@ const resolvedVersion = await resolveTaggedVersion(DIST_TAG, registry);
 // hiccup doesn't block the install. Re-running later pins an exact spec.
 const installSpec = `${PKG}@${resolvedVersion ?? DIST_TAG}`;
 
+// OpenClaw 2026.8.1+ refuses `plugins install` until the operator accepts the
+// plugin's declared capabilities. COMPAT(openclaw<2026.8.1): older CLIs do not
+// have `--accept-capabilities` (unknown option → install fails). Probe --help
+// once so we don't spend the 120s timeout discovering that.
+let cachedAcceptCapabilitiesFlag;
+function acceptCapabilitiesFlag() {
+  if (cachedAcceptCapabilitiesFlag !== undefined) return cachedAcceptCapabilitiesFlag;
+  try {
+    const help = execSync(`${openclawCmd} plugins install --help`, {
+      encoding: "utf8",
+      timeout: 20000,
+    });
+    cachedAcceptCapabilitiesFlag = String(help).includes("--accept-capabilities")
+      ? " --accept-capabilities"
+      : "";
+  } catch (err) {
+    const extra = `${err?.stdout ?? ""}${err?.stderr ?? ""}`;
+    cachedAcceptCapabilitiesFlag = extra.includes("--accept-capabilities")
+      ? " --accept-capabilities"
+      : "";
+  }
+  return cachedAcceptCapabilitiesFlag;
+}
+
 function runPluginInstall(spec, env) {
-  execSync(`${openclawCmd} plugins install ${spec} --force`, {
+  execSync(`${openclawCmd} plugins install ${spec} --force${acceptCapabilitiesFlag()}`, {
     encoding: "utf8",
     stdio: "pipe",
     timeout: 120000,

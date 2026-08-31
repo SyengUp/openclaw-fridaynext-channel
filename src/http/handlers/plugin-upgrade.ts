@@ -1,5 +1,6 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { extractBearerToken } from "../middleware/auth.js";
+import { loadDetachedWebhookWork } from "../../agent/detached-webhook-work.js";
 import { createFridayNextLogger } from "../../logging.js";
 import { alternateRegistry, npmRegistryEnv, resolveNpmRegistry } from "../../npm-registry.js";
 import { PLUGIN_PACKAGE_NAME, PLUGIN_VERSION } from "../../version.js";
@@ -10,7 +11,10 @@ import { getUpgradeRuntime, type SpawnResultLike } from "../../upgrade-runtime.j
  * Async plugin upgrade.
  *
  * POST /friday-next/plugin/upgrade runs `openclaw plugins install
- * @syengup/friday-channel-next@<exactVersion> --force` in the BACKGROUND and
+ * @syengup/friday-channel-next@<exactVersion> --force --accept-capabilities`
+ * in the BACKGROUND (OpenClaw ≥2026.8.1 refuses to start the CLI without
+ * capability consent; COMPAT(openclaw<2026.8.1) retries without that flag
+ * when the host CLI reports an unknown option) and
  * responds 202 immediately; the app polls GET /friday-next/plugin/upgrade/status
  * for progress. The install used to run synchronously on the HTTP request path
  * with a 120s cap — on small gateways a cold npm install (all deps from
@@ -66,6 +70,18 @@ function failUpgrade(error: string, detail: string): void {
   upgradeState = { ...upgradeState, phase: "failed", error, detail };
 }
 
+function pluginInstallArgv(spec: string, acceptCapabilities: boolean): string[] {
+  const argv = ["openclaw", "plugins", "install", spec, "--force"];
+  // OpenClaw 2026.8.1+ gates install on capability consent. Older CLIs do not
+  // know the flag (unknown option → exit 1).
+  if (acceptCapabilities) argv.push("--accept-capabilities");
+  return argv;
+}
+
+function isUnknownCliOption(stderr: string): boolean {
+  return /unknown option/i.test(stderr);
+}
+
 /** Runs the install off the HTTP request path. Mutates `upgradeState` through
  *  installing → installed → (restart) → gone, or → failed.
  *
@@ -85,13 +101,12 @@ async function runUpgradeInBackground(
     return;
   }
 
-  const runInstall = async (env: NodeJS.ProcessEnv | undefined): Promise<SpawnResultLike> => {
+  const runInstall = async (
+    argv: string[],
+    env: NodeJS.ProcessEnv | undefined,
+  ): Promise<SpawnResultLike> => {
     try {
-      return await rt.runCommandWithTimeout(
-        ["openclaw", "plugins", "install", spec, "--force"],
-        UPGRADE_INSTALL_TIMEOUT_MS,
-        env,
-      );
+      return await rt.runCommandWithTimeout(argv, UPGRADE_INSTALL_TIMEOUT_MS, env);
     } catch (err) {
       // `code: -1` marks a spawn failure (env/command problem — retrying on the
       // alternate registry would not help, so it is terminal).
@@ -99,7 +114,16 @@ async function runUpgradeInBackground(
     }
   };
 
-  let result = await runInstall(npmEnv);
+  // Prefer the 2026.8.1 consent flag. COMPAT(openclaw<2026.8.1): if this host's
+  // CLI rejects it, drop the flag and keep going — do this BEFORE the registry
+  // failover so an unknown option is not wasted on a second npm channel.
+  let argv = pluginInstallArgv(spec, true);
+  let result = await runInstall(argv, npmEnv);
+  if (result.code !== 0 && result.code !== -1 && isUnknownCliOption(result.stderr ?? "")) {
+    log.warn("host CLI has no --accept-capabilities; retrying without");
+    argv = pluginInstallArgv(spec, false);
+    result = await runInstall(argv, npmEnv);
+  }
   if (result.code !== 0) {
     const alternate = alternateRegistry(preferredRegistry);
     if (alternate && result.code !== -1) {
@@ -108,7 +132,7 @@ async function runUpgradeInBackground(
         `plugin upgrade exited code=${result.code}; retrying once via ${alternate}: ${stderrTail}`,
       );
       const retryEnv = await npmRegistryEnv(Date.now(), alternate);
-      const retried = await runInstall(retryEnv);
+      const retried = await runInstall(argv, retryEnv);
       if (retried.code === 0) result = retried;
       else result = retried.code !== -1 ? retried : result;
     }
@@ -227,7 +251,11 @@ export async function handlePluginUpgrade(
   if (npmEnv) log.info(`using npm registry ${npmEnv.npm_config_registry} for upgrade install`);
 
   upgradeState = { phase: "installing", from: PLUGIN_VERSION, to: latest };
-  void runUpgradeInBackground(spec, preferredRegistry, npmEnv, log);
+  // Same admission-root reason as POST /messages: 2026.8.1 releases ALS when
+  // this handler returns. Await the helper first, then fire-and-forget.
+  // COMPAT(openclaw<2026.8.1): identity fallback. See detached-webhook-work.ts.
+  const startDetached = await loadDetachedWebhookWork();
+  void startDetached(() => runUpgradeInBackground(spec, preferredRegistry, npmEnv, log));
 
   // 202 immediately — the install runs in the background; the app polls
   // GET /friday-next/plugin/upgrade/status for progress.

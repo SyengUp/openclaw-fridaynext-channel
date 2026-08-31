@@ -113,7 +113,14 @@ describe("POST /friday-next/plugin/upgrade", () => {
     expect(json).toMatchObject({ status: "upgrading", from: expect.any(String), to: "1.0.99" });
     // The install command was spawned, but the response did not wait on it.
     expect(runtime.runCommandWithTimeout).toHaveBeenCalledWith(
-      ["openclaw", "plugins", "install", "@syengup/friday-channel-next@1.0.99", "--force"],
+      [
+        "openclaw",
+        "plugins",
+        "install",
+        "@syengup/friday-channel-next@1.0.99",
+        "--force",
+        "--accept-capabilities",
+      ],
       expect.any(Number),
       undefined,
     );
@@ -240,6 +247,36 @@ describe("upgrade status machine", () => {
     expect(json).toMatchObject({ phase: "failed", error: "install-exit-nonzero" });
     expect(json.detail).toContain("second: mirror down"); // last failure wins
     expect(runtime.runCommandWithTimeout).toHaveBeenCalledTimes(2);
+  });
+
+  it("COMPAT(openclaw<2026.8.1): drops --accept-capabilities when the CLI rejects it", async () => {
+    runtime.runCommandWithTimeout
+      .mockResolvedValueOnce({
+        code: 1,
+        stdout: "",
+        stderr: "error: unknown option '--accept-capabilities'",
+      })
+      .mockResolvedValueOnce({ code: 0, stdout: "", stderr: "" });
+    await postUpgrade();
+    await vi.advanceTimersByTimeAsync(1_000);
+    const { json } = await getStatus();
+    expect(json.phase).toBe("installed");
+    expect(runtime.runCommandWithTimeout).toHaveBeenCalledTimes(2);
+    expect(runtime.runCommandWithTimeout.mock.calls[0]?.[0]).toEqual([
+      "openclaw",
+      "plugins",
+      "install",
+      "@syengup/friday-channel-next@1.0.99",
+      "--force",
+      "--accept-capabilities",
+    ]);
+    expect(runtime.runCommandWithTimeout.mock.calls[1]?.[0]).toEqual([
+      "openclaw",
+      "plugins",
+      "install",
+      "@syengup/friday-channel-next@1.0.99",
+      "--force",
+    ]);
   });
 
   it("does not retry on a spawn failure (code -1)", async () => {
