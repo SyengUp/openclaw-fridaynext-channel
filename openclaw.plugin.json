@@ -11,7 +11,8 @@
       "fridaynext_health_query",
       "fridaynext_health_log",
       "fridaynext_calendar_query",
-      "fridaynext_calendar_log"
+      "fridaynext_calendar_log",
+      "fridaynext_location_query"
     ]
   },
   "configSchema": {
