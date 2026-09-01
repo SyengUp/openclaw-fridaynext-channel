@@ -1223,13 +1223,13 @@ export async function startPublicAccess(
     startGatewaySubdomainPoll(cfg, log);
     return cachedPairing;
   }
+  ensureDir(); // must exist before the ownership file write below (fresh installs have no DATA_DIR)
   if (!claimPublicAccessOwnership(DATA_DIR, publicAccessRole())) {
     log(
       `public access already owned by pid ${readOwner(DATA_DIR)?.pid ?? "?"} — staying inert (secondary/CLI instance)`,
     );
     return null;
   }
-  ensureDir();
 
   // Relay address + token: from config when set, otherwise from the control plane. Without
   // them frpc could only fail to authenticate, so block and retry rather than spawn it.
