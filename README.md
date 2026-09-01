@@ -39,7 +39,7 @@ be online, and nothing is written without the write toggle on.
 ## A glimpse inside
 
 <p align="center">
-  <img src="assets/screenshots/glimpse.png" width="1055" alt="FridayNext screenshots — home, native markdown, transparent reasoning & tools, and agent management">
+  <img src="assets/screenshots/frame-33.png" width="1055" alt="FridayNext screenshots — home, native markdown, transparent reasoning & tools, and agent management">
 </p>
 
 <p align="center"><em>Your agents, your chats, your tools — all in one place.</em></p>
