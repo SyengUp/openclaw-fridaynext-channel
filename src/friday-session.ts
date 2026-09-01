@@ -2,6 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { sseEmitter } from "./sse/emitter.js";
+import { sessionReplayBuffer } from "./sse/session-replay-buffer.js";
 import { getFridayAgentForwardRuntime } from "./agent-forward-runtime.js";
 import { toSessionStoreKey } from "./session/session-manager.js";
 import { getOpenClawAgentRunContext } from "./agent-run-context-bridge.js";
@@ -90,6 +91,212 @@ const gatewayKeyToHistorySessionKey = new Map<string, string>();
 const deviceIdToLatestHistorySessionKey = new Map<string, string>();
 /** Last device that called POST /friday-next/messages (same gateway process). Used for cron/outbound when `to` is placeholder and the app is offline (no SSE). */
 let lastRegisteredFridayDeviceId: string | undefined;
+
+/**
+ * Devices that explicitly BOUND to a session (`POST /friday-next/sessions/bind`),
+ * keyed by every session-key variant (raw / store key / case-normalized).
+ *
+ * Binding is how the app attaches to a conversation started elsewhere (Control UI,
+ * WebChat, another client): `forwardAgentEventRaw` routes that session's `agent`
+ * frames to every bound device even when the run did not originate from a Friday
+ * POST (which is the only registration path of `sessionKeyToDeviceId`). Bindings
+ * survive gateway restarts via `session-binds.json`.
+ */
+const watchedSessionKeyToDeviceIds = new Map<string, Set<string>>();
+
+/**
+ * Durable copy of watched-session bindings (`deviceId → sessionKeys`), written on
+ * bind and read lazily on cold resolve. Same test guard as `last-device.json`:
+ * persistence is DISABLED under Vitest unless a test installs an override file.
+ */
+let sessionBindStateFileOverride: string | null | undefined;
+let bindStateLoaded = false;
+
+/** Vitest-only: `null` disables persistence, a path redirects it. Also resets in-memory state. */
+export function setSessionBindStateFileForTest(p: string | null): void {
+  sessionBindStateFileOverride = p;
+  watchedSessionKeyToDeviceIds.clear();
+  bindStateLoaded = false;
+}
+
+function sessionBindStateFile(): string | null {
+  if (sessionBindStateFileOverride !== undefined) return sessionBindStateFileOverride;
+  if (process.env.VITEST) return null;
+  return path.join(os.homedir(), ".openclaw", "friday-next", "session-binds.json");
+}
+
+function watchedSessionVariants(rawSessionKey: string): string[] {
+  const sk = rawSessionKey.trim();
+  const storeKey = toSessionStoreKey(sk);
+  return [
+    ...new Set([
+      sk,
+      storeKey,
+      normalizeFridaySessionKeyCase(sk),
+      normalizeFridaySessionKeyCase(storeKey),
+    ]),
+  ];
+}
+
+function loadPersistedSessionBinds(): void {
+  if (bindStateLoaded) return;
+  bindStateLoaded = true;
+  const file = sessionBindStateFile();
+  if (!file) return;
+  try {
+    const parsed = JSON.parse(fs.readFileSync(file, "utf8")) as {
+      devices?: Record<string, unknown>;
+    };
+    if (!parsed || typeof parsed.devices !== "object" || parsed.devices === null) return;
+    for (const [did, keys] of Object.entries(parsed.devices)) {
+      if (!Array.isArray(keys)) continue;
+      for (const raw of keys) {
+        if (typeof raw !== "string" || !raw.trim()) continue;
+        bindFridayDeviceToSession(raw, did);
+      }
+    }
+  } catch {
+    // best-effort: a corrupt binds file must never break cold reads
+  }
+}
+
+function persistSessionBinds(): void {
+  const file = sessionBindStateFile();
+  if (!file) return;
+  // `watchedSessionKeyToDeviceIds` is keyed by session-key variant; invert it into
+  // deviceId → canonical store keys (deduped) for a compact, idempotent file.
+  const byDevice = new Map<string, Set<string>>();
+  for (const [variant, devices] of watchedSessionKeyToDeviceIds) {
+    const storeKey = toSessionStoreKey(variant);
+    for (const did of devices) {
+      const keys = byDevice.get(did) ?? new Set<string>();
+      keys.add(storeKey);
+      byDevice.set(did, keys);
+    }
+  }
+  const devices: Record<string, string[]> = {};
+  for (const [did, keys] of byDevice) {
+    devices[did] = [...keys];
+  }
+  try {
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(file, JSON.stringify({ devices, updatedAt: Date.now() }));
+  } catch {
+    // best-effort: never let state persistence break the bind path
+  }
+}
+
+/**
+ * Attach a device to a session's live stream. Registers the same session-key
+ * variants as a POST mapping (so outbound / tool hooks resolve too), then injects
+ * the session's buffered `agent` frames (see `session-replay-buffer.ts`) into the
+ * device's durable SSE queue so it renders an in-progress or just-finished run
+ * even if it attached late. Returns the number of replayed frames.
+ */
+export function bindFridayDeviceToSession(rawSessionKey: string, deviceId: string): number {
+  const sk = rawSessionKey.trim();
+  const did = deviceId.trim().toUpperCase();
+  if (!sk || !did) return 0;
+  for (const k of watchedSessionVariants(sk)) {
+    const set = watchedSessionKeyToDeviceIds.get(k) ?? new Set<string>();
+    set.add(did);
+    watchedSessionKeyToDeviceIds.set(k, set);
+    // Additive only: a POST-registered owner keeps the owner path (outbound /
+    // tool hooks / direct-to-device frames). A bind never displaces it — the
+    // bound device still receives via the watched broadcast below.
+    if (!sessionKeyToDeviceId.has(k)) {
+      sessionKeyToDeviceId.set(k, did);
+    }
+    gatewayKeyToHistorySessionKey.set(k, sk);
+  }
+  deviceIdToLatestHistorySessionKey.set(did, sk);
+  noteFridayDeviceSeen(did);
+  persistSessionBinds();
+  let replayed = 0;
+  const byRun = replayWatermarkForDevice(did);
+  for (const frame of sessionReplayBuffer.framesFor(toSessionStoreKey(sk))) {
+    const runId = typeof frame.data.runId === "string" ? frame.data.runId : "";
+    const seq = typeof frame.data.seq === "number" ? frame.data.seq : undefined;
+    const watermark = runId ? byRun.get(runId) : undefined;
+    // Never re-inject frames this device already received (live or a previous
+    // bind): a replayed `lifecycle.start` would read as a server restart on the
+    // app side and unfreeze/re-stream the already-persisted round.
+    if (watermark !== undefined && (seq === undefined || seq <= watermark)) {
+      continue;
+    }
+    sseEmitter.broadcast(frame, did);
+    replayed += 1;
+    if (runId && seq !== undefined) {
+      noteReplayWatermark(did, runId, seq);
+    }
+  }
+  return replayed;
+}
+
+/** Every device that bound to this session (any key variant), in registration order. */
+export function watchedDevicesForSessionKey(sessionKey: string): string[] {
+  loadPersistedSessionBinds();
+  const seen = new Set<string>();
+  for (const k of watchedSessionVariants(sessionKey)) {
+    const set = watchedSessionKeyToDeviceIds.get(k);
+    if (set) {
+      for (const d of set) seen.add(d);
+    }
+  }
+  return [...seen];
+}
+
+/** Vitest-only: clear watched bindings + the bind-state cache flag. */
+export function resetSessionBindingsForTest(): void {
+  watchedSessionKeyToDeviceIds.clear();
+  sessionKeyToDeviceId.clear();
+  gatewayKeyToHistorySessionKey.clear();
+  deviceIdToLatestHistorySessionKey.clear();
+  lastRegisteredFridayDeviceId = undefined;
+  bindStateLoaded = false;
+  replayWatermarkByDevice.clear();
+}
+
+/**
+ * Per-device per-run inner `seq` watermark of frames already delivered to that
+ * device (live or replayed). Bind re-injection skips buffered frames at or below
+ * the watermark, so re-opening a session never re-delivers a completed run — the
+ * app would treat the replayed `lifecycle.start` as a server restart and
+ * unfreeze/re-stream the finished round. Frames for runs the device has never
+ * seen (watermark absent) are injected whole.
+ */
+const replayWatermarkByDevice = new Map<string, Map<string, number>>();
+const MAX_WATERMARKED_RUNS_PER_DEVICE = 64;
+
+function replayWatermarkForDevice(deviceId: string): Map<string, number> {
+  const did = deviceId.trim().toUpperCase();
+  let byRun = replayWatermarkByDevice.get(did);
+  if (!byRun) {
+    byRun = new Map();
+    replayWatermarkByDevice.set(did, byRun);
+  }
+  return byRun;
+}
+
+/** Record that `deviceId` already received `runId` up to inner seq `seq`. */
+function noteReplayWatermark(
+  deviceId: string,
+  runId: string,
+  seq: number | undefined,
+): void {
+  const did = deviceId.trim().toUpperCase();
+  const rid = (runId ?? "").trim();
+  if (!did || !rid || typeof seq !== "number" || !Number.isFinite(seq)) return;
+  const byRun = replayWatermarkForDevice(did);
+  const prior = byRun.get(rid) ?? 0;
+  if (seq > prior) {
+    byRun.set(rid, seq);
+    if (byRun.size > MAX_WATERMARKED_RUNS_PER_DEVICE) {
+      const oldest = byRun.keys().next().value;
+      if (typeof oldest === "string") byRun.delete(oldest);
+    }
+  }
+}
 
 /**
  * Durable copy of `lastRegisteredFridayDeviceId`.
@@ -190,6 +397,7 @@ export function getLastRegisteredFridayDeviceId(): string | undefined {
 
 /** Resolve device for gateway `sessionKey` (friday-style or last POST mapping). */
 export function resolveFridayDeviceIdForSessionKey(sessionKey: string): string | null {
+  loadPersistedSessionBinds();
   const mapped =
     sessionKeyToDeviceId.get(sessionKey) ??
     sessionKeyToDeviceId.get(toSessionStoreKey(sessionKey)) ??
@@ -324,7 +532,7 @@ function mergeUsage(
 function completeAgentEventForward(params: {
   evt: ForwardAgentEventArgs;
   sk: string;
-  deviceIdRaw: string;
+  deviceIdRaw: string | null;
   outgoingData: Record<string, unknown>;
   isTerminalLifecycle: boolean;
   subagentMeta?: {
@@ -337,10 +545,6 @@ function completeAgentEventForward(params: {
 }): void {
   const { evt, sk, deviceIdRaw, outgoingData, isTerminalLifecycle, subagentMeta } = params;
 
-  const deviceId = deviceIdRaw.toUpperCase();
-  const targetRunId = sseEmitter.getLastRunIdForDevice(deviceId) ?? evt.runId;
-  const directToDevice = !sseEmitter.hasTrackedDevices(targetRunId);
-
   const payload: Record<string, unknown> = {
     runId: evt.runId,
     seq: evt.seq,
@@ -349,10 +553,35 @@ function completeAgentEventForward(params: {
     data: outgoingData,
     sessionKey: evt.sessionKey ?? sk,
   };
-  if (directToDevice) payload.deviceId = deviceId;
   if (subagentMeta) payload.subagent = subagentMeta;
 
+  // The replay buffer is keyed by the same session the app renders, so a device
+  // that binds later (e.g. opening a Control UI conversation in the app) gets the
+  // run's frames up to now — including runs that had NO Friday device at emit time.
+  // Buffered frames carry the same wire payload the live path sends; the app's
+  // per-run seq dedup makes re-injection idempotent.
+  if (sk) {
+    sessionReplayBuffer.append(sk, { type: "agent", data: payload });
+  }
+
+  if (!deviceIdRaw) return;
+
+  const deviceId = deviceIdRaw.toUpperCase();
+  const targetRunId = sseEmitter.getLastRunIdForDevice(deviceId) ?? evt.runId;
+  if (!sseEmitter.hasTrackedDevices(targetRunId)) payload.deviceId = deviceId;
+
   sseEmitter.broadcastToRun(targetRunId, { type: "agent", data: payload });
+  noteReplayWatermark(deviceId, evt.runId, evt.seq);
+
+  // Bound (watched) devices that did not originate this run still receive the
+  // stream — this is how a Control-UI-started conversation reaches the app.
+  // `sessionKeyToDeviceId` (last-writer-wins) already covers the owner, so only
+  // broadcast to the additional bound devices.
+  for (const watched of watchedDevicesForSessionKey(sk)) {
+    if (watched === deviceId) continue;
+    sseEmitter.broadcast({ type: "agent", data: payload }, watched);
+    noteReplayWatermark(watched, evt.runId, evt.seq);
+  }
 
   if (isTerminalLifecycle) {
     openClawRunIdToDeviceId.delete(evt.runId);
@@ -461,13 +690,19 @@ export function forwardAgentEventRaw(evt: ForwardAgentEventArgs): void {
     const sub = lookupByRunId(evt.runId);
     if (sub) deviceIdRaw = sub.deviceId;
   }
-  if (!deviceIdRaw) return;
 
   if (!sk) {
+    if (!deviceIdRaw) {
+      // Nothing to route and no session to buffer: a run the plugin cannot
+      // attribute to any Friday session or device (e.g. heartbeat streams).
+      return;
+    }
     sk = latestHistorySessionKeyForDeviceId(deviceIdRaw) ?? `friday-next-${deviceIdRaw}`;
   }
 
-  openClawRunIdToDeviceId.set(evt.runId, deviceIdRaw.toUpperCase());
+  if (deviceIdRaw) {
+    openClawRunIdToDeviceId.set(evt.runId, deviceIdRaw.toUpperCase());
+  }
 
   // Flag Codex app-server runs so the message handler / tool hooks synthesize the `thinking` /
   // `command_output` events that this backend never emits on the bus (see `isCodexRun`).
@@ -526,11 +761,14 @@ export function forwardAgentEventRaw(evt: ForwardAgentEventArgs): void {
   }
 
   // ── sessions_spawn tool → subagent lifecycle (replaces hooks) ──
+  // Subagent broadcasts target a device; without one there is nobody to show the
+  // window (the child session's own agent frames are still buffered/forwarded via
+  // the generic path below once a device binds to it).
   const isSpawnTool =
     evt.stream === "tool" && (evt.data.name === "sessions_spawn" || evt.data.name === "task");
 
   // Phase 1: spawning — tool.start with taskName in args
-  if (isSpawnTool && evt.data.phase === "start") {
+  if (deviceIdRaw && isSpawnTool && evt.data.phase === "start") {
     const toolCallId = typeof evt.data.toolCallId === "string" ? evt.data.toolCallId : "";
     const args = evt.data.args as Record<string, unknown> | undefined;
     const label = typeof args?.taskName === "string" ? args.taskName : undefined;
@@ -565,7 +803,7 @@ export function forwardAgentEventRaw(evt: ForwardAgentEventArgs): void {
   }
 
   // Phase 2: spawned — tool.result with childSessionKey + runId
-  if (isSpawnTool && evt.data.phase === "result") {
+  if (deviceIdRaw && isSpawnTool && evt.data.phase === "result") {
     const details = (evt.data.result as Record<string, unknown> | undefined)?.details as
       | { childSessionKey?: string; runId?: string; taskName?: string }
       | undefined;
@@ -613,7 +851,7 @@ export function forwardAgentEventRaw(evt: ForwardAgentEventArgs): void {
   // folded back in. We parse the authoritative childSessionKey here (the registry already
   // knows how) and broadcast an explicit `dismissed` subagent event, so the app removes the
   // settled window by childSessionKey instead of re-parsing the announce runId itself.
-  if (evt.stream === "lifecycle" && evt.data.phase === "start") {
+  if (deviceIdRaw && evt.stream === "lifecycle" && evt.data.phase === "start") {
     const announced = parseAnnounceRunId(evt.runId);
     if (announced) {
       const entry = lookupByChildSessionKey(announced.childSessionKey) ?? lookupByRunId(evt.runId);

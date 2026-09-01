@@ -28,6 +28,7 @@ import { handleHistorySessions } from "./handlers/history-sessions.js";
 import { handleNotifications, handleNotificationDelete } from "./handlers/notifications.js";
 import { handleHistoryMessages } from "./handlers/history-messages.js";
 import { handleHistorySetTitle } from "./handlers/history-set-title.js";
+import { handleSessionsBind } from "./handlers/sessions-bind.js";
 import { handleStatus } from "./handlers/status.js";
 import { handleLinkPreview } from "./handlers/link-preview.js";
 import { handleHealth } from "./handlers/health.js";
@@ -240,6 +241,12 @@ async function handleFridayNextRoute(req: IncomingMessage, res: ServerResponse):
     pathname === "/friday-next/sessions/title"
   ) {
     return await handleHistorySetTitle(req, res);
+  }
+
+  // Route: POST /friday-next/sessions/bind (attach a device to a session's live
+  // stream + replay that session's buffered frames — Control-UI-started runs)
+  if (req.method === "POST" && pathname === "/friday-next/sessions/bind") {
+    return await handleSessionsBind(req, res);
   }
 
   // Route: GET /friday-next/link-preview?url=... (Open Graph metadata for preview cards)
