@@ -36,6 +36,11 @@ export interface FridayAgentEntry {
 interface ResolvedAgents {
   agents: FridayAgentEntry[];
   defaultAgentId: string;
+  /**
+   * Global inherited session permission (`tools.exec.mode` at `agents.defaults` or top level) —
+   * what an agent with no exec override runs. Lets the app label the "inherit" row.
+   */
+  defaultPermissionMode?: string;
 }
 
 /** Extract a primary model ref from the `model` field (string or {primary,...}). */
@@ -127,13 +132,13 @@ export function resolveConfiguredAgents(): ResolvedAgents {
   // with no default, and the app falls back to the (volatile) per-model server default.
   const agentDefaults = agents?.defaults as Record<string, unknown> | undefined;
   const inheritedThinkingDefault = readString(agentDefaults?.thinkingDefault);
+  const defaultPermissionMode = resolveDefaultPermissionMode(cfg);
 
   if (roster.length === 0) {
     // Implicit `main` agent (no roster): config carries no name, so fall
     // back to the workspace IDENTITY.md `Name` — the same source ControlUI and
     // the list branch below use — instead of letting the app show the raw id.
     const name = readWorkspaceIdentityName(rt, cfg, DEFAULT_AGENT_ID);
-    const defaultPermissionMode = resolveDefaultPermissionMode(cfg);
     return {
       agents: [
         {
@@ -148,6 +153,7 @@ export function resolveConfiguredAgents(): ResolvedAgents {
         },
       ],
       defaultAgentId: DEFAULT_AGENT_ID,
+      ...(defaultPermissionMode ? { defaultPermissionMode } : {}),
     };
   }
 
@@ -155,7 +161,7 @@ export function resolveConfiguredAgents(): ResolvedAgents {
   const entries: FridayAgentEntry[] = [];
   for (const { id, config: agent } of roster) {
     const identity = agent.identity as Record<string, unknown> | undefined;
-    const defaultPermissionMode = resolveDefaultPermissionMode(cfg, agent);
+    const agentPermissionMode = resolveDefaultPermissionMode(cfg, agent);
     entries.push({
       id,
       name:
@@ -169,11 +175,11 @@ export function resolveConfiguredAgents(): ResolvedAgents {
       emoji: readString(identity?.emoji),
       avatar: readString(identity?.avatar) ?? readString(identity?.avatarUrl),
       greeting: readGreetingFor(id),
-      ...(defaultPermissionMode ? { defaultPermissionMode } : {}),
+      ...(agentPermissionMode ? { defaultPermissionMode: agentPermissionMode } : {}),
     });
   }
 
-  return { agents: entries, defaultAgentId };
+  return { agents: entries, defaultAgentId, ...(defaultPermissionMode ? { defaultPermissionMode } : {}) };
 }
 
 export async function handleAgentsList(
@@ -195,10 +201,17 @@ export async function handleAgentsList(
     return true;
   }
 
-  const { agents, defaultAgentId } = resolveConfiguredAgents();
+  const { agents, defaultAgentId, defaultPermissionMode } = resolveConfiguredAgents();
 
   res.statusCode = 200;
   res.setHeader("Content-Type", "application/json");
-  res.end(JSON.stringify({ ok: true, agents, defaultAgentId }));
+  res.end(
+    JSON.stringify({
+      ok: true,
+      agents,
+      defaultAgentId,
+      ...(defaultPermissionMode ? { defaultPermissionMode } : {}),
+    }),
+  );
   return true;
 }

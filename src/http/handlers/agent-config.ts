@@ -12,8 +12,12 @@
  * Editable fields:
  *  - model           → roster entry `.model`        (string | {primary,fallbacks})
  *  - thinkingDefault → roster entry `.thinkingDefault`
- *  - tools           → roster entry `.tools`        ({profile,allow,alsoAllow,deny})
+ *  - tools           → roster entry `.tools`        ({profile,allow,alsoAllow,deny,exec:{mode}})
  *  - skills          → roster entry `.skills`       (string[]; [] disables all, absent inherits defaults)
+ *
+ * Tools patches merge at the top level of `.tools` (a partial `{"tools":{...}}` must not wipe
+ * sibling keys), and `tools.exec` keeps its own null-clear semantics: `{"tools":{"exec":null}}`
+ * removes the agent's exec override so the core merge falls back to `agents.defaults`.
  *
  * Clearing an override MUST delete the field (not leave a stale value) so the
  * core's config merge falls back to `agents.defaults` — same hazard documented
@@ -42,6 +46,8 @@ export interface AgentToolsConfig {
   allow?: string[];
   alsoAllow?: string[];
   deny?: string[];
+  /** Command-execution policy (`tools.exec`); `mode` only — the field the app edits. */
+  exec?: { mode: string };
 }
 
 interface AgentConfigView {
@@ -69,6 +75,18 @@ function readStringArray(value: unknown): string[] | undefined {
   return out;
 }
 
+/**
+ * Core's config schema pins `tools.exec.mode` to this exact enum. Writing anything else
+ * produces a config file the gateway can no longer validate on the next load.
+ */
+const EXEC_MODES = ["deny", "allowlist", "ask", "auto", "full"] as const;
+
+function readExecConfig(value: unknown): { mode: string } | undefined {
+  if (!value || typeof value !== "object") return undefined;
+  const mode = readString((value as Record<string, unknown>)["mode"]);
+  return mode && (EXEC_MODES as readonly string[]).includes(mode) ? { mode } : undefined;
+}
+
 function readToolsConfig(value: unknown): AgentToolsConfig | undefined {
   if (!value || typeof value !== "object") return undefined;
   const t = value as Record<string, unknown>;
@@ -81,6 +99,8 @@ function readToolsConfig(value: unknown): AgentToolsConfig | undefined {
   if (alsoAllow) view.alsoAllow = alsoAllow;
   const deny = readStringArray(t.deny);
   if (deny) view.deny = deny;
+  const exec = readExecConfig(t.exec);
+  if (exec) view.exec = exec;
   return view;
 }
 
@@ -202,6 +222,13 @@ export async function handleAgentConfig(
       error: `thinkingDefault must be one of: ${THINKING_LEVELS.join(", ")}, or null to inherit defaults`,
     });
   }
+  // Same loud-reject for a nested `tools.exec.mode` outside the enum (or shaped wrong).
+  const execClear = readExecClear(body);
+  if (execClear === null) {
+    return json(res, 400, {
+      error: `tools.exec.mode must be one of: ${EXEC_MODES.join(", ")}, or null to inherit defaults`,
+    });
+  }
   if (!model.sent && !thinkingDefault.sent && !tools.sent && !skills.sent) {
     return json(res, 400, {
       error: "No editable fields provided (model, thinkingDefault, tools, skills)",
@@ -220,7 +247,7 @@ export async function handleAgentConfig(
         const entry = ensureAgentRosterConfig(draft, agentId);
         applyField(entry, "model", model);
         applyField(entry, "thinkingDefault", thinkingDefault);
-        applyField(entry, "tools", tools);
+        applyToolsPatch(entry, tools, execClear);
         applyField(entry, "skills", skills);
       },
     });
@@ -232,6 +259,50 @@ export async function handleAgentConfig(
 
   log.info(`agent config updated for "${agentId}"`);
   return json(res, 200, { ok: true, ...buildConfigView(agentId) });
+}
+
+/**
+ * Whether the PUT body asks to clear `tools.exec` (`{"tools":{"exec":null}}`).
+ * Returns `null` when `tools.exec` is present but is NOT `null` and does not carry a valid
+ * `mode` — the caller must reject loudly so the app never mistakes a dropped patch for a write.
+ */
+function readExecClear(body: Record<string, unknown>): boolean | null {
+  const toolsBody = body["tools"];
+  if (!toolsBody || typeof toolsBody !== "object" || Array.isArray(toolsBody)) return false;
+  const execRaw = (toolsBody as Record<string, unknown>)["exec"];
+  if (execRaw === undefined) return false;
+  if (execRaw === null) return true;
+  if (typeof execRaw !== "object" || Array.isArray(execRaw)) return null;
+  const mode = readString((execRaw as Record<string, unknown>)["mode"]);
+  return mode && (EXEC_MODES as readonly string[]).includes(mode) ? false : null;
+}
+
+/**
+ * Apply a tools patch by merging at the top level of the roster entry's `.tools` object —
+ * a partial `{"tools":{"exec":{"mode":…}}}` must not wipe existing `profile/allow/deny`,
+ * and the toolbox's full read-modify-write still lands intact. `execClear` strips only the
+ * `exec` key (falling back to `agents.defaults`).
+ */
+function applyToolsPatch(
+  entry: Record<string, unknown>,
+  tools: Patch<unknown>,
+  execClear: boolean,
+): void {
+  if (!tools.sent) return;
+  if (tools.clear) {
+    delete entry.tools;
+    return;
+  }
+  const existing = entry.tools && typeof entry.tools === "object" && !Array.isArray(entry.tools)
+    ? { ...(entry.tools as Record<string, unknown>) }
+    : {};
+  const merged: Record<string, unknown> = {
+    ...existing,
+    ...((tools.value as Record<string, unknown>) ?? {}),
+  };
+  if (execClear) delete merged.exec;
+  if (Object.keys(merged).length === 0) delete entry.tools;
+  else entry.tools = merged;
 }
 
 /** Apply a patch: clear → delete the key; set → assign; not sent → leave as-is. */

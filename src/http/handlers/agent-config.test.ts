@@ -271,6 +271,134 @@ describe("handleAgentConfig", () => {
     expect("default" in list[0]).toBe(false);
   });
 
+  it("GET echoes tools.exec.mode (the agent's default permission policy)", async () => {
+    setRuntimes({
+      agents: {
+        ownership: "explicit",
+        entries: {
+          main: {
+            tools: { profile: "coding", allow: ["read"], exec: { mode: "full" } },
+          },
+        },
+      },
+    });
+    const res = new MockRes();
+    await handleAgentConfig(makeReq(AUTH), res as any, "main");
+    expect(res.statusCode).toBe(200);
+    expect(JSON.parse(res.body).tools).toEqual({
+      profile: "coding",
+      allow: ["read"],
+      exec: { mode: "full" },
+    });
+  });
+
+  it("PUT tools.exec.mode writes the override and merges sibling tools keys", async () => {
+    const config: Record<string, unknown> = {
+      agents: {
+        ownership: "explicit",
+        entries: {
+          main: {
+            tools: { profile: "coding", deny: ["bash"] },
+          },
+        },
+      },
+    };
+    setRuntimes(config);
+    const res = new MockRes();
+    await handleAgentConfig(
+      makeReq(AUTH, "PUT", { tools: { exec: { mode: "full" } } }),
+      res as any,
+      "main",
+    );
+    expect(res.statusCode).toBe(200);
+    expect((config.agents as any).entries.main.tools).toEqual({
+      profile: "coding",
+      deny: ["bash"],
+      exec: { mode: "full" },
+    });
+  });
+
+  it("PUT tools.exec:null clears only the exec override, keeping profile/allow/deny", async () => {
+    const config: Record<string, unknown> = {
+      agents: {
+        ownership: "explicit",
+        entries: {
+          main: {
+            tools: { profile: "coding", allow: ["read"], exec: { mode: "ask" } },
+          },
+        },
+      },
+    };
+    setRuntimes(config);
+    const res = new MockRes();
+    await handleAgentConfig(
+      makeReq(AUTH, "PUT", { tools: { exec: null } }),
+      res as any,
+      "main",
+    );
+    expect(res.statusCode).toBe(200);
+    expect((config.agents as any).entries.main.tools).toEqual({
+      profile: "coding",
+      allow: ["read"],
+    });
+  });
+
+  it("PUT tools:null clears the whole tools field", async () => {
+    const config: Record<string, unknown> = {
+      agents: {
+        ownership: "explicit",
+        entries: {
+          main: { tools: { exec: { mode: "full" } } },
+        },
+      },
+    };
+    setRuntimes(config);
+    const res = new MockRes();
+    await handleAgentConfig(makeReq(AUTH, "PUT", { tools: null }), res as any, "main");
+    expect(res.statusCode).toBe(200);
+    expect("tools" in (config.agents as any).entries.main).toBe(false);
+  });
+
+  it("PUT rejects tools.exec.mode outside the enum with 400 (no silent drop)", async () => {
+    const config: Record<string, unknown> = {
+      agents: { list: [{ id: "main", tools: { profile: "coding" } }] },
+    };
+    setRuntimes(config);
+    const res = new MockRes();
+    await handleAgentConfig(
+      makeReq(AUTH, "PUT", { tools: { exec: { mode: "unrestricted" } } }),
+      res as any,
+      "main",
+    );
+    expect(res.statusCode).toBe(400);
+    expect(JSON.parse(res.body).error).toContain("tools.exec.mode");
+    expect("exec" in (config.agents as any).list[0].tools).toBe(false);
+  });
+
+  it("PUT a full toolbox tools write preserves an existing exec override", async () => {
+    const config: Record<string, unknown> = {
+      agents: {
+        ownership: "explicit",
+        entries: {
+          main: { tools: { profile: "coding", exec: { mode: "full" } } },
+        },
+      },
+    };
+    setRuntimes(config);
+    const res = new MockRes();
+    await handleAgentConfig(
+      makeReq(AUTH, "PUT", { tools: { profile: "coding", deny: ["bash"] } }),
+      res as any,
+      "main",
+    );
+    expect(res.statusCode).toBe(200);
+    expect((config.agents as any).entries.main.tools).toEqual({
+      profile: "coding",
+      deny: ["bash"],
+      exec: { mode: "full" },
+    });
+  });
+
   it("PUT rejects a body with no editable fields", async () => {
     setRuntimes({ agents: { list: [{ id: "main" }] } });
     const res = new MockRes();

@@ -92,6 +92,29 @@ describe("handleAgentsList", () => {
     ]);
   });
 
+  it("reports the global defaultPermissionMode at top level (no agent override)", async () => {
+    setConfig({
+      agents: {
+        ownership: "explicit",
+        defaults: { tools: { exec: { mode: "full" } } },
+        entries: {
+          main: { name: "F.R.I.D.A.Y" },
+          operator: { name: "FridayNext", tools: { exec: { mode: "ask" } } },
+        },
+      },
+    });
+    const res = new MockRes();
+    await handleAgentsList(makeReq(AUTH), res as any);
+
+    const body = JSON.parse(res.body);
+    // Global default is what an inheriting agent runs.
+    expect(body.defaultPermissionMode).toBe("full");
+    // The agent with its own override still reports its own effective mode.
+    const byId = Object.fromEntries(body.agents.map((a: any) => [a.id, a.defaultPermissionMode]));
+    expect(byId.main).toBe("full");
+    expect(byId.operator).toBe("guarded");
+  });
+
   it("COMPAT(openclaw<2026.8.1): resolves the implicit main name from IDENTITY.md when no agents.list exists", async () => {
     const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "friday-identity-main-"));
     fs.writeFileSync(
