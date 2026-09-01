@@ -117,14 +117,53 @@ const IMAGE_PRODUCING_TOOLS = new Set(["image_generation"]);
 
 const MEDIA_MARKER_RE = /\[media attached:\s*([^\]]+)\]/gi;
 
-/** Pull `[media attached: <url>]` markers out of free text into image refs. */
+/**
+ * Parse both Friday's legacy marker and core's facts-first persisted projection:
+ *
+ *   [media attached: file:///path/photo.jpg]
+ *   [media attached: /staged/input-photo.jpg (image/jpeg) |
+ *                    /friday-next/files/token.jpg "photo.jpg"]
+ *
+ * The latter must use the stable channel URL, not the gateway-local staged path.
+ */
+function parseMediaMarker(payload: string): FridayHistoryImage | null {
+  const value = payload.trim();
+  if (!value) return null;
+
+  const projected = value.match(
+    /^(.*?)\s+\(([^()]+)\)\s+\|\s+(\S+?)(?:\s+"([^"]+)")?\s*$/,
+  );
+  if (projected) {
+    const url = projected[3]?.trim();
+    if (!url) return null;
+    const mimeType = projected[2]?.trim();
+    const filename = projected[4]?.trim();
+    return {
+      url,
+      ...(mimeType ? { mimeType } : {}),
+      ...(filename ? { filename } : {}),
+    };
+  }
+
+  return { url: value };
+}
+
+/** Pull `[media attached: ...]` markers out of free text into image refs. */
 function extractMediaMarkers(text: string): FridayHistoryImage[] {
   const images: FridayHistoryImage[] = [];
   for (const match of text.matchAll(MEDIA_MARKER_RE)) {
-    const url = match[1]?.trim();
-    if (url) images.push({ url });
+    const image = match[1] ? parseMediaMarker(match[1]) : null;
+    if (image) images.push(image);
   }
   return images;
+}
+
+/** Media markers are transport metadata, never user-visible prompt text. */
+function stripMediaMarkers(text: string): string {
+  return text
+    .replace(MEDIA_MARKER_RE, "")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
 }
 
 interface ParsedContent {
@@ -324,7 +363,8 @@ export function normalizeHistoryMessage(raw: unknown, index: number): FridayHist
     return message;
   }
 
-  const split = splitMediaLines(parsed.text);
+  const visibleText = role === "user" ? stripMediaMarkers(parsed.text) : parsed.text;
+  const split = splitMediaLines(visibleText);
   if (split.text) message.text = split.text;
   if (split.paths.length) message.mediaPaths = split.paths;
   if (parsed.thinking) message.thinking = parsed.thinking;

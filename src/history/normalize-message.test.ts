@@ -83,6 +83,27 @@ describe("normalizeHistoryMessage", () => {
       0,
     );
     expect(out?.images).toEqual([{ url: "file:///a.jpg" }]);
+    expect(out?.text).toBe("see");
+  });
+
+  it("parses facts-first projected media markers and strips them from user text", () => {
+    const out = normalizeHistoryMessage(
+      {
+        role: "user",
+        content:
+          '[media attached: /Users/me/.openclaw/workspace/agents/nana/media/inbound/openclaw-staged-x/input-photo.jpg (image/jpeg) | /friday-next/files/token.jpg "photo.jpg"]\n你能看到这张图吗',
+        ...meta("facts-first", 1),
+      },
+      0,
+    );
+    expect(out?.text).toBe("你能看到这张图吗");
+    expect(out?.images).toEqual([
+      {
+        url: "/friday-next/files/token.jpg",
+        mimeType: "image/jpeg",
+        filename: "photo.jpg",
+      },
+    ]);
   });
 
   it("does not double user photos that are both media-attached markers and inline image blocks", () => {
@@ -338,6 +359,31 @@ describe("normalizeHistoryMessages", () => {
       { role: "assistant", content: "ok", __openclaw: { id: "reply", seq: 7 } },
     ]);
     expect(result.map((m) => m.id)).toEqual(["inbound", "reply"]);
+  });
+
+  it("collapses legacy and facts-first attachment mirrors by visible prompt text", () => {
+    const prompt = "你能看到这张图吗";
+    const original =
+      "file:///Users/me/.openclaw/media/inbound/photo-32D437BF---f638b034.jpg";
+    const result = normalizeHistoryMessages([
+      {
+        role: "user",
+        content: `${prompt}\n\n[media attached: ${original}]`,
+        __openclaw: { id: "legacy", seq: 1 },
+      },
+      {
+        role: "user",
+        content:
+          '[media attached: /Users/me/.openclaw/workspace/agents/nana/media/inbound/openclaw-staged-x/input-photo.jpg (image/jpeg) | /friday-next/files/token.jpg "photo.jpg"]\n' +
+          `${prompt}\n\n[media attached: ${original}]`,
+        __openclaw: { id: "facts-first", seq: 2 },
+      },
+      { role: "assistant", content: "能看到", __openclaw: { id: "reply", seq: 3 } },
+    ]);
+
+    expect(result.map((m) => m.id)).toEqual(["legacy", "reply"]);
+    expect(result[0]?.text).toBe(prompt);
+    expect(result[0]?.images).toEqual([{ url: original }]);
   });
 
   // Real session agent:operator:fridaynext:mt5mxc5c (2026-08-23): stealth/ox-alpha

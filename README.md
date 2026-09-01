@@ -60,8 +60,7 @@ connects the app to your own OpenClaw gateway. Install it once, pair your iPhone
 agent is in your pocket — with your phone acting as an OpenClaw **channel** (chat, voice,
 calendar/Health/location tools over HTTP + SSE), so your agent can talk with you by voice,
 and read or write your calendar, reminders, Apple Health, and your current location when
-you allow it. (The OpenClaw **node** WebSocket surface is retained as a legacy-compat
-service for un-upgraded clients; current app builds are HTTP + SSE only.)
+you allow it.
 
 ```bash
 npx -y @syengup/friday-channel-next

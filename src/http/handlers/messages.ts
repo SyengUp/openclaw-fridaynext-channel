@@ -415,6 +415,32 @@ export interface FridayMessagePayload {
 }
 
 /**
+ * Ordered inbound media fact for core's facts-first contract (`MsgContext.media`,
+ * `InboundMediaFacts` in OpenClaw ≥ facts-first / 2026.8.x). Shape mirrors core's
+ * `ChannelInboundMediaInput`. `path` MUST be a loadable local file — this is what
+ * core hydrates prompt images (and audio/video understanding) from; `url` is the
+ * stable channel URL kept for display/history.
+ */
+export interface FridayInboundMediaFact {
+  path: string;
+  url: string;
+  contentType: string;
+  fileName?: string;
+  kind?: "image" | "audio" | "video" | "document";
+}
+
+/** Mirrors core's `mediaKindFromMime` for the four fact kinds; unknown → undefined. */
+export function inboundMediaKindFromMime(
+  mime: string,
+): "image" | "audio" | "video" | "document" | undefined {
+  if (mime.startsWith("image/")) return "image";
+  if (mime.startsWith("audio/")) return "audio";
+  if (mime.startsWith("video/")) return "video";
+  if (mime) return "document";
+  return undefined;
+}
+
+/**
  * 把可选文本与媒体引用拼成给 agent 的最终 body。纯附件（文本为空）场景下
  * 不能带前导空行，否则 agent 收到的是 `\n\n[media…]`——故拆成可测纯函数。
  */
@@ -460,15 +486,25 @@ async function ossRewriteOutboundMedia(
   }
 }
 
+/** Attachments resolved for the agent turn: the marker-composed body plus ordered media facts. */
+export interface AgentTurnAttachmentInput {
+  body: string;
+  mediaFacts: FridayInboundMediaFact[];
+}
+
 async function buildBodyForAgentWithAttachments(
   text: string,
   attachmentIds: string[],
-): Promise<string> {
-  if (attachmentIds.length === 0) return text.trim();
+): Promise<AgentTurnAttachmentInput> {
+  if (attachmentIds.length === 0) return { body: text.trim(), mediaFacts: [] };
 
   const ossCfg = ossTransferConfig();
   const mediaRefs: string[] = [];
+  const mediaFacts: FridayInboundMediaFact[] = [];
   for (const id of attachmentIds) {
+    // LEGACY-COMPAT (see the `MediaUrls` note in handleMessages): the `[media attached: …]` body
+    // marker is what pre-facts-first cores hydrate prompt images from. Facts-first cores dedupe it
+    // against `mediaFacts` below, so it stays harmless there and load-bearing here.
     // Phase E: an OSS side-channel reference (`fnoss:v1:…`) instead of a local upload id — download
     // the ciphertext from OSS and decrypt it here (the app encrypted it with a key delivered in the
     // ref). On any failure we skip; the app only sends an OSS ref when the side-channel was usable.
@@ -479,12 +515,17 @@ async function buildBodyForAgentWithAttachments(
         const saved = await saveInboundMediaBuffer(plain, ossRef.mime, ossRef.name);
         if (saved.id && saved.path) {
           if (ossRef.name) rememberInboundMediaName(saved.path, ossRef.name, ossRef.mime);
+          const channelUrl = fridayFilesPublicUrl(id);
           mediaRefs.push(`[media attached: ${pathToFileURL(saved.path).href}]`);
+          mediaFacts.push(
+            toInboundMediaFact(saved.path, channelUrl, ossRef.mime, ossRef.name),
+          );
         }
       }
       continue;
     }
-    const { buffer, mimeType, filename } = readFile(fridayAttachmentLookupKey(id));
+    const lookupKey = fridayAttachmentLookupKey(id);
+    const { buffer, mimeType, filename } = readFile(lookupKey);
     if (!buffer) continue;
 
     const saved = await saveInboundMediaBuffer(buffer, mimeType, filename);
@@ -494,10 +535,29 @@ async function buildBodyForAgentWithAttachments(
       // can restore it instead of surfacing the uuid.
       if (filename) rememberInboundMediaName(saved.path, filename, mimeType);
       mediaRefs.push(`[media attached: ${pathToFileURL(saved.path).href}]`);
+      mediaFacts.push(toInboundMediaFact(saved.path, fridayFilesPublicUrl(lookupKey), mimeType, filename));
     }
   }
 
-  return composeBodyWithMediaRefs(text, mediaRefs);
+  return { body: composeBodyWithMediaRefs(text, mediaRefs), mediaFacts };
+}
+
+/** Builds one facts-first media fact from a saved inbound file; path is the hydratable local file. */
+function toInboundMediaFact(
+  localPath: string,
+  channelUrl: string,
+  mimeType: string,
+  filename?: string,
+): FridayInboundMediaFact {
+  const fact: FridayInboundMediaFact = {
+    path: localPath,
+    url: channelUrl,
+    contentType: mimeType || "application/octet-stream",
+    kind: inboundMediaKindFromMime(mimeType) ?? "document",
+  };
+  const name = filename?.trim();
+  if (name) fact.fileName = name;
+  return fact;
 }
 
 export async function handleMessages(req: IncomingMessage, res: ServerResponse): Promise<boolean> {
@@ -620,7 +680,8 @@ export async function handleMessages(req: IncomingMessage, res: ServerResponse):
   sseEmitter.trackDeviceForRun(normalizedDeviceId, runId);
   registerRunRoute({ runId, deviceId: normalizedDeviceId, sessionKey: baseSessionKey });
 
-  const bodyForAgent = await buildBodyForAgentWithAttachments(trimmedText, attachments);
+  const { body: bodyForAgent, mediaFacts: inboundMediaFacts } =
+    await buildBodyForAgentWithAttachments(trimmedText, attachments);
 
   const msgContext = {
     Body: trimmedText,
@@ -640,6 +701,16 @@ export async function handleMessages(req: IncomingMessage, res: ServerResponse):
     AccountId: "default",
     Surface: "friday-next" as const,
     SessionKey: baseSessionKey,
+    // Facts-first media contract (OpenClaw ≥ 2026-07-24 facts-first; required for 2026.8.x where
+    // core hydrates prompt images from these ordered facts — `path` is the loadable local inbound
+    // file saved above). Older cores ignore this unknown field and fall through to the legacy
+    // projection + body markers below, so both generations stay on one code path.
+    media: inboundMediaFacts,
+    // LEGACY-COMPAT(media-legacy-projection): deprecated upstream 2026-07-24 (compat record
+    // `media-legacy-projection`, upstream removal gated ≥ 2026-10-01). Kept ONLY so cores predating
+    // facts-first still see MediaUrl(s); on facts-first cores canonical `media` above wins and this
+    // is merged in as display `url` only. CLEANUP: once the minimum supported OpenClaw is
+    // facts-first, delete this line (and the `fridayFilesPublicUrl` import if unused elsewhere).
     MediaUrls: attachments.map(fridayFilesPublicUrl),
     channel: "friday-next" as const,
     Provider: "friday-next" as const,

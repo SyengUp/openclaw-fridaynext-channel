@@ -2,7 +2,19 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { EventEmitter } from "node:events";
 import { PassThrough } from "node:stream";
 import type { IncomingMessage, ServerResponse } from "node:http";
-import { handleMessages, composeBodyWithMediaRefs } from "./messages.js";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import {
+  handleMessages,
+  composeBodyWithMediaRefs,
+  inboundMediaKindFromMime,
+} from "./messages.js";
+import {
+  clearFileIndexForTest,
+  setAttachmentsDirForTest,
+  storeFile,
+} from "./files.js";
 import { clearFridayNextRuntime, setFridayNextRuntime } from "../../runtime.js";
 import {
   __resetMockFridayDispatchForTests,
@@ -11,6 +23,11 @@ import {
 import { sseEmitter } from "../../sse/emitter.js";
 import { runDetachedWebhookWork } from "openclaw/plugin-sdk/webhook-request-guards";
 import { __setDetachedWebhookWorkImporterForTests } from "../../agent/detached-webhook-work.js";
+
+const saveMediaBufferMock = vi.hoisted(() => vi.fn());
+vi.mock("openclaw/plugin-sdk/media-store", () => ({
+  saveMediaBuffer: (...args: unknown[]) => saveMediaBufferMock(...args),
+}));
 
 class MockRes extends EventEmitter {
   statusCode = 0;
@@ -247,6 +264,126 @@ describe("handleMessages dispatch context", () => {
     expect(observedPayload).not.toBeNull();
     const channelData = observedPayload!.channelData as { fridayNext?: { mediaKind?: string } };
     expect(channelData?.fridayNext?.mediaKind).toBe("tts_likely");
+  });
+});
+
+describe("inboundMediaKindFromMime", () => {
+  it("maps mime prefixes to the four fact kinds and undefined for empty", () => {
+    expect(inboundMediaKindFromMime("image/jpeg")).toBe("image");
+    expect(inboundMediaKindFromMime("audio/mp4")).toBe("audio");
+    expect(inboundMediaKindFromMime("video/quicktime")).toBe("video");
+    expect(inboundMediaKindFromMime("application/pdf")).toBe("document");
+    expect(inboundMediaKindFromMime("")).toBeUndefined();
+  });
+});
+
+describe("handleMessages inbound media facts", () => {
+  let tmpDir: string;
+  let savedInboundPath: string | null = null;
+
+  afterEach(() => {
+    clearFridayNextRuntime();
+    __resetMockFridayDispatchForTests();
+    vi.mocked(runDetachedWebhookWork).mockClear();
+    __setDetachedWebhookWorkImporterForTests(null);
+    setAttachmentsDirForTest(null);
+    clearFileIndexForTest();
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+    if (savedInboundPath) {
+      try {
+        fs.rmSync(savedInboundPath, { force: true });
+      } catch {
+        // best effort — temp artifact
+      }
+      savedInboundPath = null;
+    }
+    saveMediaBufferMock.mockReset();
+  });
+
+  function setupRuntimeAndCapture(): { captured: Promise<Record<string, unknown> | null> } {
+    setFridayNextRuntime({
+      config: { loadConfig: () => ({ gateway: { auth: { token: "tok" } }, channels: {} }) },
+    } as never);
+    let ctx: Record<string, unknown> | null = null;
+    let resolveCtx: (value: Record<string, unknown> | null) => void = () => {};
+    const captured = new Promise<Record<string, unknown> | null>((resolve) => {
+      resolveCtx = resolve;
+    });
+    __setMockFridayDispatchForTests((args: unknown) => {
+      ctx = (args as { ctx?: Record<string, unknown> }).ctx ?? null;
+      resolveCtx(ctx);
+      return Promise.resolve();
+    });
+    return { captured };
+  }
+
+  function postMessage(body: Record<string, unknown>): Promise<ServerResponse> {
+    const req = new PassThrough() as unknown as IncomingMessage;
+    req.method = "POST";
+    req.headers = { authorization: "Bearer tok" };
+    const res = new MockRes() as unknown as ServerResponse;
+    const p = handleMessages(req, res);
+    req.end(JSON.stringify(body));
+    return p.then(() => res);
+  }
+
+  it("passes loadable local media facts (facts-first) plus legacy MediaUrls for an image attachment", async () => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "fn-msg-media-"));
+    setAttachmentsDirForTest(tmpDir);
+    clearFileIndexForTest();
+    const stored = storeFile(Buffer.from("fake-jpeg-bytes"), "photo-a.jpg", "image/jpeg");
+    savedInboundPath = path.join(tmpDir, "inbound-uuid.jpg");
+    saveMediaBufferMock.mockResolvedValue({ id: "inbound-uuid", path: savedInboundPath });
+
+    const { captured } = setupRuntimeAndCapture();
+    const res = await postMessage({
+      deviceId: "AA11",
+      text: "看图",
+      attachments: [stored.id],
+      sessionKey: "default",
+    });
+    const ctx = await captured;
+
+    expect(res.statusCode).toBe(202);
+    expect(ctx).not.toBeNull();
+    const channelUrl = `/friday-next/files/${stored.urlToken}`;
+    // Facts-first contract (OpenClaw ≥ facts-first): path must be the loadable local file core
+    // hydrates the prompt image from, with real mime + original name.
+    expect(ctx!.media).toEqual([
+      {
+        path: savedInboundPath,
+        url: channelUrl,
+        contentType: "image/jpeg",
+        fileName: "photo-a.jpg",
+        kind: "image",
+      },
+    ]);
+    // LEGACY-COMPAT: older cores keep hydrating via the MediaUrl(s) projection + body markers.
+    expect(ctx!.MediaUrls).toEqual([channelUrl]);
+    expect(ctx!.BodyForAgent).toBe(
+      `看图\n\n[media attached: ${`file://${savedInboundPath}`}]`,
+    );
+  });
+
+  it("emits no media facts when the attachment id cannot be resolved", async () => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "fn-msg-media-"));
+    setAttachmentsDirForTest(tmpDir);
+    clearFileIndexForTest();
+
+    const { captured } = setupRuntimeAndCapture();
+    await postMessage({
+      deviceId: "AA11",
+      text: "看图",
+      attachments: ["missing-attachment"],
+      sessionKey: "default",
+    });
+    const ctx = await captured;
+
+    expect(ctx).not.toBeNull();
+    expect(ctx!.media).toEqual([]);
+    // Legacy projection is positional over the raw attachment list — unchanged.
+    expect(ctx!.MediaUrls).toEqual(["/friday-next/files/missing-attachment"]);
+    expect(ctx!.BodyForAgent).toBe("看图");
   });
 });
 
