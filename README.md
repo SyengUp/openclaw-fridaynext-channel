@@ -20,7 +20,6 @@ there, and you can jump in at any moment.
 
 | Feature | Why |
 | --- | --- |
-| 🎨 **Interactive canvas** | Your agent pushes live web content, dashboards, and interactive UIs right into the conversation. |
 | 🗣️ **Talk in real time** | Full voice conversations with your agent — speak naturally, and it can run tools and check facts mid-call before answering. |
 | 🔊 **Listen to answers** | Built-in text-to-speech reads responses aloud while you're on the move. |
 | 📅 **Calendar & Reminders** | Your agent reads your schedule and writes back: "what's today look like?" and "remind me to call the bank Tuesday" become real events and reminders, alarms included. |
@@ -40,7 +39,7 @@ be online, and nothing is written without the write toggle on.
 ## A glimpse inside
 
 <p align="center">
-  <img src="assets/screenshots/glimpse.png" width="1055" alt="FridayNext screenshots — home, native markdown, transparent reasoning & tools, interactive canvas, and agent management">
+  <img src="assets/screenshots/glimpse.png" width="1055" alt="FridayNext screenshots — home, native markdown, transparent reasoning & tools, and agent management">
 </p>
 
 <p align="center"><em>Your agents, your chats, your tools — all in one place.</em></p>
