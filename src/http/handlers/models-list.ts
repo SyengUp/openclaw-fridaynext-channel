@@ -383,6 +383,11 @@ function enrichFromCoreModels(
   for (const entry of entries) {
     const core = byRef.get(entry.id);
     if (!core) continue;
+    // 名字：配置里显式 alias（或 provider 目录给的真名）优先；否则采纳核心目录的规范
+    // 显示名——否则 deepseek 这类只写 ref 的模型会以裸 id（deepseek-v4-flash）示人。
+    const bareId = entry.id.split("/").pop() ?? entry.id;
+    const hasRealConfigName = entry.name !== undefined && entry.name !== bareId;
+    if (!hasRealConfigName && core.name) entry.name = core.name;
     if (core.runtime) entry.runtime = core.runtime;
     if (core.thinkingLevels && core.thinkingLevels.length > 0) {
       entry.thinkingLevels = core.thinkingLevels;

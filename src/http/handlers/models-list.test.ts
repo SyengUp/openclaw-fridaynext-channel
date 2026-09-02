@@ -367,6 +367,31 @@ describe("handleAdminModelsList", () => {
     expect(body.defaultModel).toBe("deepseek/deepseek-v4-flash");
   });
 
+  it("adopts the core display name when the config-derived name is just the model id", async () => {
+    dispatchGatewayMethod.mockResolvedValue({
+      ok: true,
+      payload: {
+        models: [
+          {
+            id: "deepseek-v4-flash",
+            name: "DeepSeek V4 Flash",
+            provider: "deepseek",
+            agentRuntime: { id: "openclaw" },
+          },
+        ],
+      },
+    });
+    // Config only references the model by ref — no alias, no provider catalog row.
+    setRuntime({ agents: { defaults: { model: "deepseek/deepseek-v4-flash" } } });
+
+    const res = new MockRes();
+    await handleAdminModelsList(makeReq({}, "GET", "?agentId=main"), res as any);
+
+    const body = JSON.parse(res.body);
+    const flash = body.models.find((m: any) => m.id === "deepseek/deepseek-v4-flash");
+    expect(flash.name).toBe("DeepSeek V4 Flash");
+  });
+
   it("falls back to config parsing when dispatch fails", async () => {
     dispatchGatewayMethod.mockRejectedValue(new Error("dispatch reserved for contracts"));
     setRuntime({
