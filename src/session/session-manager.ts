@@ -328,7 +328,7 @@ function sessionRestOf(canonicalKey: string): string | undefined {
  * may rewrite the id; the SQLite row might still be the original key, or keyed by a
  * `friday:direct:…` id whose `sessionId` is the short Control UI id (e.g. `mth7v8za`).
  */
-function resolveCanonicalSessionTarget(
+export function resolveCanonicalSessionTarget(
   sessionKey: string,
 ): { sessionKey: string; agentId: string } | undefined {
   const rt = getFridayAgentForwardRuntime();

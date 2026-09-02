@@ -14,6 +14,7 @@ export type SseEventType =
   | "subagent"
   | "approval"
   | "session-status"
+  | "session-title"
   | "talk"
   | "fridaynext-health-query"
   | "fridaynext-health-log"

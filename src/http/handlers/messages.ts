@@ -78,6 +78,7 @@ import {
   setRunMetadata,
 } from "../../run-metadata.js";
 import { createFridayNextLogger, setFridayNextLogLevel } from "../../logging.js";
+import { maybeGenerateSessionTitle } from "../../session/session-title-generator.js";
 
 const logger = createFridayNextLogger("messages");
 
@@ -915,7 +916,20 @@ export async function handleMessages(req: IncomingMessage, res: ServerResponse):
   // COMPAT(openclaw<2026.8.1): loadDetachedWebhookWork falls back to identity
   // on hosts without the helper. See detached-webhook-work.ts for removal.
   const startDetached = await loadDetachedWebhookWork();
-  void startDetached(() => runAgent()).catch((err) => {
+  void startDetached(() => {
+    // Fire-and-forget AI session title (core only titles `dashboard:` sessions;
+    // friday-next keys never match, so the plugin mirrors that pipeline). Runs
+    // inside the detached root so gateway admission never rejects it, and never
+    // blocks or breaks the dispatch below.
+    void maybeGenerateSessionTitle({
+      sessionKey: baseSessionKey,
+      firstUserMessage: trimmedText,
+      deviceId: normalizedDeviceId,
+    }).catch((err: unknown) => {
+      log("TITLE_GENERATION_ERROR", normalizedDeviceId, runId, String(err), "warn");
+    });
+    return runAgent();
+  }).catch((err) => {
     log("RUN_ERROR", normalizedDeviceId, runId, String(err), "error");
     sseEmitter.untrackRun(runId);
   });
