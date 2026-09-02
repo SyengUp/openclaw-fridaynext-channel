@@ -297,14 +297,17 @@ describe("handleAdminModelsList", () => {
     resetFridayAgentForwardRuntimeForTest();
   });
 
-  it("forwards to the canonical models.list and returns the app-shaped catalog", async () => {
+  it("returns a deterministic config-derived list enriched from models.list", async () => {
+    // Dispatch returns the cache-warmed FULL catalog (extra opencode-go rows). The
+    // endpoint must NOT adopt those — the list stays the configured set, so a gateway
+    // restart (cold cache) never flips the picker.
     dispatchGatewayMethod.mockResolvedValue({
       ok: true,
       payload: {
         models: [
           {
             id: "deepseek-v4-flash",
-            name: "deepseek-v4-flash",
+            name: "DeepSeek V4 Flash",
             provider: "deepseek",
             agentRuntime: { id: "openclaw" },
           },
@@ -318,12 +321,32 @@ describe("handleAdminModelsList", () => {
             id: "gpt-5.6-luna",
             name: "gpt-5.6-luna",
             provider: "opencode-go",
-            agentRuntime: { id: "openclaw" },
+            agentRuntime: { id: "codex" },
+          },
+          {
+            id: "kimi-k3",
+            name: "kimi-k3",
+            provider: "opencode-go",
+            agentRuntime: { id: "codex" },
           },
         ],
       },
     });
-    setRuntime({ agents: { defaults: { model: "deepseek/deepseek-v4-flash" } } });
+    setRuntime({
+      agents: {
+        defaults: { model: "deepseek/deepseek-v4-flash" },
+        entries: {
+          main: { models: { "deepseek/deepseek-v4-pro": {} } },
+        },
+      },
+      models: {
+        providers: {
+          "llama-cpp": {
+            models: [{ id: "gemma-4-e4b-it-q4_k_m", name: "Gemma 4" }],
+          },
+        },
+      },
+    });
 
     const res = new MockRes();
     await handleAdminModelsList(makeReq({}, "GET", "?agentId=main"), res as any);
@@ -331,11 +354,16 @@ describe("handleAdminModelsList", () => {
     expect(dispatchGatewayMethod).toHaveBeenCalledWith("models.list", { agentId: "main" });
     expect(res.statusCode).toBe(200);
     const body = JSON.parse(res.body);
-    // Core catalog is deduplicated by ref.
-    expect(body.models.map((m: any) => m.id)).toEqual([
+    // Deterministic union: defaults model + main.models + models.providers. The
+    // dispatch-only rows (gpt-5.6-luna / kimi-k3) are NOT picked up.
+    expect(body.models.map((m: any) => m.id).sort()).toEqual([
       "deepseek/deepseek-v4-flash",
-      "opencode-go/gpt-5.6-luna",
+      "deepseek/deepseek-v4-pro",
+      "llama-cpp/gemma-4-e4b-it-q4_k_m",
     ]);
+    // Matching refs are enriched with the dispatch runtime.
+    const flash = body.models.find((m: any) => m.id === "deepseek/deepseek-v4-flash");
+    expect(flash.runtime).toBe("openclaw");
     expect(body.defaultModel).toBe("deepseek/deepseek-v4-flash");
   });
 

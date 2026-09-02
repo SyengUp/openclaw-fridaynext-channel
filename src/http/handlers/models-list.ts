@@ -118,6 +118,29 @@ function resolveConfiguredModels(agentId?: string): ResolvedModels {
     }
   }
 
+  // `models.providers.<id>.models[]` are concrete catalog rows (e.g. llama-cpp's
+  // local models). Core's configured view surfaces them too; without this the
+  // deterministic list would drop them and flip vs the dispatch result.
+  const modelsCfg = cfg?.models as Record<string, unknown> | undefined;
+  const providers = modelsCfg?.providers as Record<string, unknown> | undefined;
+  if (providers) {
+    for (const [providerId, provider] of Object.entries(providers)) {
+      const providerModels = (provider as { models?: Array<Record<string, unknown>> })?.models;
+      if (!Array.isArray(providerModels)) continue;
+      for (const m of providerModels) {
+        const modelId = typeof m.id === "string" ? m.id : typeof m.name === "string" ? m.name : "";
+        if (!modelId || !providerId) continue;
+        addConfiguredModelEntry(
+          `${providerId}/${modelId}`,
+          m.name,
+          providerMeta,
+          seen,
+          entries,
+        );
+      }
+    }
+  }
+
   const agentModel = agentDefaults?.model;
   let defaultModel =
     typeof agentModel === "string" && agentModel.trim()
@@ -290,11 +313,18 @@ function sendJson(
 /**
  * `GET /friday-next-admin/models` — gateway-authed sibling of `/friday-next/models`.
  *
- * The canonical `models.list` method is the ONLY place that computes the model
- * catalog core actually runs with: configured refs, provider catalog entries,
- * per-agent runtime resolution, thinking profiles, and availability. Control UI's
- * chat page calls this same method; this route just re-exposes it on the app's
- * REST surface (same pattern as `/friday-next-admin/commands`).
+ * Returns a DETERMINISTIC picker list: the union of every configured model ref
+ * (`agents.defaults.model`, `agents.defaults.models`, every roster agent's
+ * `model` + per-agent `models`, and `models.providers.*.models`), enriched with
+ * per-model runtime / thinking metadata from core's `models.list` when it can be
+ * dispatched.
+ *
+ * WHY NOT USE THE RAW `models.list` AS THE LIST: core's browse result is NOT
+ * stable — once any full-catalog browse warms the prepared-catalog cache it
+ * returns the whole provider catalog (e.g. all opencode-go models), and a
+ * gateway restart or catalog timeout drops it back to the configured-only set.
+ * The picker must not flip between runs, so the list is config-derived and the
+ * dispatch only supplies metadata for refs we already show.
  *
  * WHY THE ADMIN PREFIX: `/friday-next` is registered `auth: "plugin"`, and core
  * gives plugin-authed routes a runtime client with an EMPTY operator scope list,
@@ -332,15 +362,36 @@ export async function handleAdminModelsList(
   const rawAgentId = new URL(req.url ?? "", "http://localhost").searchParams.get("agentId");
   const agentId = rawAgentId?.trim() ? normalizeAgentId(rawAgentId) : undefined;
 
+  const { models, defaultModel } = resolveConfiguredModels(agentId);
   const coreModels = await fetchCoreModelsList(agentId);
   if (coreModels) {
-    const { defaultModel } = resolveConfiguredModels(agentId);
-    return sendJson(res, 200, { ok: true, models: coreModels, defaultModel });
+    enrichFromCoreModels(models, coreModels);
   }
-
-  // Old core without `models.list` / dispatch failure: fall back to config parsing.
-  const { models, defaultModel } = resolveConfiguredModels(agentId);
   return sendJson(res, 200, { ok: true, models, defaultModel });
+}
+
+/**
+ * Merges metadata from core's `models.list` into the deterministic config-derived
+ * list. Only refs already present are touched — dispatch-only rows (the cache-
+ * dependent full catalog) are ignored so the list never flips with core's cache.
+ */
+function enrichFromCoreModels(
+  entries: FridayModelEntry[],
+  coreModels: FridayModelEntry[],
+): void {
+  const byRef = new Map(coreModels.map((m) => [m.id, m]));
+  for (const entry of entries) {
+    const core = byRef.get(entry.id);
+    if (!core) continue;
+    if (core.runtime) entry.runtime = core.runtime;
+    if (core.thinkingLevels && core.thinkingLevels.length > 0) {
+      entry.thinkingLevels = core.thinkingLevels;
+    }
+    if (core.thinkingDefault) entry.thinkingDefault = core.thinkingDefault;
+    if (core.reasoning !== undefined) entry.reasoning = core.reasoning;
+    if (core.contextWindow !== undefined) entry.contextWindow = core.contextWindow;
+    if (core.maxTokens !== undefined) entry.maxTokens = core.maxTokens;
+  }
 }
 
 export async function handleModelsList(
