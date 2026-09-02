@@ -62,27 +62,40 @@ let completionSdk: TitleCompletionSdk | null | undefined;
  * Lazy-loads the host completion SDK. `openclaw/plugin-sdk/simple-completion-runtime`
  * is resolved through the host's module graph (same pattern as
  * `agent-forward-runtime.ts`); Vitest never requires it — tests inject a fake.
+ *
+ * 坑（2026-09-02 实机定位）：`openclaw plugins install` 是**拷贝式**安装，插件
+ * node_modules 链上没有 `openclaw` 包 → 包名解析必 MODULE_NOT_FOUND（测试注入
+ * fake SDK 所以测不出）。回退到宿主全局安装根（exports 把该入口映射到
+ * `dist/plugin-sdk/simple-completion-runtime.js`）。
  */
 function loadTitleCompletionSdk(): TitleCompletionSdk | null {
   if (completionSdk !== undefined) return completionSdk;
   completionSdk = null;
   if (process.env.VITEST === "true") return null;
-  try {
-    const mod = requireSdk("openclaw/plugin-sdk/simple-completion-runtime") as Record<
-      string,
-      unknown
-    >;
-    if (
-      typeof mod.prepareSimpleCompletionModelForAgent === "function" &&
-      typeof mod.completeWithPreparedSimpleCompletionModel === "function" &&
-      typeof mod.extractAssistantText === "function"
-    ) {
-      completionSdk = mod as unknown as TitleCompletionSdk;
-    }
-  } catch {
-    completionSdk = null;
+  const candidates = ["openclaw/plugin-sdk/simple-completion-runtime"];
+  for (const root of [
+    "/opt/homebrew/lib/node_modules/openclaw",
+    "/usr/local/lib/node_modules/openclaw",
+  ]) {
+    candidates.push(`${root}/dist/plugin-sdk/simple-completion-runtime.js`);
   }
-  return completionSdk;
+  for (const spec of candidates) {
+    try {
+      const mod = requireSdk(spec) as Record<string, unknown>;
+      if (
+        typeof mod.prepareSimpleCompletionModelForAgent === "function" &&
+        typeof mod.completeWithPreparedSimpleCompletionModel === "function" &&
+        typeof mod.extractAssistantText === "function"
+      ) {
+        completionSdk = mod as unknown as TitleCompletionSdk;
+        return completionSdk;
+      }
+    } catch {
+      // try next candidate
+    }
+  }
+  logger.debug("title completion SDK unavailable (openclaw host not resolvable)");
+  return null;
 }
 
 /** Vitest-only: inject a fake completion SDK (host require is unavailable in tests). */
