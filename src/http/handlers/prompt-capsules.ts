@@ -27,7 +27,7 @@ function statePayload(state: PromptCapsulesFile): Record<string, unknown> {
 /**
  * `GET/PUT /friday-next/prompt-capsules` — gateway-side source of truth for the app's
  * prompt capsules, so a delete+reinstall (or a second device) restores them. A brand-new
- * store is planted with two starter capsules; an existing file is never re-seeded.
+ * store is planted with a starter capsule; an existing file is never re-seeded.
  *
  * PUT replaces the whole list. An optional `baseRevision` gives optimistic concurrency:
  * when it doesn't match the stored revision, the write is refused with 409 plus the

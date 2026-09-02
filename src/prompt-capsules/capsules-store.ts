@@ -9,10 +9,10 @@ import { getFridayNextRuntime } from "../runtime.js";
 /**
  * Gateway-side source of truth for prompt capsules ("提示词胶囊").
  *
- * The app used to seed two starter capsules locally and push them up. That meant a new
+ * The app used to seed starter capsules locally and push them up. That meant a new
  * app pairing an existing gateway would mint fresh ids and merge them back in — including
  * when the user had already deleted the starters. Defaults now live here: a brand-new
- * store file is planted with the two starters; an existing file (even `capsules: []`) is
+ * store file is planted with the starter; an existing file (even `capsules: []`) is
  * left alone, so a deletion survives a reinstall / new-app pairing.
  *
  * Scope is deliberately **global** (one list per gateway, shared by every agent) —
@@ -53,7 +53,7 @@ export const MAX_ICON_LEN = 100;
 export const MAX_PROMPT_LEN = 8000;
 
 /**
- * Starter capsules planted the first time this gateway's store file is created.
+ * Starter capsule planted the first time this gateway's store file is created.
  * Copy matches the app's original Chinese source strings (the plugin is not localized).
  * Ids are minted per gateway — they are not a shared well-known set.
  */
@@ -61,16 +61,10 @@ export const DEFAULT_SEED_CAPSULES: ReadonlyArray<
   Omit<PromptCapsuleRecord, "id" | "createdAt" | "updatedAt">
 > = [
   {
-    name: "Canvas",
-    iconSystemName: "rectangle.on.rectangle.angled",
-    prompt: "通过在.openclaw/canvas中生成html文件，然后用canvas.present回复我",
-    sortOrder: 0,
-  },
-  {
     name: "长按胶囊来编辑/删除",
     iconSystemName: "hand.tap",
     prompt: '在这里输入你常用的提示词，如"用网页搜索"\n现在，你可以删除这个胶囊了',
-    sortOrder: 1,
+    sortOrder: 0,
   },
 ];
 
@@ -172,7 +166,7 @@ export function readCapsules(): PromptCapsulesFile {
 
 /**
  * Read, and persist immediately if the file didn't exist yet (so `storeId` is stable from
- * the first GET, and a brand-new gateway starts with the two starter capsules).
+ * the first GET, and a brand-new gateway starts with the starter capsule).
  *
  * An existing file is never re-seeded — `capsules: []` means the user deleted them.
  */

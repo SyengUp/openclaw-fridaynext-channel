@@ -47,7 +47,7 @@ describe("capsules store", () => {
     expect(state.storeId).toBeTruthy();
   });
 
-  it("mints and persists a stable storeId on first read-or-init, with the two starters", () => {
+  it("mints and persists a stable storeId on first read-or-init, with the starter", () => {
     const first = readOrInitCapsules();
     const second = readOrInitCapsules();
     expect(second.storeId).toBe(first.storeId);

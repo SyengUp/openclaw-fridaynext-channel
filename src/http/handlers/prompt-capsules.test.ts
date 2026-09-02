@@ -92,7 +92,7 @@ describe("prompt-capsules route", () => {
     expect(handled).toBe(true);
   });
 
-  it("GET on a fresh gateway plants the two starter capsules at revision 0", async () => {
+  it("GET on a fresh gateway plants the starter capsule at revision 0", async () => {
     const res = await invoke("GET");
     expect(res.status).toBe(200);
     expect(res.json).toMatchObject({ ok: true, revision: 0 });
