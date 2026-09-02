@@ -18,7 +18,7 @@ import { handleApprovalDecision } from "./handlers/approvals.js";
 import { handleSessionsSettings } from "./handlers/sessions-settings.js";
 import { handlePromptCapsules } from "./handlers/prompt-capsules.js";
 import { handleServerName } from "./handlers/server-name.js";
-import { handleModelsList } from "./handlers/models-list.js";
+import { handleModelsList, handleAdminModelsList } from "./handlers/models-list.js";
 import { handleAgentsList } from "./handlers/agents-list.js";
 import { handleAgentConfig } from "./handlers/agent-config.js";
 import { handleAgentGreeting } from "./handlers/agent-greetings.js";
@@ -346,6 +346,16 @@ export function registerFridayNextHttpRoutes(api: {
   api.registerHttpRoute({
     path: "/friday-next-admin/commands",
     handler: handleCommandsList,
+    auth: "gateway",
+    match: "exact",
+  });
+
+  // Model catalog for the composer/agent model pickers. Same sibling-prefix +
+  // least-privilege reasoning as `/friday-next-admin/commands`: `models.list`
+  // (the same method Control UI's chat page calls) only needs `operator.read`.
+  api.registerHttpRoute({
+    path: "/friday-next-admin/models",
+    handler: handleAdminModelsList,
     auth: "gateway",
     match: "exact",
   });

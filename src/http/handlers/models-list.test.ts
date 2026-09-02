@@ -1,11 +1,19 @@
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { EventEmitter } from "node:events";
-import { handleModelsList } from "./models-list.js";
+import { handleModelsList, handleAdminModelsList, mapCoreModelChoice } from "./models-list.js";
 import { setMockRuntime } from "../../test-support/mock-runtime.js";
 import {
   setFridayAgentForwardRuntime,
   resetFridayAgentForwardRuntimeForTest,
 } from "../../agent-forward-runtime.js";
+
+const { dispatchGatewayMethod } = vi.hoisted(() => ({
+  dispatchGatewayMethod: vi.fn(),
+}));
+
+vi.mock("openclaw/plugin-sdk/gateway-method-runtime", () => ({
+  dispatchGatewayMethod,
+}));
 
 class MockRes extends EventEmitter {
   statusCode = 0;
@@ -166,5 +174,208 @@ describe("handleModelsList runtime annotation", () => {
     res = new MockRes();
     await handleModelsList(makeReq(AUTH, "GET", "?agentId=main"), res as any);
     expect(JSON.parse(res.body).models[0].runtime).toBe("openclaw");
+  });
+
+  it("dedupes agents that share the same primary model", async () => {
+    // 2026.8.1+ config shape: `agents.entries` roster with several agents on the same model.
+    // Each agent used to emit its own identical row (plus the default) — now a single entry.
+    setRuntime({
+      agents: {
+        defaults: { model: "deepseek/deepseek-v4-pro" },
+        entries: {
+          "fridaynext-dev": { model: "deepseek/deepseek-v4-pro" },
+          operator: { model: "deepseek/deepseek-v4-pro" },
+          nana: { model: "deepseek/deepseek-v4-pro" },
+          trader: { model: "deepseek/deepseek-v4-pro" },
+        },
+      },
+    });
+
+    const res = new MockRes();
+    await handleModelsList(makeReq(AUTH), res as any);
+
+    const body = JSON.parse(res.body);
+    expect(body.models).toHaveLength(1);
+    expect(body.models[0].id).toBe("deepseek/deepseek-v4-pro");
+    expect(body.defaultModel).toBe("deepseek/deepseek-v4-pro");
+  });
+
+  it("reads per-agent `models` overrides (entries shape) in addition to primaries", async () => {
+    setRuntime({
+      agents: {
+        defaults: { model: "deepseek/deepseek-v4-pro" },
+        entries: {
+          main: { models: { "deepseek/deepseek-v4-pro": {}, "deepseek/deepseek-v4-pro-plus": {} } },
+        },
+      },
+    });
+
+    const res = new MockRes();
+    await handleModelsList(makeReq(AUTH), res as any);
+
+    const body = JSON.parse(res.body);
+    const ids = body.models.map((m: any) => m.id).sort();
+    expect(ids).toEqual(["deepseek/deepseek-v4-pro", "deepseek/deepseek-v4-pro-plus"]);
+  });
+
+  it("skips wildcard override rows and models without a provider segment", async () => {
+    setRuntime({
+      agents: {
+        defaults: {
+          model: "deepseek/deepseek-v4-pro",
+          models: { "deepseek/*": { agentRuntime: { id: "openclaw" } } },
+        },
+        list: [{ id: "operator", model: "deepseek/deepseek-v4-pro" }],
+      },
+    });
+
+    const res = new MockRes();
+    await handleModelsList(makeReq(AUTH), res as any);
+
+    const body = JSON.parse(res.body);
+    expect(body.models.map((m: any) => m.id)).toEqual(["deepseek/deepseek-v4-pro"]);
+  });
+});
+
+describe("mapCoreModelChoice", () => {
+  it("qualifies the bare id with its provider (SDK selectionID semantics)", () => {
+    const entry = mapCoreModelChoice({
+      id: "deepseek-v4-pro",
+      name: "DeepSeek V4 Pro",
+      provider: "deepseek",
+      reasoning: true,
+      contextWindow: 128000,
+      thinkingLevels: [
+        { id: "off", label: "off" },
+        { id: "low", label: "low" },
+      ],
+      thinkingDefault: "low",
+      agentRuntime: { id: "codex" },
+    });
+    expect(entry).toEqual({
+      id: "deepseek/deepseek-v4-pro",
+      name: "DeepSeek V4 Pro",
+      provider: "deepseek",
+      reasoning: true,
+      contextWindow: 128000,
+      thinkingLevels: [
+        { id: "off", label: "off" },
+        { id: "low", label: "low" },
+      ],
+      thinkingDefault: "low",
+      runtime: "codex",
+    });
+  });
+
+  it("keeps an already-prefixed id and drops missing/blank fields", () => {
+    const entry = mapCoreModelChoice({
+      id: "openai/gpt-5.6-sol",
+      name: "gpt-5.6-sol",
+      provider: "openai",
+    });
+    expect(entry).toEqual({
+      id: "openai/gpt-5.6-sol",
+      name: "gpt-5.6-sol",
+      provider: "openai",
+    });
+    expect(entry?.thinkingLevels).toBeUndefined();
+    expect(entry?.runtime).toBeUndefined();
+  });
+
+  it("rejects rows without a provider", () => {
+    expect(mapCoreModelChoice({ id: "orphan", name: "orphan", provider: "" })).toBeUndefined();
+  });
+});
+
+describe("handleAdminModelsList", () => {
+  beforeEach(() => {
+    setMockRuntime();
+    dispatchGatewayMethod.mockReset();
+  });
+
+  afterEach(() => {
+    resetFridayAgentForwardRuntimeForTest();
+  });
+
+  it("forwards to the canonical models.list and returns the app-shaped catalog", async () => {
+    dispatchGatewayMethod.mockResolvedValue({
+      ok: true,
+      payload: {
+        models: [
+          {
+            id: "deepseek-v4-flash",
+            name: "deepseek-v4-flash",
+            provider: "deepseek",
+            agentRuntime: { id: "openclaw" },
+          },
+          {
+            id: "deepseek-v4-flash",
+            name: "deepseek-v4-flash",
+            provider: "deepseek",
+            agentRuntime: { id: "openclaw" },
+          },
+          {
+            id: "gpt-5.6-luna",
+            name: "gpt-5.6-luna",
+            provider: "opencode-go",
+            agentRuntime: { id: "openclaw" },
+          },
+        ],
+      },
+    });
+    setRuntime({ agents: { defaults: { model: "deepseek/deepseek-v4-flash" } } });
+
+    const res = new MockRes();
+    await handleAdminModelsList(makeReq({}, "GET", "?agentId=main"), res as any);
+
+    expect(dispatchGatewayMethod).toHaveBeenCalledWith("models.list", { agentId: "main" });
+    expect(res.statusCode).toBe(200);
+    const body = JSON.parse(res.body);
+    // Core catalog is deduplicated by ref.
+    expect(body.models.map((m: any) => m.id)).toEqual([
+      "deepseek/deepseek-v4-flash",
+      "opencode-go/gpt-5.6-luna",
+    ]);
+    expect(body.defaultModel).toBe("deepseek/deepseek-v4-flash");
+  });
+
+  it("falls back to config parsing when dispatch fails", async () => {
+    dispatchGatewayMethod.mockRejectedValue(new Error("dispatch reserved for contracts"));
+    setRuntime({
+      agents: {
+        defaults: { model: "deepseek/deepseek-v4-pro" },
+        entries: {
+          "fridaynext-dev": { model: "deepseek/deepseek-v4-pro" },
+          operator: { model: "deepseek/deepseek-v4-pro" },
+        },
+      },
+    });
+
+    const res = new MockRes();
+    await handleAdminModelsList(makeReq({}, "GET"), res as any);
+
+    expect(res.statusCode).toBe(200);
+    const body = JSON.parse(res.body);
+    expect(body.models).toHaveLength(1);
+    expect(body.models[0].id).toBe("deepseek/deepseek-v4-pro");
+  });
+
+  it("falls back when the core returns no models", async () => {
+    dispatchGatewayMethod.mockResolvedValue({ ok: true, payload: { models: [] } });
+    setRuntime({ agents: { defaults: { model: "deepseek/deepseek-v4-pro" } } });
+
+    const res = new MockRes();
+    await handleAdminModelsList(makeReq({}, "GET"), res as any);
+
+    expect(JSON.parse(res.body).models.map((m: any) => m.id)).toEqual([
+      "deepseek/deepseek-v4-pro",
+    ]);
+  });
+
+  it("returns 405 for non-GET", async () => {
+    const res = new MockRes();
+    await handleAdminModelsList(makeReq({}, "POST"), res as any);
+    expect(res.statusCode).toBe(405);
+    expect(dispatchGatewayMethod).not.toHaveBeenCalled();
   });
 });
