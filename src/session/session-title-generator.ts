@@ -149,32 +149,52 @@ export async function maybeGenerateSessionTitle(params: {
 }): Promise<boolean> {
   const sourceText = params.firstUserMessage.trim();
   // Slash commands are system invocations, not conversation material.
-  if (!sourceText || sourceText.startsWith("/")) return false;
+  if (!sourceText || sourceText.startsWith("/")) {
+    logger.info(`skip key=${params.sessionKey} reason=empty-or-slash`);
+    return false;
+  }
 
   const rt = getFridayAgentForwardRuntime();
-  if (!rt?.patchSessionEntry || !rt.getSessionEntry || !rt.getConfig) return false;
+  if (!rt?.patchSessionEntry || !rt.getSessionEntry || !rt.getConfig) {
+    logger.info(`skip key=${params.sessionKey} reason=no-forward-runtime`);
+    return false;
+  }
 
   const target = resolveCanonicalSessionTarget(params.sessionKey);
-  if (!target) return false;
+  if (!target) {
+    logger.info(`skip key=${params.sessionKey} reason=unresolvable-target`);
+    return false;
+  }
 
   let entry: Record<string, unknown> | null | undefined;
   try {
     entry = rt.getSessionEntry({ sessionKey: target.sessionKey, agentId: target.agentId });
   } catch {
+    logger.info(`skip key=${params.sessionKey} reason=getSessionEntry-threw`);
     return false;
   }
-  if (hasExplicitSessionName(entry)) return false;
+  if (hasExplicitSessionName(entry)) {
+    logger.info(`skip key=${params.sessionKey} reason=has-explicit-name`);
+    return false;
+  }
 
   const requestKey = `${target.agentId}\0${target.sessionKey}`;
-  if (titleRequests.has(requestKey)) return false;
+  if (titleRequests.has(requestKey)) {
+    logger.info(`skip key=${params.sessionKey} reason=in-flight`);
+    return false;
+  }
   titleRequests.add(requestKey);
+  logger.info(`start key=${params.sessionKey} msg="${sourceText}"`);
   try {
     const title = await generateTitle({
       cfg: rt.getConfig(),
       agentId: target.agentId,
       sourceText,
     });
-    if (!title) return false;
+    if (!title) {
+      logger.info(`fail key=${params.sessionKey} reason=generateTitle-returned-null`);
+      return false;
+    }
     const persisted = await persistDisplayName(target, title);
     if (persisted) {
       sseEmitter.broadcast(
@@ -190,7 +210,9 @@ export async function maybeGenerateSessionTitle(params: {
         params.deviceId,
         true,
       );
-      logger.debug(`generated title="${title}" key=${target.sessionKey}`);
+      logger.info(`done key=${target.sessionKey} title="${title}"`);
+    } else {
+      logger.info(`fail key=${params.sessionKey} reason=persist-failed`);
     }
     return persisted;
   } finally {
@@ -204,7 +226,10 @@ async function generateTitle(params: {
   sourceText: string;
 }): Promise<string | null> {
   const sdk = loadTitleCompletionSdk();
-  if (!sdk) return null;
+  if (!sdk) {
+    logger.info(`fail reason=completion-sdk-unavailable`);
+    return null;
+  }
 
   let prepared: Awaited<ReturnType<TitleCompletionSdk["prepareSimpleCompletionModelForAgent"]>>;
   try {
@@ -214,10 +239,14 @@ async function generateTitle(params: {
       useUtilityModel: true,
       allowMissingApiKeyModes: ["aws-sdk"],
     });
-  } catch {
+  } catch (err) {
+    logger.info(`fail reason=prepare-threw ${String(err).slice(0, 300)}`);
     return null;
   }
-  if ("error" in prepared || !("model" in prepared)) return null;
+  if ("error" in prepared || !("model" in prepared)) {
+    logger.info(`fail reason=prepare-error ${JSON.stringify(prepared).slice(0, 300)}`);
+    return null;
+  }
 
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), TITLE_TIMEOUT_MS);
@@ -239,8 +268,11 @@ async function generateTitle(params: {
       options: { maxTokens: TITLE_MAX_TOKENS, temperature: 0.3, signal: controller.signal },
     });
     const text = sdk.extractAssistantText(result).trim();
-    return text ? normalizeSessionTitle(text) : null;
-  } catch {
+    const normalized = text ? normalizeSessionTitle(text) : null;
+    logger.info(`generate title="${normalized ?? ""}" raw="${text.slice(0, 120)}"`);
+    return normalized;
+  } catch (err) {
+    logger.info(`fail reason=complete-threw ${String(err).slice(0, 300)}`);
     return null;
   } finally {
     clearTimeout(timer);
