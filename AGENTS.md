@@ -36,6 +36,17 @@ openclaw plugins install . --link    # symlink dev dir (cannot combine with --fo
 
 After that, the iterate loop is just: `pnpm build` → `openclaw gateway restart`. Verify a route returns JSON (not HTML), e.g. `curl -s -H "Authorization: Bearer <token>" http://127.0.0.1:<port>/friday-next/agents`. Port + token come from `~/.openclaw/openclaw.json` (`gateway.port`, `gateway.auth.token`).
 
+### 一键部署到网关（开发机 → 192.168.100.133 Mac mini）
+
+```bash
+./scripts/deploy-gateway.sh                # 本地 tsc 构建 → rsync → 备份+覆盖安装目录 → 重启 → 健康检查
+./scripts/deploy-gateway.sh --no-build     # dist 已最新时跳过构建
+./scripts/deploy-gateway.sh --no-restart   # 只同步不重启（需手动重启）
+./scripts/deploy-gateway.sh --skip-verify  # 跳过健康检查
+```
+
+拓扑：网关机 `192.168.100.133`（免密 SSH），openclaw 装在 `/opt/homebrew/lib/node_modules/openclaw`，gateway = launchd `ai.openclaw.gateway`（端口 18789）。插件为 npm **拷贝**安装于 `~/.openclaw/npm/projects/syengup-friday-channel-next-*/node_modules/@syengup/friday-channel-next`，脚本覆盖其 `dist/`（旧版留 `dist.prev`，回滚=拷回+重启）。健康检查断言 `/friday-next/agents` 返回 JSON 而非 Control UI HTML（stale copy 信号）。
+
 ## Architecture
 
 ### Data flow
