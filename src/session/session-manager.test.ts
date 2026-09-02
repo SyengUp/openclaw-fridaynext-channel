@@ -355,6 +355,52 @@ describe("permissionMode canonical store", () => {
     await setSessionSettings("main", { permissionMode: "workspace" }, historyDir);
     expect(sdkStore[fileKey]?.permissionMode).toBe("workspace");
   });
+
+  it("seeds a fallbackEntry so a brand-new session's first write creates the SDK row", async () => {
+    // No entry exists yet (first message of a fresh session). The SDK patch must receive a
+    // minimal seed entry so it CREATES the row instead of silently no-opping — otherwise the
+    // first run falls back to the agent default model (model switch only applies from round 2).
+    const fileKey = "agent:main:main";
+    const sdkStore: Record<string, Record<string, unknown>> = {};
+    const seen: Record<string, unknown> = {};
+    setFridayAgentForwardRuntime({
+      runtime: {
+        agent: {
+          session: {
+            resolveStorePath: () => "/store/main.json",
+            loadSessionStore: () => sdkStore,
+            getSessionEntry: ({ sessionKey }: { sessionKey: string }) => sdkStore[sessionKey],
+            patchSessionEntry: async (params: {
+              sessionKey: string;
+              fallbackEntry: Record<string, unknown>;
+              update: (entry: Record<string, unknown>) => Record<string, unknown>;
+            }) => {
+              expect(params.fallbackEntry).toBeDefined();
+              expect(params.fallbackEntry.sessionId).toBeTypeOf("string");
+              expect(params.fallbackEntry.systemSent).toBe(true);
+              expect(params.fallbackEntry.chatType).toBe("direct");
+              const patch = await params.update(params.fallbackEntry);
+              Object.assign(seen, params.fallbackEntry, patch);
+              sdkStore[params.sessionKey] = { ...params.fallbackEntry, ...patch };
+              return sdkStore[params.sessionKey];
+            },
+          },
+        },
+        config: { current: () => ({}) },
+      },
+    } as any);
+
+    await setSessionSettings(
+      "main",
+      { modelRef: "deepseek-v4-pro", providerOverride: null, modelOverride: "deepseek-v4-pro" },
+      historyDir,
+    );
+
+    expect(seen.modelRef).toBe("deepseek-v4-pro");
+    expect(seen.modelOverride).toBe("deepseek-v4-pro");
+    expect(seen.modelOverrideSource).toBe("user");
+    expect(sdkStore[fileKey]?.modelRef).toBe("deepseek-v4-pro");
+  });
 });
 
 describe("canonical store model and thinking", () => {

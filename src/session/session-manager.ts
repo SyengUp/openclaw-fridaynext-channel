@@ -441,6 +441,18 @@ async function writeSdkSessionSettings(
         sessionKey: target.sessionKey,
         agentId: target.agentId,
         preserveActivity: true,
+        // The SQLite entry does not exist yet on a brand-new session's FIRST message
+        // (the app sends modelRef/thinking with `POST /messages` before core ever
+        // created the session). Without a fallback the SDK patch is a silent no-op and
+        // the first run falls back to the agent default — "switched model only applies
+        // from round 2". Provide a minimal seed entry so the patch CREATES it; core
+        // fills in delivery/title/etc. when it dispatches the run moments later.
+        fallbackEntry: {
+          sessionId: sessionIdForSessionsFile(target.sessionKey, sessionKey),
+          systemSent: true,
+          updatedAt: Date.now(),
+          chatType: "direct",
+        },
         update: patch,
       });
       if (sdkSessionSettingsMatch(updated, patchBody)) return;

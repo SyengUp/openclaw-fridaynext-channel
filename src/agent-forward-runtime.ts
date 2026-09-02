@@ -58,6 +58,9 @@ export type FridayAgentForwardRuntime = {
     agentId?: string;
     storePath?: string;
     preserveActivity?: boolean;
+    /** Seed entry used to CREATE the SQLite row when the session does not exist yet
+     *  (brand-new session's first message). Mirrors core's `RuntimeSessionStoreEntryPatchParams`. */
+    fallbackEntry?: Record<string, unknown>;
     update: (
       entry: Record<string, unknown>,
       context: { existingEntry?: Record<string, unknown> },
