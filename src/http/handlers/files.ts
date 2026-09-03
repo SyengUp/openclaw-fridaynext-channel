@@ -435,6 +435,53 @@ export function resolveMediaAttachment(localPath: string): ResolvedAttachment | 
 }
 
 /**
+ * Trusted base directories for server-local path reads (agent markdown file links).
+ */
+function serverLocalReadBases(): string[] {
+  return [
+    path.join(os.homedir(), ".openclaw", "workspace"),
+    getAttachmentsDir(),
+    path.join(os.homedir(), ".openclaw", "media", "inbound"),
+  ].map((p) => path.resolve(p));
+}
+
+/**
+ * Resolve a server-local path token (URL-encoded absolute path like `/Users/...`, or
+ * `file:///Users/...`) to readable bytes on the gateway host, restricted to trusted base
+ * dirs (OpenClaw workspace / channel attachments / inbound media). Returns null when the
+ * token is not a server path, escapes the allowed bases, or the file is missing/unreadable.
+ *
+ * Agents frequently cite files as `[SKILL.md](/Users/.../SKILL.md)` markdown links; the app
+ * re-encodes those as `/friday-next/files/%2FUsers%2F...` download URLs, and this function
+ * is what serves them.
+ */
+export function resolveServerLocalFile(token: string): {
+  buffer: Buffer;
+  mimeType: string;
+  filename: string;
+} | null {
+  let raw = token;
+  if (raw.startsWith("file://")) {
+    raw = raw.slice("file://".length);
+  }
+  if (!raw.startsWith("/")) return null;
+  const resolved = path.resolve(raw);
+  const allowed = serverLocalReadBases().some(
+    (base) => resolved === base || resolved.startsWith(base + path.sep),
+  );
+  if (!allowed) return null;
+  try {
+    const st = fs.statSync(resolved);
+    if (!st.isFile()) return null;
+    const buffer = fs.readFileSync(resolved);
+    const filename = path.basename(resolved);
+    return { buffer, mimeType: guessMimeType(filename), filename };
+  } catch {
+    return null;
+  }
+}
+
+/**
  * Guess MIME type from filename extension.
  */
 export function guessMimeType(filename: string): string {

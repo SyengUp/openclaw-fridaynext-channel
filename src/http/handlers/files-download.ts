@@ -16,6 +16,7 @@ import {
   guessMimeType,
   readAttachmentFileFromDisk,
   readFile,
+  resolveServerLocalFile,
 } from "./files.js";
 import path from "node:path";
 import fs from "node:fs";
@@ -234,6 +235,14 @@ export async function handleFilesDownload(
           // fall through to 404
         }
       }
+    }
+
+    // 3. Server-local absolute path (agent markdown file links like `[SKILL.md](/Users/...)`),
+    //    sent URL-encoded as a single token (`%2FUsers%2F...`). Restricted to trusted bases.
+    const serverLocal = resolveServerLocalFile(fileToken);
+    if (serverLocal) {
+      sendBuffer(req, res, serverLocal.buffer, serverLocal.mimeType, serverLocal.filename);
+      return true;
     }
 
     sendError(res, 404, "File not found");
