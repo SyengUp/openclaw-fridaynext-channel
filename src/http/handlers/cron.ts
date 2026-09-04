@@ -42,6 +42,11 @@
  * inbox's attribution honest (see `notifications/cron-delivery-target.ts`) instead of
  * relying on the channel's sole-connected/last-seen fallback.
  *
+ * PATCH accepts delivery edits through a restricted `delivery` patch (`mode:"announce"`
+ * with an explicit `channel`+`to`, or `mode:"none"`) so the app can retarget a job it did
+ * not create (e.g. a CLI-made command job announcing to telegram); the legacy bare
+ * `deviceId` shorthand still re-pins to friday-next. The two are mutually exclusive.
+ *
  * Dispatch requires the manifest's `contracts.gatewayMethodDispatch:
  * ["authenticated-request"]` (already declared).
  */
@@ -204,6 +209,33 @@ function readSchedule(value: unknown): Record<string, unknown> | undefined {
   return value as Record<string, unknown>;
 }
 
+// ── PATCH body → delivery patch ──────────────────────────────────────────────
+
+const SUPPORTED_DELIVERY_MODES = new Set(["announce", "none"]);
+
+/**
+ * The restricted `delivery` patch the app may send on PATCH. Core's `cron.update` would
+ * accept a free-form `CronDeliveryPatch` (including `mode:"webhook"`), but the app only
+ * ever needs "announce to a channel I name" or "stop delivering" — anything else is a
+ * 400 rather than a silent passthrough (same posture as the payload whitelist). Announce
+ * must carry BOTH `channel` and `to`: merging a bare `{mode:"announce"}` would keep the
+ * previous channel's target, and a friday-next announce without `to` falls back to the
+ * channel's sole-connected / last-seen device, which breaks inbox attribution (see
+ * createJob). A wrong `to` (unknown device id / chat id) is not validated here — the
+ * run's deliveryError surfaces it, same as any channel-side failure.
+ */
+function readDeliveryPatch(value: unknown): Record<string, unknown> | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+  const raw = value as Record<string, unknown>;
+  const mode = nonEmptyString(raw.mode);
+  if (!mode || !SUPPORTED_DELIVERY_MODES.has(mode)) return undefined;
+  if (mode === "none") return { mode: "none" };
+  const channel = nonEmptyString(raw.channel);
+  const to = nonEmptyString(raw.to);
+  if (!channel || !to) return undefined;
+  return { mode: "announce", channel, to };
+}
+
 // ── Handlers ─────────────────────────────────────────────────────────────────
 
 /** `/friday-next-admin/cron/jobs` — list / create / update / remove. */
@@ -312,10 +344,26 @@ async function updateJob(req: IncomingMessage, res: ServerResponse, url: URL): P
   if (touchesPayload) {
     patch.payload = buildAgentTurnPayload(body, nonEmptyString(body.message));
   }
-  // Re-pin delivery when the caller names its device (e.g. the job was created on another
-  // phone and this one is taking it over).
+  // Delivery: the app sends an explicit restricted patch ("announce to channel X" /
+  // "stop delivering"); the legacy `deviceId` shorthand re-pins the job to that device.
+  // Mutually exclusive — a body carrying both is ambiguous, refuse rather than guess.
+  const wantsDelivery = "delivery" in body;
   const deviceId = nonEmptyString(body.deviceId);
-  if (deviceId) {
+  if (wantsDelivery && deviceId) {
+    return json(res, 400, { error: "Pass either delivery or deviceId, not both" });
+  }
+  if (wantsDelivery) {
+    const delivery = readDeliveryPatch(body.delivery);
+    if (!delivery) {
+      return json(res, 400, {
+        error:
+          'Invalid delivery: mode must be "announce" (with non-empty channel and to) or "none"',
+      });
+    }
+    patch.delivery = delivery;
+  } else if (deviceId) {
+    // Re-pin delivery when the caller names its device (e.g. the job was created on another
+    // phone and this one is taking it over).
     patch.delivery = { mode: "announce", channel: FRIDAY_NEXT_CHANNEL_ID, to: deviceId };
   }
 

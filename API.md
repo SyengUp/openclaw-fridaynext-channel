@@ -544,9 +544,12 @@ sends; public requests additionally pass the App Attest gate.
 
 - `PATCH /friday-next-admin/cron/jobs?id=<jobId>` → `cron.update`
 
-  Whitelisted body fields only: `name`, `schedule`, `enabled`, `deleteAfterRun`, and
+  Whitelisted body fields only: `name`, `agentId`, `schedule`, `enabled`, `deleteAfterRun`, and
   `message` / `model` / `thinking` / `timeoutSeconds` (lifted into an `agentTurn` payload patch).
-  Passing `deviceId` re-pins delivery to that device. An empty patch is a `400`.
+  Delivery edits go through a restricted `delivery` patch — `{ "mode": "announce", "channel":
+  "friday-next", "to": "<deviceId>" }` or `{ "mode": "none" }`; `webhook` and missing `channel`/`to`
+  are `400`s. Passing the legacy `deviceId` alone re-pins delivery to that device; `deviceId` and
+  `delivery` together are a `400`. An empty patch is a `400`.
 
 - `DELETE /friday-next-admin/cron/jobs?id=<jobId>` → `cron.remove`
 

@@ -276,6 +276,51 @@ describe("handleCronJobs — update", () => {
     });
   });
 
+  it("forwards a stop-delivering delivery patch as-is", async () => {
+    dispatchGatewayMethod.mockResolvedValue({ ok: true, payload: { id: "j1" } });
+    await invoke(handleCronJobs, "PATCH", "/friday-next-admin/cron/jobs?id=j1", {
+      delivery: { mode: "none" },
+    });
+    expect(dispatchGatewayMethod).toHaveBeenCalledWith("cron.update", {
+      id: "j1",
+      patch: { delivery: { mode: "none" } },
+    });
+  });
+
+  it("forwards an announce-to-another-channel delivery patch as-is", async () => {
+    dispatchGatewayMethod.mockResolvedValue({ ok: true, payload: { id: "j1" } });
+    await invoke(handleCronJobs, "PATCH", "/friday-next-admin/cron/jobs?id=j1", {
+      delivery: { mode: "announce", channel: "telegram", to: "-1001234" },
+    });
+    expect(dispatchGatewayMethod).toHaveBeenCalledWith("cron.update", {
+      id: "j1",
+      patch: { delivery: { mode: "announce", channel: "telegram", to: "-1001234" } },
+    });
+  });
+
+  it.each([
+    ["webhook mode", { mode: "webhook", to: "https://example.com/hook" }],
+    ["unknown mode", { mode: "deliver" }],
+    ["announce without channel", { mode: "announce", to: "-1001234" }],
+    ["announce without to", { mode: "announce", channel: "telegram" }],
+    ["not an object", "none"],
+  ])("rejects an invalid delivery patch (%s) with a 400", async (_label, delivery) => {
+    const { captured } = await invoke(handleCronJobs, "PATCH", "/friday-next-admin/cron/jobs?id=j1", {
+      delivery,
+    });
+    expect(captured.statusCode).toBe(400);
+    expect(dispatchGatewayMethod).not.toHaveBeenCalled();
+  });
+
+  it("refuses a body carrying both delivery and deviceId", async () => {
+    const { captured } = await invoke(handleCronJobs, "PATCH", "/friday-next-admin/cron/jobs?id=j1", {
+      deviceId: "DEVICE-2",
+      delivery: { mode: "none" },
+    });
+    expect(captured.statusCode).toBe(400);
+    expect(dispatchGatewayMethod).not.toHaveBeenCalled();
+  });
+
   it("returns 400 without dispatching when id is missing", async () => {
     const { captured } = await invoke(handleCronJobs, "PATCH", "/friday-next-admin/cron/jobs", {
       enabled: false,
