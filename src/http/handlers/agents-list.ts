@@ -12,7 +12,10 @@ import {
   resolveRosterDefaultAgentId,
 } from "../../agent-roster.js";
 import { readGreetingFor } from "../../agent-greetings/greetings-store.js";
-import { resolveDefaultPermissionMode } from "../../session/session-manager.js";
+import {
+  resolveDefaultPermissionMode,
+  SESSION_PERMISSION_MODES,
+} from "../../session/session-manager.js";
 
 export interface FridayAgentEntry {
   id: string;
@@ -41,6 +44,11 @@ interface ResolvedAgents {
    * what an agent with no exec override runs. Lets the app label the "inherit" row.
    */
   defaultPermissionMode?: string;
+  /**
+   * Explicit capability declaration for clients that expose the session permission picker.
+   * Omitted when the effective policy cannot be resolved from this gateway's config surface.
+   */
+  permissionModes?: readonly string[];
 }
 
 /** Extract a primary model ref from the `model` field (string or {primary,...}). */
@@ -154,6 +162,7 @@ export function resolveConfiguredAgents(): ResolvedAgents {
       ],
       defaultAgentId: DEFAULT_AGENT_ID,
       ...(defaultPermissionMode ? { defaultPermissionMode } : {}),
+      ...(defaultPermissionMode ? { permissionModes: SESSION_PERMISSION_MODES } : {}),
     };
   }
 
@@ -179,7 +188,15 @@ export function resolveConfiguredAgents(): ResolvedAgents {
     });
   }
 
-  return { agents: entries, defaultAgentId, ...(defaultPermissionMode ? { defaultPermissionMode } : {}) };
+  const hasPermissionCatalog = Boolean(
+    defaultPermissionMode || entries.some((entry) => entry.defaultPermissionMode),
+  );
+  return {
+    agents: entries,
+    defaultAgentId,
+    ...(defaultPermissionMode ? { defaultPermissionMode } : {}),
+    ...(hasPermissionCatalog ? { permissionModes: SESSION_PERMISSION_MODES } : {}),
+  };
 }
 
 export async function handleAgentsList(
@@ -201,7 +218,7 @@ export async function handleAgentsList(
     return true;
   }
 
-  const { agents, defaultAgentId, defaultPermissionMode } = resolveConfiguredAgents();
+  const { agents, defaultAgentId, defaultPermissionMode, permissionModes } = resolveConfiguredAgents();
 
   res.statusCode = 200;
   res.setHeader("Content-Type", "application/json");
@@ -211,6 +228,7 @@ export async function handleAgentsList(
       agents,
       defaultAgentId,
       ...(defaultPermissionMode ? { defaultPermissionMode } : {}),
+      ...(permissionModes ? { permissionModes } : {}),
     }),
   );
   return true;

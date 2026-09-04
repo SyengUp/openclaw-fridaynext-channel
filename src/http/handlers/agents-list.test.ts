@@ -90,6 +90,16 @@ describe("handleAgentsList", () => {
     expect(JSON.parse(res.body).agents).toEqual([
       { id: "main", isDefault: true, defaultPermissionMode: "guarded" },
     ]);
+    expect(JSON.parse(res.body).permissionModes).toEqual(["read-only", "guarded", "workspace", "full"]);
+  });
+
+  it("omits the permission catalog when the gateway policy cannot be resolved", async () => {
+    setConfig({ tools: { exec: { mode: "allowlist" } } });
+    const res = new MockRes();
+    await handleAgentsList(makeReq(AUTH), res as any);
+
+    expect(res.statusCode).toBe(200);
+    expect(JSON.parse(res.body).permissionModes).toBeUndefined();
   });
 
   it("reports the global defaultPermissionMode at top level (no agent override)", async () => {
