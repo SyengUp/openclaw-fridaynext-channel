@@ -40,6 +40,7 @@ import { createHealthLogTool } from "./src/tools/health-log-tool.js";
 import { createCalendarQueryTool } from "./src/tools/calendar-query-tool.js";
 import { createCalendarLogTool } from "./src/tools/calendar-log-tool.js";
 import { createLocationQueryTool } from "./src/tools/location-query-tool.js";
+import { restoreDurableRuntimeV3 } from "./src/runtime-v3/runtime-recovery.js";
 
 const hookLogger = createFridayNextLogger("hook");
 
@@ -181,6 +182,11 @@ export default defineChannelPluginEntry({
       lastApiRoutesRegistered = new WeakRef(api);
       registerFridayNextHttpRoutes(api);
       registerFridayNextPluginTools(api);
+      void restoreDurableRuntimeV3().catch((error: unknown) => {
+        hookLogger.error(
+          `[RUNTIME_V3_RECOVERY_FAILED] error=${error instanceof Error ? error.message : String(error)}`,
+        );
+      });
 
       // FridayTunnel: enter control-plane standby by default. frpc is spawned only after an
       // entitled desired set arrives; explicit operator hard-disable keeps this fully inert.

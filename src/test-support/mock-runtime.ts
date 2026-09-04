@@ -9,6 +9,7 @@ import { sseEmitter } from "../sse/emitter.js";
 import { resetActiveRunsForTest } from "../agent/active-runs.js";
 import { resetRunMetadataForTest } from "../run-metadata.js";
 import { resetForTest as resetSubagentRegistryForTest } from "../agent/subagent-registry.js";
+import { setRuntimeV3RootForTest } from "../runtime-v3/runtime-store.js";
 
 export type MockRuntimeOptions = {
   authToken?: string;
@@ -44,6 +45,7 @@ export function setMockRuntime(opts: MockRuntimeOptions = {}): void {
   setOfflineQueueBaseDirForTest(path.join(historyDir, "events-queue"));
   setAttachmentsDirForTest(path.join(historyDir, "attachments"));
   setPromptCapsulesBaseDirForTest(path.join(historyDir, "prompt-capsules"));
+  setRuntimeV3RootForTest(path.join(historyDir, "runtime-v3"));
   const cfg = {
     gateway: {
       auth: {

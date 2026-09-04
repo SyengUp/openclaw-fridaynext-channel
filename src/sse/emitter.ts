@@ -1,6 +1,7 @@
 import type { ServerResponse } from "node:http";
 import { createFridayNextLogger } from "../logging.js";
 import { fridaySseOfflineQueue } from "./offline-queue.js";
+import { runtimeV3StoreIfInitialized } from "../runtime-v3/runtime-store.js";
 
 const logger = createFridayNextLogger("sse", "info");
 
@@ -135,6 +136,45 @@ class SseEmitterRegistry {
   private eventSeqByDevice = new Map<string, number>();
   private backlogLimit = 200;
 
+  private mirrorIntoRuntimeV3(event: SseEvent, hintedRunId?: string): void {
+    const store = runtimeV3StoreIfInitialized();
+    if (!store) return;
+    const rawRunId = hintedRunId ?? event.data.runId;
+    const runId = typeof rawRunId === "string" ? rawRunId.trim() : "";
+    if (!runId || !store.run(runId)) return;
+    const phase = typeof event.data.phase === "string" ? event.data.phase.toLowerCase() : "";
+    const stream = typeof event.data.stream === "string" ? event.data.stream.toLowerCase() : "";
+    const dataRecord =
+      event.data.data && typeof event.data.data === "object" && !Array.isArray(event.data.data)
+        ? (event.data.data as Record<string, unknown>)
+        : null;
+    const nestedPhase =
+      typeof dataRecord?.phase === "string" ? dataRecord.phase.toLowerCase() : phase;
+    let eventType: string = event.type;
+    if (event.type === "agent") {
+      if (stream === "lifecycle" && nestedPhase === "start") eventType = "run.started";
+      else if (stream === "lifecycle" && nestedPhase === "end") eventType = "run.completed";
+      else if (stream === "lifecycle" && nestedPhase === "error") eventType = "run.failed";
+      else eventType = `agent.${stream || "event"}.${nestedPhase || "update"}`;
+    } else if (event.type === "deliver") {
+      const kind = typeof event.data.kind === "string" ? event.data.kind.toLowerCase() : "event";
+      eventType = `deliver.${kind}`;
+    } else if (event.type === "outbound") {
+      const op = typeof event.data.op === "string" ? event.data.op.toLowerCase() : "event";
+      eventType = op === "dispatch_error" ? "run.failed" : `outbound.${op}`;
+    } else if (event.type === "tool-hook") {
+      eventType = `tool.${phase || "update"}`;
+    } else if (event.type === "subagent") {
+      eventType = `subagent.${phase || "update"}`;
+    } else if (event.type === "approval") {
+      eventType = `approval.${phase || "update"}`;
+    }
+    store.appendRunEvent(runId, eventType, {
+      _sourceEventType: event.type,
+      _sourceEventData: event.data,
+    });
+  }
+
   getConnectionCount(): number {
     return this.connections.size;
   }
@@ -226,7 +266,13 @@ class SseEmitterRegistry {
     return count;
   }
 
-  broadcast(event: SseEvent, deviceId?: string, flushNow?: boolean): void {
+  broadcast(
+    event: SseEvent,
+    deviceId?: string,
+    flushNow?: boolean,
+    skipRuntimeMirror = false,
+  ): void {
+    if (!skipRuntimeMirror) this.mirrorIntoRuntimeV3(event);
     if (deviceId) {
       const key = deviceId.trim().toUpperCase();
       const entry = this.nextEntry(key, event);
@@ -290,14 +336,15 @@ class SseEmitterRegistry {
   }
 
   broadcastToRun(runId: string, event: SseEvent, flushNow?: boolean): void {
+    this.mirrorIntoRuntimeV3(event, runId);
     const direct = typeof event.data.deviceId === "string" ? event.data.deviceId : "";
     if (direct.trim()) {
-      this.broadcast(event, direct, flushNow);
+      this.broadcast(event, direct, flushNow, true);
       return;
     }
     const set = this.runEmitter.get(runId);
     if (!set || set.size === 0) return;
-    for (const deviceId of set) this.broadcast(event, deviceId, flushNow);
+    for (const deviceId of set) this.broadcast(event, deviceId, flushNow, true);
   }
 
   broadcastToolEvent(deviceId: string, runId: string, event: SseEvent, flushNow?: boolean): void {

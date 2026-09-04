@@ -59,7 +59,7 @@ export async function handleSseStream(req: IncomingMessage, res: ServerResponse)
 
   const normalized = deviceId.trim().toUpperCase();
   const lastSeq = sseEmitter.latestSeqForDevice(normalized);
-  sseEmitter.broadcast(
+  conn.sendLive(
     {
       type: "connected",
       data: {
@@ -70,7 +70,6 @@ export async function handleSseStream(req: IncomingMessage, res: ServerResponse)
         activeSessionKeys: getActiveSessionKeys(),
       },
     },
-    deviceId,
     true,
   );
 
