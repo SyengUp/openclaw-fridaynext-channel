@@ -73,6 +73,9 @@ function normalizedDeviceId(deviceId: string): string {
 }
 
 function normalizedCommand(command: DurableRunCommand): DurableRunCommand {
+  const sessionOptions = command.sessionOptions
+    ? Object.fromEntries(Object.entries(command.sessionOptions).filter(([, value]) => value !== undefined))
+    : undefined;
   return {
     clientRequestId: command.clientRequestId.trim(),
     deviceId: normalizedDeviceId(command.deviceId),
@@ -80,7 +83,7 @@ function normalizedCommand(command: DurableRunCommand): DurableRunCommand {
     agentId: command.agentId.trim() || "main",
     text: command.text,
     attachments: [...command.attachments],
-    ...(command.sessionOptions ? { sessionOptions: command.sessionOptions } : {}),
+    ...(sessionOptions && Object.keys(sessionOptions).length > 0 ? { sessionOptions } : {}),
   };
 }
 

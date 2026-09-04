@@ -105,6 +105,52 @@ describe("runtime protocol v3", () => {
     expect(getRuntimeV3Store().run(accepted.runId)?.phase).toBe("completed");
   });
 
+  it("writes an explicit terminal event for an interrupted run that cannot resume", async () => {
+    const root = configure();
+    const store = getRuntimeV3Store();
+    const accepted = store.acceptCommand({
+      clientRequestId: "running-before-crash",
+      deviceId: "PHONE-1",
+      sessionKey: "agent:main:interrupted",
+      agentId: "main",
+      text: "long task",
+      attachments: [],
+    }).run!;
+    store.transition(accepted.runId, "running");
+
+    setRuntimeV3RootForTest(path.join(root, "runtime-v3"));
+    await restoreDurableRuntimeV3({
+      isRunActive: async () => false,
+      transcriptProvesCompletion: () => false,
+    });
+
+    const recovered = getRuntimeV3Store();
+    expect(recovered.run(accepted.runId)?.phase).toBe("failed");
+    expect(recovered.eventsAfter("PHONE-1", 0).at(-1)?.eventType).toBe("run.failed");
+  });
+
+  it("uses transcript evidence to close an interrupted run as completed", async () => {
+    const root = configure();
+    const store = getRuntimeV3Store();
+    const accepted = store.acceptCommand({
+      clientRequestId: "completed-before-crash",
+      deviceId: "PHONE-1",
+      sessionKey: "agent:main:completed",
+      agentId: "main",
+      text: "finish task",
+      attachments: [],
+    }).run!;
+    store.transition(accepted.runId, "running");
+
+    setRuntimeV3RootForTest(path.join(root, "runtime-v3"));
+    await restoreDurableRuntimeV3({
+      isRunActive: async () => false,
+      transcriptProvesCompletion: () => true,
+    });
+
+    expect(getRuntimeV3Store().run(accepted.runId)?.phase).toBe("completed");
+  });
+
   it("returns the original run for duplicate clientRequestId and rejects changed payloads", async () => {
     configure();
     let dispatchCount = 0;

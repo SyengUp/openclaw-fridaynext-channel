@@ -53,6 +53,16 @@ describe("DurableRunStore", () => {
     expect(conflict.run?.runId).toBe(accepted.run?.runId);
   });
 
+  it("treats absent and empty session options as the same request", () => {
+    const { store } = makeStore();
+    const accepted = store.acceptCommand(command());
+
+    const replayed = store.acceptCommand(command({ sessionOptions: {} }));
+
+    expect(replayed.outcome).toBe("replayed");
+    expect(replayed.run?.runId).toBe(accepted.run?.runId);
+  });
+
   it("claims one run per session while allowing different sessions in parallel", () => {
     const { store } = makeStore();
     const first = store.acceptCommand(command()).run!;
