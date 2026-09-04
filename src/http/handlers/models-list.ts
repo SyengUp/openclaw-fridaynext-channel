@@ -311,20 +311,38 @@ function sendJson(
 }
 
 /**
+ * Config-derived default model, matching the Control UI strategy: the picker
+ * default comes from config (`agents.defaults.model`), not from `models.list` —
+ * the core payload has no default field.
+ *
+ * Per-roster-agent primary wins when `agentId` targets a roster agent (same
+ * semantics as `agents.list[agent].model.primary`); otherwise the global
+ * `agents.defaults.model` applies. Single value only — no list synthesis.
+ */
+function resolveConfiguredDefaultModel(agentId?: string): string {
+  const rt = getFridayAgentForwardRuntime();
+  if (!rt) return "";
+  const cfg = rt.getConfig() as Record<string, unknown>;
+  if (agentId) {
+    const rosterAgent = listAgentRoster(cfg).find((item) => item.id === agentId);
+    const primary = rosterAgent ? resolvePrimaryModel(rosterAgent.config?.model) : undefined;
+    if (primary) return primary;
+  }
+  const agents = cfg?.agents as Record<string, unknown> | undefined;
+  const agentDefaults = agents?.defaults as Record<string, unknown> | undefined;
+  return resolvePrimaryModel(agentDefaults?.model) ?? "";
+}
+
+/**
  * `GET /friday-next-admin/models` — gateway-authed sibling of `/friday-next/models`.
  *
- * Returns a DETERMINISTIC picker list: the union of every configured model ref
- * (`agents.defaults.model`, `agents.defaults.models`, every roster agent's
- * `model` + per-agent `models`, and `models.providers.*.models`), enriched with
- * per-model runtime / thinking metadata from core's `models.list` when it can be
- * dispatched.
+ * Returns the NATIVE `models.list` result (Control UI parity): the core's public
+ * catalog, mapped to the app shape and deduped. New OpenClaw servers keep the
+ * list stable across gateway restarts / catalog browses, so there is no need to
+ * regenerate the picker from config anymore.
  *
- * WHY NOT USE THE RAW `models.list` AS THE LIST: core's browse result is NOT
- * stable — once any full-catalog browse warms the prepared-catalog cache it
- * returns the whole provider catalog (e.g. all opencode-go models), and a
- * gateway restart or catalog timeout drops it back to the configured-only set.
- * The picker must not flip between runs, so the list is config-derived and the
- * dispatch only supplies metadata for refs we already show.
+ * `defaultModel` follows the Control UI strategy: a single config value
+ * (see `resolveConfiguredDefaultModel`).
  *
  * WHY THE ADMIN PREFIX: `/friday-next` is registered `auth: "plugin"`, and core
  * gives plugin-authed routes a runtime client with an EMPTY operator scope list,
@@ -362,43 +380,25 @@ export async function handleAdminModelsList(
   const rawAgentId = new URL(req.url ?? "", "http://localhost").searchParams.get("agentId");
   const agentId = rawAgentId?.trim() ? normalizeAgentId(rawAgentId) : undefined;
 
-  const { models, defaultModel } = resolveConfiguredModels(agentId);
+  const defaultModel = resolveConfiguredDefaultModel(agentId);
   const coreModels = await fetchCoreModelsList(agentId);
-  if (coreModels) {
-    enrichFromCoreModels(models, coreModels);
+  if (coreModels && coreModels.length > 0) {
+    return sendJson(res, 200, { ok: true, models: coreModels, defaultModel });
   }
-  return sendJson(res, 200, { ok: true, models, defaultModel });
+
+  // LEGACY-COMPAT (openclaw < models.list 稳定契约): 老版 core 的 `models.list` 不可用
+  // （方法缺失 / dispatch 失败 / 返回空）时，回落到配置推导集，保证旧版 OpenClaw 仍能
+  // 拿到模型列表。待最低支持 core 版本都提供稳定 `models.list` 后可整体删除。
+  const legacy = resolveConfiguredModels(agentId);
+  return sendJson(res, 200, { ok: true, models: legacy.models, defaultModel });
 }
 
 /**
- * Merges metadata from core's `models.list` into the deterministic config-derived
- * list. Only refs already present are touched — dispatch-only rows (the cache-
- * dependent full catalog) are ignored so the list never flips with core's cache.
+ * LEGACY `/friday-next/models` — config-derived picker (see `resolveConfiguredModels`),
+ * kept for old app builds and old OpenClaw cores without a stable `models.list`.
+ * New clients use `/friday-next-admin/models` (native `models.list`). Cleanup
+ * point: tied to the LEGACY-COMPAT branches in `handleAdminModelsList`.
  */
-function enrichFromCoreModels(
-  entries: FridayModelEntry[],
-  coreModels: FridayModelEntry[],
-): void {
-  const byRef = new Map(coreModels.map((m) => [m.id, m]));
-  for (const entry of entries) {
-    const core = byRef.get(entry.id);
-    if (!core) continue;
-    // 名字：配置里显式 alias（或 provider 目录给的真名）优先；否则采纳核心目录的规范
-    // 显示名——否则 deepseek 这类只写 ref 的模型会以裸 id（deepseek-v4-flash）示人。
-    const bareId = entry.id.split("/").pop() ?? entry.id;
-    const hasRealConfigName = entry.name !== undefined && entry.name !== bareId;
-    if (!hasRealConfigName && core.name) entry.name = core.name;
-    if (core.runtime) entry.runtime = core.runtime;
-    if (core.thinkingLevels && core.thinkingLevels.length > 0) {
-      entry.thinkingLevels = core.thinkingLevels;
-    }
-    if (core.thinkingDefault) entry.thinkingDefault = core.thinkingDefault;
-    if (core.reasoning !== undefined) entry.reasoning = core.reasoning;
-    if (core.contextWindow !== undefined) entry.contextWindow = core.contextWindow;
-    if (core.maxTokens !== undefined) entry.maxTokens = core.maxTokens;
-  }
-}
-
 export async function handleModelsList(
   req: IncomingMessage,
   res: ServerResponse,

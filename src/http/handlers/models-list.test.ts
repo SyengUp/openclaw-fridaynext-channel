@@ -297,10 +297,9 @@ describe("handleAdminModelsList", () => {
     resetFridayAgentForwardRuntimeForTest();
   });
 
-  it("returns a deterministic config-derived list enriched from models.list", async () => {
-    // Dispatch returns the cache-warmed FULL catalog (extra opencode-go rows). The
-    // endpoint must NOT adopt those — the list stays the configured set, so a gateway
-    // restart (cold cache) never flips the picker.
+  it("adopts the raw models.list result as the list", async () => {
+    // New OpenClaw keeps models.list stable, so the picker is the dispatch
+    // result itself — including full-catalog rows (gpt-5.6-luna / kimi-k3).
     dispatchGatewayMethod.mockResolvedValue({
       ok: true,
       payload: {
@@ -308,12 +307,6 @@ describe("handleAdminModelsList", () => {
           {
             id: "deepseek-v4-flash",
             name: "DeepSeek V4 Flash",
-            provider: "deepseek",
-            agentRuntime: { id: "openclaw" },
-          },
-          {
-            id: "deepseek-v4-flash",
-            name: "deepseek-v4-flash",
             provider: "deepseek",
             agentRuntime: { id: "openclaw" },
           },
@@ -339,13 +332,6 @@ describe("handleAdminModelsList", () => {
           main: { models: { "deepseek/deepseek-v4-pro": {} } },
         },
       },
-      models: {
-        providers: {
-          "llama-cpp": {
-            models: [{ id: "gemma-4-e4b-it-q4_k_m", name: "Gemma 4" }],
-          },
-        },
-      },
     });
 
     const res = new MockRes();
@@ -354,20 +340,42 @@ describe("handleAdminModelsList", () => {
     expect(dispatchGatewayMethod).toHaveBeenCalledWith("models.list", { agentId: "main" });
     expect(res.statusCode).toBe(200);
     const body = JSON.parse(res.body);
-    // Deterministic union: defaults model + main.models + models.providers. The
-    // dispatch-only rows (gpt-5.6-luna / kimi-k3) are NOT picked up.
     expect(body.models.map((m: any) => m.id).sort()).toEqual([
       "deepseek/deepseek-v4-flash",
-      "deepseek/deepseek-v4-pro",
-      "llama-cpp/gemma-4-e4b-it-q4_k_m",
+      "opencode-go/gpt-5.6-luna",
+      "opencode-go/kimi-k3",
     ]);
-    // Matching refs are enriched with the dispatch runtime.
     const flash = body.models.find((m: any) => m.id === "deepseek/deepseek-v4-flash");
     expect(flash.runtime).toBe("openclaw");
+    // Control UI strategy: the default is the config default, not a list row.
     expect(body.defaultModel).toBe("deepseek/deepseek-v4-flash");
   });
 
-  it("adopts the core display name when the config-derived name is just the model id", async () => {
+  it("prefers the roster agent primary for defaultModel when ?agentId targets it", async () => {
+    dispatchGatewayMethod.mockResolvedValue({
+      ok: true,
+      payload: {
+        models: [
+          { id: "deepseek-v4-pro", name: "deepseek-v4-pro", provider: "deepseek" },
+          { id: "deepseek-v4-pro-plus", name: "deepseek-v4-pro-plus", provider: "deepseek" },
+        ],
+      },
+    });
+    setRuntime({
+      agents: {
+        defaults: { model: "deepseek/deepseek-v4-pro" },
+        list: [{ id: "operator", model: "deepseek/deepseek-v4-pro-plus" }],
+      },
+    });
+
+    const res = new MockRes();
+    await handleAdminModelsList(makeReq({}, "GET", "?agentId=operator"), res as any);
+
+    const body = JSON.parse(res.body);
+    expect(body.defaultModel).toBe("deepseek/deepseek-v4-pro-plus");
+  });
+
+  it("uses dispatch rows verbatim when the config never names the model with an alias", async () => {
     dispatchGatewayMethod.mockResolvedValue({
       ok: true,
       payload: {
@@ -392,7 +400,7 @@ describe("handleAdminModelsList", () => {
     expect(flash.name).toBe("DeepSeek V4 Flash");
   });
 
-  it("falls back to config parsing when dispatch fails", async () => {
+  it("LEGACY-COMPAT falls back to config parsing when dispatch fails", async () => {
     dispatchGatewayMethod.mockRejectedValue(new Error("dispatch reserved for contracts"));
     setRuntime({
       agents: {
@@ -411,9 +419,10 @@ describe("handleAdminModelsList", () => {
     const body = JSON.parse(res.body);
     expect(body.models).toHaveLength(1);
     expect(body.models[0].id).toBe("deepseek/deepseek-v4-pro");
+    expect(body.defaultModel).toBe("deepseek/deepseek-v4-pro");
   });
 
-  it("falls back when the core returns no models", async () => {
+  it("LEGACY-COMPAT falls back when the core returns no models", async () => {
     dispatchGatewayMethod.mockResolvedValue({ ok: true, payload: { models: [] } });
     setRuntime({ agents: { defaults: { model: "deepseek/deepseek-v4-pro" } } });
 
