@@ -31,8 +31,8 @@ function integerQuery(url: URL, name: string, fallback: number): number {
   return Number.isFinite(value) ? Math.max(0, value) : fallback;
 }
 
-function writeRuntimeEvent(res: ServerResponse, event: DurableRuntimeEvent): void {
-  res.write(`id: ${event.eventId}\nevent: runtime\ndata: ${JSON.stringify(event)}\n\n`);
+function writeRuntimeEvent(res: ServerResponse, event: DurableRuntimeEvent): boolean {
+  return res.write(`id: ${event.eventId}\nevent: runtime\ndata: ${JSON.stringify(event)}\n\n`);
 }
 
 export async function handleRuntimeV3Events(
@@ -58,21 +58,51 @@ export async function handleRuntimeV3Events(
   res.flushHeaders();
 
   let lastSent = afterEventId;
+  let waitingDrain = false;
   let replaying = true;
-  const arrivedDuringReplay: DurableRuntimeEvent[] = [];
+  let closed = false;
+  const replayBatchLimit = 256;
+
+  function pumpReplay(): void {
+    if (closed || waitingDrain) return;
+    replaying = true;
+    while (!waitingDrain) {
+      const events = store.eventsAfter(deviceId, lastSent, replayBatchLimit);
+      if (events.length === 0) {
+        replaying = false;
+        return;
+      }
+      for (const event of events) {
+        if (event.eventId <= lastSent) continue;
+        lastSent = event.eventId;
+        if (!writeRuntimeEvent(res, event)) {
+          waitingDrain = true;
+          return;
+        }
+      }
+    }
+  }
+
   const unsubscribe = store.subscribe(deviceId, (event) => {
     if (event.eventId <= lastSent) return;
-    if (replaying) {
-      arrivedDuringReplay.push(event);
-      return;
-    }
+    // 回放或背压期间事件已在持久化日志中，只保留游标，避免慢连接堆出无界内存队列。
+    if (replaying || waitingDrain) return;
     lastSent = event.eventId;
-    writeRuntimeEvent(res, event);
+    if (!writeRuntimeEvent(res, event)) {
+      waitingDrain = true;
+      replaying = true;
+    }
   });
+
+  const handleDrain = (): void => {
+    waitingDrain = false;
+    pumpReplay();
+  };
+  res.on("drain", handleDrain);
 
   const head = store.eventHead(deviceId);
   const floor = store.eventFloor(deviceId);
-  res.write(
+  waitingDrain = !res.write(
     `event: hello\ndata: ${JSON.stringify({
       protocolVersion: 3,
       pluginVersion: PLUGIN_VERSION,
@@ -85,23 +115,21 @@ export async function handleRuntimeV3Events(
       pendingDeviceRequests: store.pendingDeviceRequests(deviceId),
     })}\n\n`,
   );
-  const replayAfter = floor > 0 && afterEventId < floor - 1 ? floor - 1 : afterEventId;
-  for (const event of store.eventsAfter(deviceId, replayAfter, Number.MAX_SAFE_INTEGER)) {
-    if (event.eventId <= lastSent) continue;
-    lastSent = event.eventId;
-    writeRuntimeEvent(res, event);
-  }
-  replaying = false;
-  for (const event of arrivedDuringReplay.sort((a, b) => a.eventId - b.eventId)) {
-    if (event.eventId <= lastSent) continue;
-    lastSent = event.eventId;
-    writeRuntimeEvent(res, event);
-  }
+  lastSent = floor > 0 && afterEventId < floor - 1 ? floor - 1 : afterEventId;
+  pumpReplay();
 
-  const keepalive = setInterval(() => res.write(": keepalive\n\n"), 15_000);
+  const keepalive = setInterval(() => {
+    if (closed || waitingDrain) return;
+    if (!res.write(": keepalive\n\n")) {
+      waitingDrain = true;
+      replaying = true;
+    }
+  }, 15_000);
   keepalive.unref();
   req.on("close", () => {
+    closed = true;
     clearInterval(keepalive);
+    res.off("drain", handleDrain);
     unsubscribe();
   });
   return true;
@@ -187,11 +215,13 @@ export async function handleRuntimeV3SessionSnapshot(
   const sessionUsage = readSessionUsageSnapshotFromStore(key);
   const revision = crypto
     .createHash("sha256")
-    .update(JSON.stringify({
-      transcript: transcript.map((message) => [message.id, message.seq, message.ts]),
-      runs: runs.map((run) => [run.runId, run.phase, run.lastRunSeq, run.updatedAt]),
-      segmentHead: dedupedEvents.map((event) => [event.runId, event.runSeq, event.eventType]),
-    }))
+    .update(
+      JSON.stringify({
+        transcript: transcript.map((message) => [message.id, message.seq, message.ts]),
+        runs: runs.map((run) => [run.runId, run.phase, run.lastRunSeq, run.updatedAt]),
+        segmentHead: dedupedEvents.map((event) => [event.runId, event.runSeq, event.eventType]),
+      }),
+    )
     .digest("hex");
   return json(res, 200, {
     ok: true,
@@ -224,7 +254,9 @@ export async function handleRuntimeV3Cancel(
   }
   if (run.phase === "queued") {
     sseEmitter.flushRuntimeV3Run(runId);
-    const event = store.appendRunEvent(runId, "run.cancelled", { reason: "cancelled before dispatch" });
+    const event = store.appendRunEvent(runId, "run.cancelled", {
+      reason: "cancelled before dispatch",
+    });
     return json(res, 200, { ok: true, runId, phase: "cancelled", eventId: event.eventId });
   }
 

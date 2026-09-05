@@ -15,6 +15,7 @@ import { getRuntimeV3Store, setRuntimeV3RootForTest } from "../../runtime-v3/run
 import { handleMessages } from "./messages.js";
 import {
   handleRuntimeV3Acknowledge,
+  handleRuntimeV3Events,
   handleRuntimeV3SessionSnapshot,
   handleRuntimeV3Sync,
 } from "./runtime-v3.js";
@@ -24,10 +25,7 @@ import {
   resetFridayAgentForwardRuntimeForTest,
   setFridayAgentForwardRuntime,
 } from "../../agent-forward-runtime.js";
-import {
-  observeAgentEventForActiveRuns,
-  resetActiveRunsForTest,
-} from "../../agent/active-runs.js";
+import { observeAgentEventForActiveRuns, resetActiveRunsForTest } from "../../agent/active-runs.js";
 
 class MockRes extends EventEmitter {
   statusCode = 0;
@@ -38,6 +36,28 @@ class MockRes extends EventEmitter {
   }
   end(body?: string): void {
     if (body) this.body += body;
+    this.emit("finish");
+  }
+}
+
+class BackpressuredRes extends EventEmitter {
+  statusCode = 0;
+  writes: string[] = [];
+  private blocked = false;
+  private writeCount = 0;
+  setHeader(): void {}
+  flushHeaders(): void {}
+  write(chunk: string): boolean {
+    this.writes.push(chunk);
+    this.writeCount += 1;
+    if (this.writeCount === 2) this.blocked = true;
+    return !this.blocked;
+  }
+  release(): void {
+    this.blocked = false;
+    this.emit("drain");
+  }
+  end(): void {
     this.emit("finish");
   }
 }
@@ -95,6 +115,35 @@ afterEach(() => {
 });
 
 describe("runtime protocol v3", () => {
+  it("pauses durable replay while the response applies backpressure", async () => {
+    configure();
+    const store = getRuntimeV3Store();
+    const run = store.acceptCommand({
+      clientRequestId: "slow-replay",
+      deviceId: "PHONE-1",
+      sessionKey: "agent:main:slow-replay",
+      agentId: "main",
+      text: "hello",
+      attachments: [],
+    }).run!;
+    store.appendRunEvent(run.runId, "run.started", {});
+    store.appendRunEvent(run.runId, "assistant.delta", { text: "one" });
+    store.appendRunEvent(run.runId, "assistant.delta", { text: "two" });
+    const request = Object.assign(new EventEmitter(), {
+      method: "GET",
+      url: "/friday-next/v3/events?deviceId=PHONE-1",
+      headers: { authorization: "Bearer tok" },
+    }) as unknown as IncomingMessage;
+    const response = new BackpressuredRes();
+
+    await handleRuntimeV3Events(request, response as unknown as ServerResponse);
+
+    expect(response.writes.filter((chunk) => chunk.includes("event: runtime"))).toHaveLength(1);
+    response.release();
+    expect(response.writes.filter((chunk) => chunk.includes("event: runtime"))).toHaveLength(3);
+    request.emit("close");
+  });
+
   it("returns a reconstructable session snapshot with transcript, segments and stable revision", async () => {
     const root = configure();
     const sessionKey = "agent:main:snapshot";
@@ -115,7 +164,9 @@ describe("runtime protocol v3", () => {
           timestamp: "2026-09-05T00:00:01.000Z",
           message: { role: "assistant", content: [{ type: "text", text: "world" }] },
         },
-      ].map((line) => JSON.stringify(line)).join("\n") + "\n",
+      ]
+        .map((line) => JSON.stringify(line))
+        .join("\n") + "\n",
       "utf8",
     );
     setFridayAgentForwardRuntime({
@@ -535,10 +586,7 @@ describe("runtime protocol v3", () => {
     });
 
     const events = store.eventsAfter(run.deviceId, 0);
-    expect(events.map((event) => event.eventType)).toEqual([
-      "agent.assistant.delta",
-      "tool.start",
-    ]);
+    expect(events.map((event) => event.eventType)).toEqual(["agent.assistant.delta", "tool.start"]);
     expect(events[0]?.payload).toMatchObject({
       _sourceEventBatch: [
         { type: "agent", data: { data: { text: "first" } } },
