@@ -136,7 +136,9 @@ function normalizedDeviceId(deviceId: string): string {
 
 function normalizedCommand(command: DurableRunCommand): DurableRunCommand {
   const sessionOptions = command.sessionOptions
-    ? Object.fromEntries(Object.entries(command.sessionOptions).filter(([, value]) => value !== undefined))
+    ? Object.fromEntries(
+        Object.entries(command.sessionOptions).filter(([, value]) => value !== undefined),
+      )
     : undefined;
   return {
     clientRequestId: command.clientRequestId.trim(),
@@ -286,16 +288,14 @@ export class DurableRunStore {
   private readonly runIdByRequest = new Map<string, string>();
   private readonly runIdsBySessionKey = new Map<string, Set<string>>();
   private readonly eventHeadByDevice = new Map<string, number>();
+  private readonly archivedRunSeqByRunId = new Map<string, number>();
   private acknowledgements: PersistedAcknowledgements = {};
   private readonly commandReceiptsByKey = new Map<string, DurableCommandReceipt>();
   private readonly deviceRequestsByKey = new Map<string, DurableDeviceRequest>();
   private readonly sessionDeletionByKey = new Map<string, DurableSessionDeletion>();
   private readonly deletedRequestsByKey = new Map<string, DurableDeletedRequest>();
   private readonly deletedRunIds = new Set<string>();
-  private readonly listenersByDevice = new Map<
-    string,
-    Set<(event: DurableRuntimeEvent) => void>
-  >();
+  private readonly listenersByDevice = new Map<string, Set<(event: DurableRuntimeEvent) => void>>();
   readonly serverInstanceId: string;
 
   constructor(private readonly rootDir: string) {
@@ -338,7 +338,9 @@ export class DurableRunStore {
       return { outcome: existing.payloadHash === hash ? "replayed" : "conflict", run: existing };
     }
 
-    const deletedAt = this.sessionDeletionByKey.get(canonicalSessionKey(command.sessionKey))?.deletedAt;
+    const deletedAt = this.sessionDeletionByKey.get(
+      canonicalSessionKey(command.sessionKey),
+    )?.deletedAt;
     const now = Math.max(Date.now(), (deletedAt ?? -1) + 1);
     const record: DurableRunRecord = {
       ...command,
@@ -391,6 +393,7 @@ export class DurableRunStore {
     for (const run of runs) {
       this.runsById.delete(run.runId);
       this.runIdByRequest.delete(this.requestKey(run.deviceId, run.clientRequestId));
+      this.archivedRunSeqByRunId.delete(run.runId);
     }
     this.rebuildSessionRunIndex();
     for (const [key, request] of this.deviceRequestsByKey) {
@@ -487,7 +490,9 @@ export class DurableRunStore {
       const existingLast = existingEvents.at(-1);
       if (existingLast) return existingLast;
       if (!requestedTerminalPhase) {
-        throw new Error(`cannot append ${eventType} to terminal run without a terminal event: ${runId}`);
+        throw new Error(
+          `cannot append ${eventType} to terminal run without a terminal event: ${runId}`,
+        );
       }
     }
     const deviceId = current.deviceId;
@@ -509,7 +514,6 @@ export class DurableRunStore {
     };
     this.appendLineDurable(this.deliveryFile(deviceId), event);
     this.eventHeadByDevice.set(deviceId, eventId);
-    this.persistEventHeads();
 
     const updated: DurableRunRecord = {
       ...current,
@@ -517,17 +521,16 @@ export class DurableRunStore {
       lastRunSeq: runSeq,
       updatedAt: event.occurredAt,
     };
-    this.persistRun(updated);
+    // 已 fsync 的投递记录足以在崩溃后恢复非终态 run 与事件游标。终态必须额外落盘，
+    // 因为快照压缩会删除最终投递记录；更早的阶段仍可由投递日志恢复。
+    if (terminalPhases.has(updated.phase)) this.persistRun(updated);
     this.runsById.set(updated.runId, updated);
     if (terminalPhases.has(updated.phase)) this.persistRunSnapshot(updated);
     for (const listener of this.listenersByDevice.get(deviceId) ?? []) listener(event);
     return event;
   }
 
-  subscribe(
-    deviceId: string,
-    listener: (event: DurableRuntimeEvent) => void,
-  ): () => void {
+  subscribe(deviceId: string, listener: (event: DurableRuntimeEvent) => void): () => void {
     const normalized = normalizedDeviceId(deviceId);
     const listeners = this.listenersByDevice.get(normalized) ?? new Set();
     listeners.add(listener);
@@ -580,19 +583,25 @@ export class DurableRunStore {
     const events = runs.flatMap((run) => {
       const archived = this.readRunSnapshot(run.runId)?.events ?? [];
       const delivery = deliveryByRun.get(run.runId) ?? [];
-      return [...new Map([...archived, ...delivery].map((event) => [event.runSeq, event])).values()];
+      return [
+        ...new Map([...archived, ...delivery].map((event) => [event.runSeq, event])).values(),
+      ];
     });
-    return [...new Map(events.map((event) => [`${event.runId}:${event.runSeq}`, event])).values()]
-      .sort((a, b) => a.occurredAt - b.occurredAt || a.runSeq - b.runSeq);
+    return [
+      ...new Map(events.map((event) => [`${event.runId}:${event.runSeq}`, event])).values(),
+    ].sort((a, b) => a.occurredAt - b.occurredAt || a.runSeq - b.runSeq);
   }
 
   eventsForRun(runId: string): DurableRuntimeEvent[] {
     const run = this.runsById.get(runId.trim());
     if (!run) return [];
     const archived = this.readRunSnapshot(run.runId)?.events ?? [];
-    const delivery = this.readDeliveryEvents(run.deviceId).filter((event) => event.runId === run.runId);
-    return [...new Map([...archived, ...delivery].map((event) => [event.runSeq, event])).values()]
-      .sort((a, b) => a.runSeq - b.runSeq || a.eventId - b.eventId);
+    const delivery = this.readDeliveryEvents(run.deviceId).filter(
+      (event) => event.runId === run.runId,
+    );
+    return [
+      ...new Map([...archived, ...delivery].map((event) => [event.runSeq, event])).values(),
+    ].sort((a, b) => a.runSeq - b.runSeq || a.eventId - b.eventId);
   }
 
   acknowledge(deviceId: string, throughEventId: number): number {
@@ -617,11 +626,7 @@ export class DurableRunStore {
     return receipt.state === "succeeded" ? "replayed" : "prepared";
   }
 
-  prepareCommandReceipt(
-    kind: string,
-    commandId: string,
-    payload: unknown,
-  ): DurableCommandReceipt {
+  prepareCommandReceipt(kind: string, commandId: string, payload: unknown): DurableCommandReceipt {
     const key = this.commandReceiptKey(kind, commandId);
     const existing = this.commandReceiptsByKey.get(key);
     const hash = canonicalPayloadHash(payload);
@@ -673,9 +678,7 @@ export class DurableRunStore {
     const sessionKey = input.sessionKey.trim();
     const sourceEventType = input.sourceEventType.trim();
     if (!kind || !requestId || !deviceId || !sessionKey || !sourceEventType) {
-      throw new Error(
-        "kind, requestId, deviceId, sessionKey and sourceEventType are required",
-      );
+      throw new Error("kind, requestId, deviceId, sessionKey and sourceEventType are required");
     }
     const key = this.deviceRequestKey(kind, requestId);
     const existing = this.deviceRequestsByKey.get(key);
@@ -742,9 +745,7 @@ export class DurableRunStore {
         ...payload,
       });
     }
-    return request.state === "pending"
-      ? this.completeDeviceRequest(kind, requestId)
-      : request;
+    return request.state === "pending" ? this.completeDeviceRequest(kind, requestId) : request;
   }
 
   deviceRequest(kind: string, requestId: string): DurableDeviceRequest | undefined {
@@ -847,7 +848,8 @@ export class DurableRunStore {
         if (!isRunRecord(parsed)) continue;
         if (this.runWasDeleted(parsed)) continue;
         const previous = this.runsById.get(parsed.runId);
-        if (!previous || parsed.updatedAt >= previous.updatedAt) this.runsById.set(parsed.runId, parsed);
+        if (!previous || parsed.updatedAt >= previous.updatedAt)
+          this.runsById.set(parsed.runId, parsed);
       } catch {
         // Ignore a corrupt/torn record and continue rebuilding from prior committed lines.
       }
@@ -859,14 +861,15 @@ export class DurableRunStore {
   }
 
   /**
-   * The delivery event and its projected run record live in separate append-only files.
-   * Event bytes are flushed first so clients can never observe an uncommitted event. If the
-   * process dies before the following run-record append, reconstruct the missing projection
-   * from the durable journal before recovery decides whether a run is still active.
+   * 投递事件是 run 状态与事件游标的崩溃恢复依据。客户端只能看到已经 fsync 的事件；
+   * 重启后先从日志补齐投影，再判断 run 是否仍在执行。
    */
   private repairRunsFromDeliveryJournals(): void {
     const repairedRunIds = new Set<string>();
     for (const run of this.runsById.values()) {
+      // 终态记录在快照生成前已经独立 fsync，之后也禁止继续追加事件；无需为每次启动
+      // 解压它的完整进程快照。这里只修复仍可能处在「事件已落盘、投影未落盘」窗口的 run。
+      if (terminalPhases.has(run.phase)) continue;
       for (const event of this.eventsForRun(run.runId)) {
         const current = this.runsById.get(event.runId);
         if (!current || event.runSeq <= current.lastRunSeq) continue;
@@ -876,9 +879,7 @@ export class DurableRunStore {
           lastRunSeq: event.runSeq,
           updatedAt: Math.max(current.updatedAt, event.occurredAt),
           ...(current.rootRunId || !event.rootRunId ? {} : { rootRunId: event.rootRunId }),
-          ...(current.parentRunId || !event.parentRunId
-            ? {}
-            : { parentRunId: event.parentRunId }),
+          ...(current.parentRunId || !event.parentRunId ? {} : { parentRunId: event.parentRunId }),
         };
         this.runsById.set(repaired.runId, repaired);
         repairedRunIds.add(repaired.runId);
@@ -923,8 +924,14 @@ export class DurableRunStore {
   private ensureTerminalRunSnapshots(): void {
     for (const run of this.runsById.values()) {
       if (!terminalPhases.has(run.phase)) continue;
-      const existing = this.readRunSnapshot(run.runId);
-      if (!existing || existing.lastRunSeq < run.lastRunSeq) this.persistRunSnapshot(run);
+      const snapshotFile = this.runSnapshotFile(run.runId);
+      // `writeBufferAtomically` 先 fsync 临时文件再 rename；只要目标存在，它就与先前已
+      // fsync 的终态 run 对应。启动时信任这对提交顺序，避免把所有历史 gzip 膨胀进堆。
+      if (!fs.existsSync(snapshotFile) || fs.statSync(snapshotFile).size === 0) {
+        this.persistRunSnapshot(run);
+      } else {
+        this.archivedRunSeqByRunId.set(run.runId, run.lastRunSeq);
+      }
     }
   }
 
@@ -944,6 +951,7 @@ export class DurableRunStore {
       this.runSnapshotFile(run.runId),
       zlib.gzipSync(Buffer.from(JSON.stringify(snapshot), "utf8")),
     );
+    this.archivedRunSeqByRunId.set(run.runId, snapshot.lastRunSeq);
   }
 
   private readRunSnapshot(runId: string): DurableRunSnapshot | undefined {
@@ -977,15 +985,9 @@ export class DurableRunStore {
     const events = this.readDeliveryEvents(normalized);
     if (events.length === 0) return;
 
-    const archivedThroughByRun = new Map<string, number>();
-    for (const run of this.runs(normalized)) {
-      if (!terminalPhases.has(run.phase)) continue;
-      const snapshot = this.readRunSnapshot(run.runId);
-      if (snapshot) archivedThroughByRun.set(run.runId, snapshot.lastRunSeq);
-    }
     const remaining = events.filter((event) => {
       if (event.eventId > acknowledged) return true;
-      return (archivedThroughByRun.get(event.runId) ?? 0) < event.runSeq;
+      return (this.archivedRunSeqByRunId.get(event.runId) ?? 0) < event.runSeq;
     });
     if (remaining.length === events.length) return;
 
@@ -1112,10 +1114,9 @@ export class DurableRunStore {
   private compactDeletedSessionState(): void {
     if (this.sessionDeletionByKey.size === 0) return;
     this.writeJSONLinesAtomically(this.runsFile(), [...this.runsById.values()]);
-    this.writeJSONLinesAtomically(
-      this.deviceRequestsFile(),
-      [...this.deviceRequestsByKey.values()],
-    );
+    this.writeJSONLinesAtomically(this.deviceRequestsFile(), [
+      ...this.deviceRequestsByKey.values(),
+    ]);
     if (fs.existsSync(this.deliveryDir())) {
       for (const name of fs.readdirSync(this.deliveryDir())) {
         if (!name.endsWith(".jsonl")) continue;
@@ -1163,7 +1164,8 @@ export class DurableRunStore {
   }
 
   private writeJSONLinesAtomically(file: string, values: unknown[]): void {
-    const body = values.length > 0 ? `${values.map((value) => JSON.stringify(value)).join("\n")}\n` : "";
+    const body =
+      values.length > 0 ? `${values.map((value) => JSON.stringify(value)).join("\n")}\n` : "";
     this.writeBufferAtomically(file, Buffer.from(body, "utf8"));
   }
 

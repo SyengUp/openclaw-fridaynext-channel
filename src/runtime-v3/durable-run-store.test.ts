@@ -2,7 +2,7 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { DurableRunStore, type DurableRunCommand } from "./durable-run-store.js";
 
 const tempRoots: string[] = [];
@@ -183,6 +183,71 @@ describe("DurableRunStore", () => {
     expect(reconstructed.appendRunEvent(nextRun.runId, "run.started", {}).eventId).toBe(4);
   });
 
+  it("does not reopen every terminal snapshot for each acknowledgement", () => {
+    const { root, store } = makeStore();
+    const completed = store.acceptCommand(command()).run!;
+    store.appendRunEvent(completed.runId, "run.completed", {});
+
+    const reconstructed = new DurableRunStore(root);
+    const active = reconstructed.acceptCommand(
+      command({ clientRequestId: "request-active", sessionKey: "agent:main:active" }),
+    ).run!;
+    const activeEvent = reconstructed.appendRunEvent(active.runId, "run.started", {});
+    const snapshotRead = vi.spyOn(
+      reconstructed as unknown as { readRunSnapshot(runId: string): unknown },
+      "readRunSnapshot",
+    );
+
+    reconstructed.acknowledge("PHONE-1", activeEvent.eventId);
+
+    expect(snapshotRead).not.toHaveBeenCalled();
+  });
+
+  it("boots from durable terminal metadata without inflating archived process snapshots", () => {
+    const { root, store } = makeStore();
+    const completed = store.acceptCommand(command()).run!;
+    store.appendRunEvent(completed.runId, "assistant.delta", { text: "complete answer" });
+    store.appendRunEvent(completed.runId, "run.completed", {});
+    store.acknowledge("PHONE-1", store.eventHead("PHONE-1"));
+
+    const snapshotRead = vi.spyOn(
+      DurableRunStore.prototype as unknown as { readRunSnapshot(runId: string): unknown },
+      "readRunSnapshot",
+    );
+    const reconstructed = new DurableRunStore(root);
+
+    expect(snapshotRead).not.toHaveBeenCalled();
+    snapshotRead.mockRestore();
+    expect(reconstructed.eventsForRun(completed.runId).map((event) => event.eventType)).toEqual([
+      "assistant.delta",
+      "run.completed",
+    ]);
+  });
+
+  it("uses the durable delivery record to rebuild nonterminal run state without extra metadata flushes", () => {
+    const { root, store } = makeStore();
+    const run = store.acceptCommand(command()).run!;
+    const persistHead = vi.spyOn(
+      store as unknown as { persistEventHeads(): void },
+      "persistEventHeads",
+    );
+    const persistRun = vi.spyOn(
+      store as unknown as { persistRun(run: unknown): void },
+      "persistRun",
+    );
+
+    const event = store.appendRunEvent(run.runId, "run.started", { text: "durable" });
+
+    expect(persistHead).not.toHaveBeenCalled();
+    expect(persistRun).not.toHaveBeenCalled();
+    const reconstructed = new DurableRunStore(root);
+    expect(reconstructed.eventHead("PHONE-1")).toBe(event.eventId);
+    expect(reconstructed.run(run.runId)).toMatchObject({
+      phase: "running",
+      lastRunSeq: event.runSeq,
+    });
+  });
+
   it("rebuilds per-session indexes and restores process events from multiple devices", () => {
     const { root, store } = makeStore();
     for (let index = 0; index < 200; index += 1) {
@@ -210,10 +275,10 @@ describe("DurableRunStore", () => {
 
     const reconstructed = new DurableRunStore(root);
 
-    expect(reconstructed.eventsForSession("agent:main:target").map((event) => event.runId))
-      .toEqual([first.runId, second.runId]);
-    expect(reconstructed.activeRunForSession("agent:main:unrelated-199")?.runId)
-      .toBeUndefined();
+    expect(reconstructed.eventsForSession("agent:main:target").map((event) => event.runId)).toEqual(
+      [first.runId, second.runId],
+    );
+    expect(reconstructed.activeRunForSession("agent:main:unrelated-199")?.runId).toBeUndefined();
   });
 
   it("repairs run phase and sequence when a crash lands the event before its run projection", () => {
@@ -311,8 +376,9 @@ describe("DurableRunStore", () => {
 
     expect(dispatcherTerminal.eventId).toBe(lifecycleTerminal.eventId);
     expect(store.run(run.runId)?.lastRunSeq).toBe(2);
-    expect(store.eventsForRun(run.runId).filter((event) => event.eventType === "run.completed"))
-      .toHaveLength(1);
+    expect(
+      store.eventsForRun(run.runId).filter((event) => event.eventType === "run.completed"),
+    ).toHaveLength(1);
   });
 
   it("never appends a delayed replay frame after a run is terminal", () => {
