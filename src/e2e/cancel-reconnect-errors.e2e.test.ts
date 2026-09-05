@@ -64,7 +64,8 @@ describe("e2e cancel reconnect errors", () => {
     const appB = createAppSimulator({ token: "test-token", deviceId: "B" });
     await appB.connectSSE();
     const framesB = appB.getSseFrames();
-    expect(framesB[0]?.id).toBe(1);
+    expect(framesB[0]).toMatchObject({ event: "connected", data: { lastSeq: 0 } });
+    expect(framesB.every((frame) => frame.id === undefined)).toBe(true);
     appA.disconnectSSE();
     appB.disconnectSSE();
   });

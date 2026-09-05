@@ -85,6 +85,13 @@ describe("handleHealth", () => {
     expect(body.deviceId).toBe("");
     expect(body.nodeDeviceId).toBe("");
     expect(body.repairActions).toBeUndefined();
+    expect(body.protocolVersions).toEqual([2, 3]);
+    expect(body.capabilities).toEqual(expect.arrayContaining([
+      "durable-runtime",
+      "idempotent-messages",
+      "runtime-event-replay",
+      "runtime-event-ack",
+    ]));
   });
 
   // --- Gateway fingerprint (stable identity of this gateway) ---

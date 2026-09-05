@@ -6,8 +6,96 @@
  */
 
 import type { IncomingMessage, ServerResponse } from "node:http";
+import crypto from "node:crypto";
+import fs from "node:fs";
+import path from "node:path";
 import { extractBearerToken } from "../middleware/auth.js";
-import { storeFile, guessMimeType } from "./files.js";
+import {
+  getAttachmentsDir,
+  storeFile,
+  storeFileWithStableId,
+  guessMimeType,
+  type StoredFile,
+} from "./files.js";
+
+export class IdempotentUploadConflictError extends Error {}
+
+type DurableUploadRecord = {
+  deviceId: string;
+  clientAttachmentId: string;
+  sha256: string;
+  stableId: string;
+  filename: string;
+  mimeType: string;
+};
+
+export function storeIdempotentUpload(params: {
+  deviceId: string;
+  clientAttachmentId: string;
+  sha256: string;
+  buffer: Buffer;
+  filename: string;
+  mimeType: string;
+}): StoredFile {
+  const deviceId = params.deviceId.trim().toUpperCase();
+  const clientAttachmentId = params.clientAttachmentId.trim();
+  const claimedHash = params.sha256.trim().toLowerCase();
+  const actualHash = crypto.createHash("sha256").update(params.buffer).digest("hex");
+  if (!deviceId || !clientAttachmentId || !/^[a-f0-9]{64}$/.test(claimedHash)) {
+    throw new Error("deviceId, clientAttachmentId and sha256 are required");
+  }
+  if (actualHash !== claimedHash) throw new Error("sha256 does not match uploaded bytes");
+
+  const requestKey = crypto
+    .createHash("sha256")
+    .update(`${deviceId}\0${clientAttachmentId}`)
+    .digest("hex");
+  const ledgerPath = path.join(getAttachmentsDir(), `.upload-${requestKey}.json`);
+  let existing: DurableUploadRecord | null = null;
+  try {
+    existing = JSON.parse(fs.readFileSync(ledgerPath, "utf8")) as DurableUploadRecord;
+  } catch {
+    existing = null;
+  }
+  if (existing) {
+    if (existing.sha256 !== claimedHash) {
+      throw new IdempotentUploadConflictError(
+        "clientAttachmentId was already used with different bytes",
+      );
+    }
+    return storeFileWithStableId(
+      params.buffer,
+      existing.filename,
+      existing.mimeType,
+      existing.stableId,
+    );
+  }
+
+  const record: DurableUploadRecord = {
+    deviceId,
+    clientAttachmentId,
+    sha256: claimedHash,
+    stableId: requestKey.slice(0, 32),
+    filename: path.basename(params.filename) || "file",
+    mimeType: params.mimeType,
+  };
+  const stored = storeFileWithStableId(
+    params.buffer,
+    record.filename,
+    record.mimeType,
+    record.stableId,
+  );
+  const temporaryPath = `${ledgerPath}.${process.pid}.tmp`;
+  const descriptor = fs.openSync(temporaryPath, "w", 0o600);
+  try {
+    fs.writeFileSync(descriptor, JSON.stringify(record));
+    fs.fsyncSync(descriptor);
+  } finally {
+    fs.closeSync(descriptor);
+  }
+  fs.renameSync(temporaryPath, ledgerPath);
+  return stored;
+}
 
 interface ParsedMultipart {
   fields: Record<string, string>;
@@ -148,16 +236,58 @@ export async function handleFilesUpload(
     return true;
   }
 
-  const files = parsed.files.map((file) => {
-    const stored = storeFile(file.buffer, file.filename, file.contentType);
-    return {
-      id: stored.id,
-      filename: stored.filename,
-      mimeType: stored.mimeType,
-      size: stored.size,
-      url: `/friday-next/files/${encodeURIComponent(stored.urlToken)}`,
-    };
-  });
+  const pathname = new URL(req.url ?? "/friday-next/files", "http://localhost").pathname;
+  const isProtocolV3 = pathname === "/friday-next/v3/files";
+  if (
+    isProtocolV3 &&
+    (!parsed.fields.deviceId ||
+      !parsed.fields.clientAttachmentId ||
+      !parsed.fields.sha256 ||
+      parsed.files.length !== 1)
+  ) {
+    res.statusCode = 400;
+    res.setHeader("Content-Type", "application/json");
+    res.end(
+      JSON.stringify({
+        error: "v3 upload requires one file, deviceId, clientAttachmentId and sha256",
+      }),
+    );
+    return true;
+  }
+
+  let files: Array<{
+    id: string;
+    filename: string;
+    mimeType: string;
+    size: number;
+    url: string;
+  }>;
+  try {
+    files = parsed.files.map((file) => {
+      const stored = isProtocolV3
+        ? storeIdempotentUpload({
+            deviceId: parsed.fields.deviceId,
+            clientAttachmentId: parsed.fields.clientAttachmentId,
+            sha256: parsed.fields.sha256,
+            buffer: file.buffer,
+            filename: file.filename,
+            mimeType: file.contentType,
+          })
+        : storeFile(file.buffer, file.filename, file.contentType);
+      return {
+        id: stored.id,
+        filename: stored.filename,
+        mimeType: stored.mimeType,
+        size: stored.size,
+        url: `/friday-next/files/${encodeURIComponent(stored.urlToken)}`,
+      };
+    });
+  } catch (error) {
+    res.statusCode = error instanceof IdempotentUploadConflictError ? 409 : 400;
+    res.setHeader("Content-Type", "application/json");
+    res.end(JSON.stringify({ error: String(error instanceof Error ? error.message : error) }));
+    return true;
+  }
 
   res.statusCode = 200;
   res.setHeader("Content-Type", "application/json");

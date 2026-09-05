@@ -60,6 +60,13 @@ import { resolveFridayNextConfig } from "../config.js";
 import { getHostOpenClawConfigSnapshot } from "../host-config.js";
 import { getFridayNextRuntime } from "../runtime.js";
 import { sseEmitter } from "../sse/emitter.js";
+import {
+  handleRuntimeV3Acknowledge,
+  handleRuntimeV3Cancel,
+  handleRuntimeV3Events,
+  handleRuntimeV3SessionSnapshot,
+  handleRuntimeV3Sync,
+} from "./handlers/runtime-v3.js";
 
 // The gate's decision (and its exemption table) lives in attest/attest-gate.ts — shared with
 // session-delete.ts's sibling-prefix copy and the filter proxy's core-surface gate.
@@ -113,6 +120,33 @@ async function handleFridayNextRoute(req: IncomingMessage, res: ServerResponse):
     return await handleAttestRefresh(req, res);
   }
 
+  // Protocol v3: durable task runtime. Kept beside the v2 routes so older apps continue to work
+  // while the iOS client migrates its local store and event pipeline.
+  if (req.method === "GET" && pathname === "/friday-next/v3/events") {
+    return await handleRuntimeV3Events(req, res);
+  }
+  if (req.method === "POST" && pathname === "/friday-next/v3/messages") {
+    return await handleMessages(req, res);
+  }
+  if (req.method === "POST" && pathname === "/friday-next/v3/events/ack") {
+    return await handleRuntimeV3Acknowledge(req, res);
+  }
+  if (req.method === "GET" && pathname === "/friday-next/v3/sync") {
+    return await handleRuntimeV3Sync(req, res);
+  }
+  const runtimeSessionSnapshot = pathname.match(/^\/friday-next\/v3\/sessions\/(.+)\/snapshot$/);
+  if (req.method === "GET" && runtimeSessionSnapshot?.[1]) {
+    return await handleRuntimeV3SessionSnapshot(
+      req,
+      res,
+      decodeURIComponent(runtimeSessionSnapshot[1]),
+    );
+  }
+  const runtimeRunCancel = pathname.match(/^\/friday-next\/v3\/runs\/([^/]+)$/);
+  if (req.method === "DELETE" && runtimeRunCancel?.[1]) {
+    return await handleRuntimeV3Cancel(req, res, decodeURIComponent(runtimeRunCancel[1]));
+  }
+
   // Route: GET /friday-next/events?deviceId=...
   if (req.method === "GET" && pathname === "/friday-next/events") {
     return await handleSseStream(req, res);
@@ -125,6 +159,10 @@ async function handleFridayNextRoute(req: IncomingMessage, res: ServerResponse):
 
   // Route: POST /friday-next/files (multipart upload)
   if (req.method === "POST" && pathname === "/friday-next/files") {
+    return await handleFilesUpload(req, res);
+  }
+
+  if (req.method === "POST" && pathname === "/friday-next/v3/files") {
     return await handleFilesUpload(req, res);
   }
 

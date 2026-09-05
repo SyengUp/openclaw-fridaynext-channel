@@ -5,14 +5,15 @@
 import { randomUUID } from "node:crypto";
 import { sseEmitter } from "../sse/emitter.js";
 import {
-  getLastRegisteredFridayDeviceId,
-  resolveFridayDeviceIdForSessionKey,
-} from "../friday-session.js";
-import {
   healthQueryBusyForDevice,
   waitForHealthQueryResult,
 } from "../health-query/pending-store.js";
 import { WRITABLE_METRIC_IDS } from "./health-metrics.js";
+import {
+  completeDeviceToolRequest,
+  registerDeviceToolRequest,
+  resolveDeviceToolRoute,
+} from "./device-tool-route.js";
 
 export const HEALTH_LOG_TOOL_NAME = "fridaynext_health_log";
 
@@ -52,15 +53,6 @@ function jsonToolResult(payload: unknown): {
     content: [{ type: "text", text: JSON.stringify(payload, null, 2) }],
     details: payload,
   };
-}
-
-function resolveDeviceId(sessionKey: string | undefined): string | null {
-  const sk = sessionKey?.trim() ?? "";
-  if (sk) {
-    const mapped = resolveFridayDeviceIdForSessionKey(sk);
-    if (mapped) return mapped;
-  }
-  return sseEmitter.getSoleConnectedDeviceId() ?? getLastRegisteredFridayDeviceId() ?? null;
 }
 
 function readSamples(args: Record<string, unknown>): Array<{
@@ -113,8 +105,8 @@ export function createHealthLogTool(ctx: { sessionKey?: string }): {
           },
         });
       }
-      const deviceId = resolveDeviceId(ctx.sessionKey);
-      if (!deviceId) {
+      const route = resolveDeviceToolRoute(ctx.sessionKey);
+      if (!route) {
         return jsonToolResult({
           ok: false,
           error: {
@@ -123,6 +115,7 @@ export function createHealthLogTool(ctx: { sessionKey?: string }): {
           },
         });
       }
+      const { deviceId } = route;
       if (!sseEmitter.getConnection(deviceId)) {
         return jsonToolResult({
           ok: false,
@@ -143,13 +136,21 @@ export function createHealthLogTool(ctx: { sessionKey?: string }): {
       }
 
       const requestId = randomUUID();
+      const data: Record<string, unknown> = {
+        requestId,
+        samples,
+        sessionKey: route.sessionKey,
+        ...(route.runId ? { runId: route.runId } : {}),
+      };
+      registerDeviceToolRequest(route, "health", "fridaynext-health-log", requestId, data);
       const waiter = waitForHealthQueryResult({ requestId, deviceId });
       sseEmitter.broadcast(
-        { type: "fridaynext-health-log", data: { requestId, samples } },
+        { type: "fridaynext-health-log", data },
         deviceId,
         true,
       );
       const outcome = await waiter;
+      completeDeviceToolRequest("health", requestId);
       if (outcome.ok) {
         return jsonToolResult(outcome.payload);
       }

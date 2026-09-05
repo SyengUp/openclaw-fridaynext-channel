@@ -4,11 +4,12 @@
 
 import { randomUUID } from "node:crypto";
 import { sseEmitter } from "../sse/emitter.js";
-import {
-  getLastRegisteredFridayDeviceId,
-  resolveFridayDeviceIdForSessionKey,
-} from "../friday-session.js";
 import { calendarBusyForDevice, waitForCalendarResult } from "../calendar/pending-store.js";
+import {
+  completeDeviceToolRequest,
+  registerDeviceToolRequest,
+  resolveDeviceToolRoute,
+} from "./device-tool-route.js";
 
 const KINDS = ["events", "reminders"] as const;
 
@@ -70,15 +71,6 @@ function jsonToolResult(payload: unknown): {
   };
 }
 
-function resolveDeviceId(sessionKey: string | undefined): string | null {
-  const sk = sessionKey?.trim() ?? "";
-  if (sk) {
-    const mapped = resolveFridayDeviceIdForSessionKey(sk);
-    if (mapped) return mapped;
-  }
-  return sseEmitter.getSoleConnectedDeviceId() ?? getLastRegisteredFridayDeviceId() ?? null;
-}
-
 export function createCalendarQueryTool(ctx: { sessionKey?: string }): {
   name: string;
   label: string;
@@ -96,8 +88,8 @@ export function createCalendarQueryTool(ctx: { sessionKey?: string }): {
     parameters: CalendarQueryParameters,
     async execute(_toolCallId, args) {
       const params = args && typeof args === "object" ? args : {};
-      const deviceId = resolveDeviceId(ctx.sessionKey);
-      if (!deviceId) {
+      const route = resolveDeviceToolRoute(ctx.sessionKey);
+      if (!route) {
         return jsonToolResult({
           ok: false,
           error: {
@@ -106,6 +98,7 @@ export function createCalendarQueryTool(ctx: { sessionKey?: string }): {
           },
         });
       }
+      const { deviceId } = route;
       if (!sseEmitter.getConnection(deviceId)) {
         return jsonToolResult({
           ok: false,
@@ -133,15 +126,21 @@ export function createCalendarQueryTool(ctx: { sessionKey?: string }): {
       const limit =
         typeof limitRaw === "number" && Number.isInteger(limitRaw) ? limitRaw : undefined;
 
-      const data: Record<string, unknown> = { requestId };
+      const data: Record<string, unknown> = {
+        requestId,
+        sessionKey: route.sessionKey,
+        ...(route.runId ? { runId: route.runId } : {}),
+      };
       if (kinds) data.kinds = kinds;
       if (start) data.start = start;
       if (end) data.end = end;
       if (limit !== undefined) data.limit = limit;
 
+      registerDeviceToolRequest(route, "calendar", "fridaynext-calendar-query", requestId, data);
       const waiter = waitForCalendarResult({ requestId, deviceId });
       sseEmitter.broadcast({ type: "fridaynext-calendar-query", data }, deviceId, true);
       const outcome = await waiter;
+      completeDeviceToolRequest("calendar", requestId);
       if (outcome.ok) {
         return jsonToolResult(outcome.payload);
       }

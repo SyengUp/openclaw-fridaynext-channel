@@ -4,12 +4,17 @@ import { Readable } from "node:stream";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { handleSessionDelete } from "./session-delete.js";
 
-const { dispatchGatewayMethod } = vi.hoisted(() => ({
+const { dispatchGatewayMethod, purgeRuntimeSession } = vi.hoisted(() => ({
   dispatchGatewayMethod: vi.fn(),
+  purgeRuntimeSession: vi.fn(),
 }));
 
 vi.mock("openclaw/plugin-sdk/gateway-method-runtime", () => ({
   dispatchGatewayMethod,
+}));
+
+vi.mock("../../runtime-v3/runtime-store.js", () => ({
+  getRuntimeV3Store: () => ({ deleteSession: purgeRuntimeSession }),
 }));
 
 type Captured = { statusCode: number; headers: Record<string, unknown>; body: string };
@@ -57,6 +62,7 @@ async function invoke(method: string, url: string) {
 describe("handleSessionDelete", () => {
   beforeEach(() => {
     dispatchGatewayMethod.mockReset();
+    purgeRuntimeSession.mockReset();
   });
 
   it("dispatches sessions.delete and returns 200 on success", async () => {
@@ -75,6 +81,7 @@ describe("handleSessionDelete", () => {
       deleteTranscript: true,
     });
     expect(captured.statusCode).toBe(200);
+    expect(purgeRuntimeSession).toHaveBeenCalledWith("agent:main:abc");
     expect(json).toMatchObject({
       ok: true,
       sessionKey: "agent:main:abc",
@@ -153,6 +160,7 @@ describe("handleSessionDelete", () => {
 
     expect(captured.statusCode).toBe(400);
     expect(json).toMatchObject({ ok: false, code: "INVALID_REQUEST" });
+    expect(purgeRuntimeSession).not.toHaveBeenCalled();
   });
 
   it("returns 400 and does not dispatch when sessionKey is missing", async () => {
@@ -193,5 +201,23 @@ describe("handleSessionDelete", () => {
     );
     expect(captured.statusCode).toBe(500);
     expect(json).toMatchObject({ ok: false });
+  });
+
+  it("returns 500 when durable runtime cleanup fails after core deletion", async () => {
+    dispatchGatewayMethod.mockResolvedValue({
+      ok: true,
+      payload: { ok: true, key: "agent:main:abc", deleted: true },
+    });
+    purgeRuntimeSession.mockImplementation(() => {
+      throw new Error("runtime ledger unavailable");
+    });
+
+    const { captured, json } = await invoke(
+      "DELETE",
+      "/friday-next-admin/sessions?sessionKey=agent:main:abc",
+    );
+
+    expect(captured.statusCode).toBe(500);
+    expect(json).toMatchObject({ ok: false, error: "runtime ledger unavailable" });
   });
 });

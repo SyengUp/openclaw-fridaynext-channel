@@ -295,3 +295,8 @@ export function discoverAvailableSkills(cfg: unknown, agentId: string): Discover
 export function resetOpenClawRootCacheForTest(): void {
   cachedOpenClawRoot = undefined;
 }
+
+/** Test-only: pin bundled-skill discovery to a fixture root, or disable it with null. */
+export function setOpenClawRootForTest(root: string | null): void {
+  cachedOpenClawRoot = root;
+}

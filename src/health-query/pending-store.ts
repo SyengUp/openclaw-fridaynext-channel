@@ -1,6 +1,6 @@
 /**
  * In-flight HealthKit queries: SSE is pushed to the iPhone, which POSTs the
- * result back. One pending request per device; 20s timeout.
+ * result back. One pending request per device; the long bound lets a suspended/killed app return.
  * Implementation lives in the shared device-request pending store.
  */
 
@@ -10,7 +10,7 @@ import {
   type DeviceRequestOutcome,
 } from "../device-request/pending-store.js";
 
-export const HEALTH_QUERY_TIMEOUT_MS = 20_000;
+export const HEALTH_QUERY_TIMEOUT_MS = 86_400_000;
 
 export type HealthQueryError = DeviceRequestError;
 export type HealthQueryOutcome = DeviceRequestOutcome;
@@ -23,6 +23,10 @@ const store = createDeviceRequestPendingStore({
 
 export function healthQueryBusyForDevice(deviceId: string): boolean {
   return store.busyForDevice(deviceId);
+}
+
+export function hasPendingHealthQuery(requestId: string): boolean {
+  return store.hasPending(requestId);
 }
 
 export function waitForHealthQueryResult(params: {

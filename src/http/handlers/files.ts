@@ -294,6 +294,36 @@ export function storeFile(buffer: Buffer, filename: string, mimeType: string): S
   return file;
 }
 
+/** Store/re-register an upload under a deterministic id chosen by the durable upload ledger. */
+export function storeFileWithStableId(
+  buffer: Buffer,
+  filename: string,
+  mimeType: string,
+  stableId: string,
+): StoredFile {
+  const id = stableId.replace(/[^a-zA-Z0-9_-]/g, "");
+  if (!id) throw new Error("stable attachment id is empty");
+  const safeFilename = path.basename(filename) || "file";
+  const ext = path.extname(safeFilename);
+  const urlToken = ext ? `${id}${ext}` : id;
+  const storedPath = path.join(getAttachmentsDir(), urlToken);
+  if (!fs.existsSync(storedPath)) fs.writeFileSync(storedPath, buffer);
+  const stored = fs.readFileSync(storedPath);
+  if (!stored.equals(buffer)) throw new Error(`durable attachment bytes differ for ${id}`);
+  const file: StoredFile = {
+    id,
+    urlToken,
+    filename: safeFilename,
+    mimeType,
+    size: buffer.length,
+    path: storedPath,
+    createdAt: fs.statSync(storedPath).birthtimeMs || Date.now(),
+  };
+  registerStoredFile(file);
+  writeAttachmentMetaSidecar(urlToken, safeFilename, mimeType);
+  return file;
+}
+
 /**
  * Retrieve file metadata by ID or url token.
  */

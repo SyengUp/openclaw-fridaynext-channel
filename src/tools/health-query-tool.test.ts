@@ -4,6 +4,7 @@ import { sseEmitter } from "../sse/emitter.js";
 import { setMockRuntime } from "../test-support/mock-runtime.js";
 import { createHealthQueryTool, HEALTH_QUERY_TOOL_NAME } from "./health-query-tool.js";
 import { resolveHealthQueryResult } from "../health-query/pending-store.js";
+import { getRuntimeV3Store } from "../runtime-v3/runtime-store.js";
 
 vi.mock("../friday-session.js", () => ({
   resolveFridayDeviceIdForSessionKey: () => "PHONE-1",
@@ -52,6 +53,15 @@ describe("createHealthQueryTool", () => {
   it("broadcasts fridaynext-health-query and returns the POST payload", async () => {
     const res = new MockRes();
     sseEmitter.addConnection("PHONE-1", res as never);
+    const run = getRuntimeV3Store().acceptCommand({
+      clientRequestId: "request-1",
+      deviceId: "PHONE-1",
+      sessionKey: "agent:main:s1",
+      agentId: "main",
+      text: "health",
+      attachments: [],
+    }).run!;
+    getRuntimeV3Store().transition(run.runId, "running");
     const tool = createHealthQueryTool({ sessionKey: "agent:main:s1" });
     const pending = tool.execute("call-2", { metrics: ["steps"], bucket: "day" });
     await vi.waitFor(() => {
@@ -60,7 +70,13 @@ describe("createHealthQueryTool", () => {
     const frame = res.writes.join("");
     const dataLine = frame.split("\n").find((line) => line.startsWith("data: "));
     expect(dataLine).toBeTruthy();
-    const data = JSON.parse(dataLine!.slice("data: ".length)) as { requestId: string };
+    const data = JSON.parse(dataLine!.slice("data: ".length)) as {
+      requestId: string;
+      sessionKey: string;
+      runId: string;
+    };
+    expect(data.sessionKey).toBe("agent:main:s1");
+    expect(data.runId).toBe(run.runId);
     expect(resolveHealthQueryResult(data.requestId, { ok: true, payload: { metrics: { steps: 3 } } })).toBe(
       true,
     );

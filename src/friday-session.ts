@@ -224,7 +224,10 @@ export function bindFridayDeviceToSession(rawSessionKey: string, deviceId: strin
     if (watermark !== undefined && (seq === undefined || seq <= watermark)) {
       continue;
     }
-    sseEmitter.broadcast(frame, did);
+    // These frames were already mirrored when they first entered the session
+    // replay buffer. Re-binding is delivery-only: mirroring them again would
+    // append an old run's whole history to the protocol-v3 ledger a second time.
+    sseEmitter.broadcast(frame, did, undefined, true);
     replayed += 1;
     if (runId && seq !== undefined) {
       noteReplayWatermark(did, runId, seq);
@@ -567,7 +570,10 @@ function completeAgentEventForward(params: {
   if (!deviceIdRaw) return;
 
   const deviceId = deviceIdRaw.toUpperCase();
-  const targetRunId = sseEmitter.getLastRunIdForDevice(deviceId) ?? evt.runId;
+  // A device can own many concurrent/sequential runs. The event's own run id is
+  // the only valid routing identity; "latest run for device" can point at a
+  // different session or at a run whose terminal frame is merely delayed.
+  const targetRunId = evt.runId;
   if (!sseEmitter.hasTrackedDevices(targetRunId)) payload.deviceId = deviceId;
 
   sseEmitter.broadcastToRun(targetRunId, { type: "agent", data: payload });

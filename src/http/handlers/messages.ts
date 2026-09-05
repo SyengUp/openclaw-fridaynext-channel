@@ -54,6 +54,7 @@ import {
   resolveMediaUrl,
 } from "./files.js";
 import { runFridayDispatch } from "../../agent/dispatch-bridge.js";
+import { hasActiveSession } from "../../agent/active-runs.js";
 import { loadDetachedWebhookWork } from "../../agent/detached-webhook-work.js";
 import { ensureSubagentSpawnScope } from "../../agent/operator-scope.js";
 import { saveInboundMediaBuffer } from "../../agent/media-bridge.js";
@@ -79,6 +80,8 @@ import {
 } from "../../run-metadata.js";
 import { createFridayNextLogger, setFridayNextLogLevel } from "../../logging.js";
 import { maybeGenerateSessionTitle } from "../../session/session-title-generator.js";
+import { getRuntimeV3Store } from "../../runtime-v3/runtime-store.js";
+import type { DurableRunStore } from "../../runtime-v3/durable-run-store.js";
 
 const logger = createFridayNextLogger("messages");
 
@@ -408,6 +411,7 @@ export interface FridayMessagePayload {
   deviceId: string;
   text: string;
   sessionKey: string;
+  clientRequestId?: string;
   attachments?: string[];
   modelRef?: string;
   reasoningLevel?: string;
@@ -624,13 +628,107 @@ export async function handleMessages(req: IncomingMessage, res: ServerResponse):
   touchFridayInbound();
 
   const isSlashCommand = trimmedText.startsWith("/");
+  const pathname = new URL(req.url ?? "/friday-next/messages", "http://localhost").pathname;
+  const requiresProtocolV3 = pathname === "/friday-next/v3/messages";
+  const clientRequestId = payload.clientRequestId?.trim() ?? "";
+  if (requiresProtocolV3 && !clientRequestId) {
+    res.statusCode = 400;
+    res.setHeader("Content-Type", "application/json");
+    res.end(JSON.stringify({ error: "Missing required field: clientRequestId" }));
+    return true;
+  }
 
-  const runId = crypto.randomUUID();
+  let durableStore: DurableRunStore | undefined;
+  let runId: string = crypto.randomUUID();
+  let acceptedPhase = "running";
+  let acceptanceResponseSent = false;
+  if (clientRequestId) {
+    durableStore = getRuntimeV3Store();
+    const agentId = baseSessionKey.split(":")[1]?.trim() || "main";
+    const accepted = durableStore.acceptCommand({
+      clientRequestId,
+      deviceId: normalizedDeviceId,
+      sessionKey: baseSessionKey,
+      agentId,
+      text: trimmedText,
+      attachments,
+      sessionOptions: {
+        ...(payload.modelRef !== undefined ? { modelRef: payload.modelRef } : {}),
+        ...(payload.reasoningLevel !== undefined ? { reasoningLevel: payload.reasoningLevel } : {}),
+        ...(payload.thinkingLevel !== undefined ? { thinkingLevel: payload.thinkingLevel } : {}),
+        ...(payload.permissionMode !== undefined ? { permissionMode: payload.permissionMode } : {}),
+      },
+    });
+    if (accepted.outcome === "conflict") {
+      res.statusCode = 409;
+      res.setHeader("Content-Type", "application/json");
+      res.end(
+        JSON.stringify({
+          error: "clientRequestId was already used with a different payload",
+          clientRequestId,
+          runId: accepted.run?.runId ?? accepted.deletedRunId,
+        }),
+      );
+      return true;
+    }
+    if (accepted.outcome === "deleted") {
+      res.statusCode = 409;
+      res.setHeader("Content-Type", "application/json");
+      res.end(
+        JSON.stringify({
+          error: "clientRequestId belonged to a deleted session",
+          clientRequestId,
+          runId: accepted.deletedRunId,
+        }),
+      );
+      return true;
+    }
+    if (!accepted.run) throw new Error("durable run acceptance returned no run");
+    runId = accepted.run.runId;
+    acceptedPhase = accepted.run.phase;
+    if (accepted.outcome === "replayed") {
+      res.statusCode = 202;
+      res.setHeader("Content-Type", "application/json");
+      res.end(
+        JSON.stringify({
+          accepted: true,
+          replayed: true,
+          protocolVersion: 3,
+          deviceId: normalizedDeviceId,
+          clientRequestId,
+          runId,
+          phase: acceptedPhase,
+        }),
+      );
+      acceptanceResponseSent = true;
+      // A queued command may have been accepted immediately before the plugin process died.
+      // Replaying that same idempotency key is allowed to resume it. Any phase beyond queued is
+      // already owned by another dispatcher or terminal, so it must never be launched again.
+      if (acceptedPhase !== "queued") return true;
+    }
+  }
   const runtime = getFridayNextRuntime();
 
-  res.statusCode = 202;
-  res.setHeader("Content-Type", "application/json");
-  res.end(JSON.stringify({ accepted: true, deviceId: normalizedDeviceId, runId }));
+  // The route exists before 202 is observable. A terminal event that arrives immediately after
+  // acceptance can therefore never fall back to whichever session happens to be visible.
+  registerFridaySessionDeviceMapping(appSessionKey, normalizedDeviceId);
+  sseEmitter.trackDeviceForRun(normalizedDeviceId, runId);
+  registerRunRoute({ runId, deviceId: normalizedDeviceId, sessionKey: baseSessionKey });
+
+  if (!acceptanceResponseSent) {
+    res.statusCode = 202;
+    res.setHeader("Content-Type", "application/json");
+    res.end(
+      JSON.stringify({
+        accepted: true,
+        ...(clientRequestId
+          ? { protocolVersion: 3, clientRequestId, phase: acceptedPhase }
+          : {}),
+        deviceId: normalizedDeviceId,
+        runId,
+      }),
+    );
+  }
 
   log(
     "MESSAGE_RECEIVED",
@@ -677,10 +775,6 @@ export async function handleMessages(req: IncomingMessage, res: ServerResponse):
     `sessionKey=${baseSessionKey} modelRef=${modelRef ?? "(default)"} reasoning=${reasoningLevel ?? "(default)"} thinking=${thinkingLevel ?? "(default)"} permission=${payload.permissionMode === undefined ? "(unchanged)" : payload.permissionMode ?? "(default)"}`,
   );
 
-  registerFridaySessionDeviceMapping(appSessionKey, normalizedDeviceId);
-  sseEmitter.trackDeviceForRun(normalizedDeviceId, runId);
-  registerRunRoute({ runId, deviceId: normalizedDeviceId, sessionKey: baseSessionKey });
-
   const { body: bodyForAgent, mediaFacts: inboundMediaFacts } =
     await buildBodyForAgentWithAttachments(trimmedText, attachments);
 
@@ -717,6 +811,9 @@ export async function handleMessages(req: IncomingMessage, res: ServerResponse):
     Provider: "friday-next" as const,
     ChatType: "direct" as const,
     CommandAuthorized: true,
+    // Stable across HTTP retries. Newer OpenClaw hosts persist this on the user transcript row;
+    // older hosts harmlessly ignore the extra context field while the plugin ledger still dedups.
+    idempotencyKey: clientRequestId || undefined,
     // `"text"`, NOT `"native"`. This channel is a TEXT command surface — it never registers
     // provider-native commands (no `capabilities.nativeCommands`), so a slash command arrives as
     // ordinary body text.
@@ -735,10 +832,40 @@ export async function handleMessages(req: IncomingMessage, res: ServerResponse):
     CommandSource: isSlashCommand ? ("text" as const) : undefined,
   };
 
+  const waitForDurableDispatchSlot = async (): Promise<boolean> => {
+    if (!durableStore) return true;
+    while (true) {
+      const current = durableStore.run(runId);
+      if (!current || current.phase === "cancelled" || current.phase === "failed") return false;
+      if (current.phase !== "queued") return false;
+      // The durable ledger only knows about Friday requests. OpenClaw can already be running this
+      // same session from WebChat, Telegram, or another channel; lifecycle observation records those
+      // runs before Friday routing. Keep our command durably queued until the shared core session is
+      // idle so every producer obeys the same per-session serial execution contract.
+      if (hasActiveSession(baseSessionKey)) {
+        await new Promise<void>((resolve) => setTimeout(resolve, 100));
+        continue;
+      }
+      if (durableStore.claimRun(runId)) return true;
+      await new Promise<void>((resolve) => setTimeout(resolve, 100));
+    }
+  };
+
   const runAgent = async () => {
+    if (!(await waitForDurableDispatchSlot())) {
+      return;
+    }
+    durableStore?.appendRunEvent(runId, "dispatch.started", { phase: "dispatching" });
     try {
       const completed = await runAgentAttempt();
-      if (completed) log("RUN_COMPLETE", normalizedDeviceId, runId);
+      if (completed) {
+        sseEmitter.flushRuntimeV3Run(runId);
+        durableStore?.appendRunEvent(runId, "run.completed", { phase: "end" });
+        log("RUN_COMPLETE", normalizedDeviceId, runId);
+      } else if (durableStore?.run(runId)?.phase !== "failed") {
+        sseEmitter.flushRuntimeV3Run(runId);
+        durableStore?.appendRunEvent(runId, "run.failed", { error: "dispatch failed" });
+      }
     } finally {
       sseEmitter.untrackRun(runId);
     }
@@ -930,6 +1057,8 @@ export async function handleMessages(req: IncomingMessage, res: ServerResponse):
     });
     return runAgent();
   }).catch((err) => {
+    sseEmitter.flushRuntimeV3Run(runId);
+    durableStore?.appendRunEvent(runId, "run.failed", { error: String(err) });
     log("RUN_ERROR", normalizedDeviceId, runId, String(err), "error");
     sseEmitter.untrackRun(runId);
   });

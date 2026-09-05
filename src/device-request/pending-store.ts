@@ -31,6 +31,7 @@ type Pending = {
 
 export interface DeviceRequestPendingStore {
   busyForDevice(deviceId: string): boolean;
+  hasPending(requestId: string): boolean;
   waitForResult(params: {
     requestId: string;
     deviceId: string;
@@ -54,6 +55,10 @@ export function createDeviceRequestPendingStore(
   return {
     busyForDevice(deviceId: string): boolean {
       return requestIdByDevice.has(normalizeDeviceId(deviceId));
+    },
+
+    hasPending(requestId: string): boolean {
+      return byRequestId.has(requestId.trim());
     },
 
     waitForResult(params: {

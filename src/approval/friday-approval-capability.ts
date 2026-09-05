@@ -18,6 +18,7 @@ import type { ChannelApprovalCapability } from "openclaw/plugin-sdk/channel-cont
 import { sseEmitter } from "../sse/emitter.js";
 import { resolveFridayDeviceIdForSessionKey } from "../friday-session.js";
 import { createFridayNextLogger } from "../logging.js";
+import { runtimeV3StoreIfInitialized } from "../runtime-v3/runtime-store.js";
 
 const logger = createFridayNextLogger("approval");
 
@@ -62,6 +63,13 @@ function sessionKeyOf(request: unknown): string | undefined {
   return typeof sk === "string" && sk.trim() ? sk.trim() : undefined;
 }
 
+function runIdOf(request: unknown, sessionKey: string | undefined, deviceId: string): string | undefined {
+  const inner = (request as { request?: { runId?: unknown } } | undefined)?.request;
+  if (typeof inner?.runId === "string" && inner.runId.trim()) return inner.runId.trim();
+  if (!sessionKey) return undefined;
+  return runtimeV3StoreIfInitialized()?.activeRunForSession(sessionKey, deviceId)?.runId;
+}
+
 /** Resolve the friday device that owns this approval's session, if any. */
 function deviceForRequest(request: unknown): string | undefined {
   const sk = sessionKeyOf(request);
@@ -82,6 +90,7 @@ export function buildPayload(params: {
   const num = (v: unknown): number | null => (typeof v === "number" ? v : null);
   const actionsRaw = Array.isArray(view.actions) ? (view.actions as Record<string, unknown>[]) : [];
   const metaRaw = Array.isArray(view.metadata) ? (view.metadata as Record<string, unknown>[]) : [];
+  const sessionKey = sessionKeyOf(request);
   return {
     op,
     approvalId: str(view.approvalId) ?? "",
@@ -103,8 +112,8 @@ export function buildPayload(params: {
     expiresAtMs: num(view.expiresAtMs),
     decision: str(view.decision),
     resolvedBy: str(view.resolvedBy),
-    sessionKey: sessionKeyOf(request) ?? null,
-    runId: sseEmitter.getLastRunIdForDevice(deviceId),
+    sessionKey: sessionKey ?? null,
+    runId: runIdOf(request, sessionKey, deviceId) ?? null,
     deviceId,
     ts: Date.now(),
   };

@@ -22,6 +22,7 @@ import {
 } from "../../history/read-transcript.js";
 import { resolveMediaAttachment } from "./files.js";
 import { readSessionUsageSnapshotFromStore } from "../../session-usage-store.js";
+import type { FridayHistoryMessage } from "../../history/normalize-message.js";
 
 const DEFAULT_LIMIT = 200;
 const MAX_LIMIT = 1000;
@@ -55,6 +56,33 @@ export function serverLocalPathForImageUrl(url: string): string | null {
   // POSIX `/abs` and Windows `C:\abs` / `C:/abs` are local; http(s)/data are not.
   if (isAbsolute(url) || /^[A-Za-z]:[\\/]/.test(url)) return url;
   return null;
+}
+
+/** Resolve every transcript-local media reference into a stable plugin file URL. */
+export function resolveHistoryMessageMedia(messages: FridayHistoryMessage[]): void {
+  for (const message of messages) {
+    if (message.mediaPaths?.length) {
+      const resolved = message.mediaPaths
+        .map((p) => resolveMediaAttachment(p))
+        .filter((r): r is NonNullable<typeof r> => Boolean(r))
+        .map((r) => ({ url: r.url, filename: r.fileName }));
+      if (resolved.length) {
+        message.images = [...(message.images ?? []), ...resolved];
+      }
+      delete message.mediaPaths;
+    }
+
+    if (message.images?.length) {
+      message.images = message.images.map((img) => {
+        if (!img.url || img.data) return img;
+        const local = serverLocalPathForImageUrl(img.url);
+        if (!local) return img;
+        const resolved = resolveMediaAttachment(local);
+        if (!resolved) return img;
+        return { ...img, url: resolved.url, filename: img.filename ?? resolved.fileName };
+      });
+    }
+  }
 }
 
 function resolveSubagentApi(): SubagentSessionApi | undefined {
@@ -123,34 +151,7 @@ export async function handleHistoryMessages(
   // Resolve `MEDIA:<server-path>` references into downloadable attachment URLs
   // (copies the file into the plugin's attachments/ dir — the same mechanism the
   // live deliver path uses), then drop the raw paths from the wire.
-  for (const message of messages) {
-    if (message.mediaPaths?.length) {
-      const resolved = message.mediaPaths
-        .map((p) => resolveMediaAttachment(p))
-        .filter((r): r is NonNullable<typeof r> => Boolean(r))
-        .map((r) => ({ url: r.url, filename: r.fileName }));
-      if (resolved.length) {
-        message.images = [...(message.images ?? []), ...resolved];
-      }
-      delete message.mediaPaths;
-    }
-
-    // User attachments arrive as `[media attached: file://<server-path>]` markers,
-    // which normalize-message extracts into images[].url as a RAW server-local path.
-    // Unlike MEDIA: paths (resolved above), these were never copied into the file
-    // store, so the app would try to load a path that only exists on the gateway host
-    // and the attachment bubble is lost on history sync. Resolve them the same way.
-    if (message.images?.length) {
-      message.images = message.images.map((img) => {
-        if (!img.url || img.data) return img;
-        const local = serverLocalPathForImageUrl(img.url);
-        if (!local) return img;
-        const resolved = resolveMediaAttachment(local);
-        if (!resolved) return img;
-        return { ...img, url: resolved.url, filename: img.filename ?? resolved.fileName };
-      });
-    }
-  }
+  resolveHistoryMessageMedia(messages);
 
   const sessionId = resolveSessionId(sessionKey);
 

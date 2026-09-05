@@ -3,6 +3,10 @@ import { getActiveRunIds } from "../../agent/active-runs.js";
 import { sseEmitter } from "../../sse/emitter.js";
 import { extractBearerToken } from "../middleware/auth.js";
 import { PLUGIN_VERSION } from "../../version.js";
+import {
+  FRIDAY_NEXT_PROTOCOL_VERSIONS,
+  FRIDAY_NEXT_RUNTIME_CAPABILITIES,
+} from "../../runtime-v3/capabilities.js";
 
 export async function handleStatus(req: IncomingMessage, res: ServerResponse): Promise<boolean> {
   if (req.method !== "GET") {
@@ -26,6 +30,8 @@ export async function handleStatus(req: IncomingMessage, res: ServerResponse): P
       channel: "friday-next",
       version: "v2",
       pluginVersion: PLUGIN_VERSION,
+      protocolVersions: FRIDAY_NEXT_PROTOCOL_VERSIONS,
+      capabilities: FRIDAY_NEXT_RUNTIME_CAPABILITIES,
       connections: sseEmitter.getConnectionCount(),
       activeRuns,
       activeRunCount: activeRuns.length,

@@ -5,14 +5,15 @@
 import { randomUUID } from "node:crypto";
 import { sseEmitter } from "../sse/emitter.js";
 import {
-  getLastRegisteredFridayDeviceId,
-  resolveFridayDeviceIdForSessionKey,
-} from "../friday-session.js";
-import {
   healthQueryBusyForDevice,
   waitForHealthQueryResult,
 } from "../health-query/pending-store.js";
 import { QUERY_METRIC_IDS } from "./health-metrics.js";
+import {
+  completeDeviceToolRequest,
+  registerDeviceToolRequest,
+  resolveDeviceToolRoute,
+} from "./device-tool-route.js";
 
 const BUCKETS = ["none", "hour", "day"] as const;
 
@@ -70,15 +71,6 @@ function jsonToolResult(payload: unknown): {
   };
 }
 
-function resolveDeviceId(sessionKey: string | undefined): string | null {
-  const sk = sessionKey?.trim() ?? "";
-  if (sk) {
-    const mapped = resolveFridayDeviceIdForSessionKey(sk);
-    if (mapped) return mapped;
-  }
-  return sseEmitter.getSoleConnectedDeviceId() ?? getLastRegisteredFridayDeviceId() ?? null;
-}
-
 export function createHealthQueryTool(ctx: { sessionKey?: string }): {
   name: string;
   label: string;
@@ -96,8 +88,8 @@ export function createHealthQueryTool(ctx: { sessionKey?: string }): {
     parameters: HealthQueryParameters,
     async execute(_toolCallId, args) {
       const params = args && typeof args === "object" ? args : {};
-      const deviceId = resolveDeviceId(ctx.sessionKey);
-      if (!deviceId) {
+      const route = resolveDeviceToolRoute(ctx.sessionKey);
+      if (!route) {
         return jsonToolResult({
           ok: false,
           error: {
@@ -106,6 +98,7 @@ export function createHealthQueryTool(ctx: { sessionKey?: string }): {
           },
         });
       }
+      const { deviceId } = route;
       if (!sseEmitter.getConnection(deviceId)) {
         return jsonToolResult({
           ok: false,
@@ -133,15 +126,21 @@ export function createHealthQueryTool(ctx: { sessionKey?: string }): {
       const bucket =
         bucketRaw === "none" || bucketRaw === "hour" || bucketRaw === "day" ? bucketRaw : undefined;
 
-      const data: Record<string, unknown> = { requestId };
+      const data: Record<string, unknown> = {
+        requestId,
+        sessionKey: route.sessionKey,
+        ...(route.runId ? { runId: route.runId } : {}),
+      };
       if (metrics) data.metrics = metrics;
       if (start) data.start = start;
       if (end) data.end = end;
       if (bucket) data.bucket = bucket;
 
+      registerDeviceToolRequest(route, "health", "fridaynext-health-query", requestId, data);
       const waiter = waitForHealthQueryResult({ requestId, deviceId });
       sseEmitter.broadcast({ type: "fridaynext-health-query", data }, deviceId, true);
       const outcome = await waiter;
+      completeDeviceToolRequest("health", requestId);
       if (outcome.ok) {
         return jsonToolResult(outcome.payload);
       }

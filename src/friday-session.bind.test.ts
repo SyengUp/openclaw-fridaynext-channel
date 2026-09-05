@@ -136,6 +136,24 @@ describe("session bind (watch a conversation started elsewhere)", () => {
     expect(sseEmitter.broadcast).not.toHaveBeenCalled();
   });
 
+  it("routes a core event by its own run id instead of the device's previous run", () => {
+    registerFridaySessionDeviceMapping(sessionKey, ownerDevice);
+    sseEmitter.trackDeviceForRun(ownerDevice, "already-completed-run");
+    (sseEmitter.broadcastToRun as ReturnType<typeof vi.fn>).mockClear();
+
+    forwardAgentEventRaw({
+      runId: "current-core-run",
+      seq: 1,
+      stream: "assistant",
+      sessionKey,
+      data: { text: "belongs to current run" },
+    });
+
+    expect(sseEmitter.broadcastToRun).toHaveBeenCalledTimes(1);
+    expect((sseEmitter.broadcastToRun as ReturnType<typeof vi.fn>).mock.calls[0][0])
+      .toBe("current-core-run");
+  });
+
   it("does not buffer suppressed item frames, so bind replays nothing for them", () => {
     forwardAgentEventRaw({
       runId: "run-suppressed",
@@ -246,6 +264,7 @@ describe("session bind (watch a conversation started elsewhere)", () => {
     expect(calls).toHaveLength(3);
     for (const call of calls) {
       expect(call[1]).toBe(otherDevice);
+      expect(call[3]).toBe(true);
     }
   });
 });

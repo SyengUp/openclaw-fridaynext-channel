@@ -6,6 +6,7 @@ import {
   discoverAvailableSkills,
   enabledExtensionNames,
   resetOpenClawRootCacheForTest,
+  setOpenClawRootForTest,
 } from "./skills-discovery.js";
 import {
   setFridayAgentForwardRuntime,
@@ -49,6 +50,9 @@ describe("discoverAvailableSkills", () => {
     savedHome = process.env.HOME;
     emptyHome = fs.mkdtempSync(path.join(os.tmpdir(), "friday-home-"));
     process.env.HOME = emptyHome;
+    // These cases assert only their fixture sources. On the real gateway host the
+    // OpenClaw package is resolvable, so explicitly exclude its bundled catalog.
+    setOpenClawRootForTest(null);
   });
 
   afterEach(() => {

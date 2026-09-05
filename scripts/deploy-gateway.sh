@@ -54,9 +54,11 @@ if [[ "$DO_BUILD" == "1" ]]; then
 fi
 
 # ---- 2. 同步到网关 --------------------------------------------------------
-say "rsync dist/ → ${HOST}:${GATEWAY_TMP}"
+say "rsync dist/ + package.json → ${HOST}:${GATEWAY_TMP}"
 rsync -az --delete --exclude '*.prev*' -e ssh dist/ "${HOST}:${GATEWAY_TMP}/" \
   || die "rsync 失败（网关免密 SSH 是否配置？）"
+rsync -az -e ssh package.json "${HOST}:${GATEWAY_TMP}.package.json" \
+  || die "package.json rsync 失败"
 
 # ---- 3. 网关侧：备份 + 覆盖安装目录 --------------------------------------
 say "网关侧备份旧 dist 并覆盖安装目录"
@@ -72,6 +74,15 @@ echo \"  \${PLUG#\$HOME/}\"
 ls \"\$PLUG/dist/index.js\" >/dev/null
 echo \"  覆盖完成（回滚=拷回 dist.prev + 重启）\"
 '" || die "网关侧覆盖失败"
+
+say "网关侧同步插件版本元数据"
+ssh "$HOST" "bash -lc '
+set -e
+PLUG=\$(ls -d ~/.openclaw/npm/projects/syengup-friday-channel-next-*/node_modules/@syengup/friday-channel-next 2>/dev/null | head -1)
+cp "\$PLUG/package.json" "\$PLUG/package.json.prev"
+cp ${GATEWAY_TMP}.package.json "\$PLUG/package.json"
+echo "  package.json 已同步（回滚=拷回 package.json.prev）"
+'" || die "package.json 覆盖失败"
 
 # ---- 4. 重启 gateway ------------------------------------------------------
 if [[ "$DO_RESTART" == "1" ]]; then
