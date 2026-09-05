@@ -254,6 +254,26 @@ describe("handleCronJobs — update", () => {
     });
   });
 
+  // Description is display-only metadata (safe for command jobs, unlike payload fields);
+  // "" is the app's "cleared it" and must survive the whitelist.
+  it("passes a description through as any string, including the empty string", async () => {
+    dispatchGatewayMethod.mockResolvedValue({ ok: true, payload: { id: "j1" } });
+    await invoke(handleCronJobs, "PATCH", "/friday-next-admin/cron/jobs?id=j1", {
+      description: "收盘后增量更新日线库",
+    });
+    expect(dispatchGatewayMethod).toHaveBeenCalledWith("cron.update", {
+      id: "j1",
+      patch: { description: "收盘后增量更新日线库" },
+    });
+    await invoke(handleCronJobs, "PATCH", "/friday-next-admin/cron/jobs?id=j1", {
+      description: "",
+    });
+    expect(dispatchGatewayMethod).toHaveBeenLastCalledWith("cron.update", {
+      id: "j1",
+      patch: { description: "" },
+    });
+  });
+
   it("lifts message/model edits into an agentTurn payload patch", async () => {
     dispatchGatewayMethod.mockResolvedValue({ ok: true, payload: { id: "j1" } });
     await invoke(handleCronJobs, "PATCH", "/friday-next-admin/cron/jobs?id=j1", {

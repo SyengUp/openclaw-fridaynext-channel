@@ -311,6 +311,9 @@ async function createJob(req: IncomingMessage, res: ServerResponse): Promise<boo
   const params: Record<string, unknown> = {
     name,
     ...(nonEmptyString(body.agentId) ? { agentId: normalizeAgentId(body.agentId) } : {}),
+    // Human-readable job note the app shows under the name (same field ControlUI/CLI
+    // display). Optional; never affects execution.
+    ...(nonEmptyString(body.description) ? { description: nonEmptyString(body.description) } : {}),
     schedule,
     // Isolated: the run gets its own throwaway session, so a scheduled turn never lands
     // in (or inherits the context of) a chat the user is reading. `main` would be worse
@@ -345,6 +348,9 @@ async function updateJob(req: IncomingMessage, res: ServerResponse, url: URL): P
   const patch: Record<string, unknown> = {};
   const name = nonEmptyString(body.name);
   if (name) patch.name = name;
+  // Description passes through as any string, including "" (the app's "cleared it").
+  // Display-only metadata, safe for command jobs unlike payload fields.
+  if (typeof body.description === "string") patch.description = body.description;
   // Retargeting the owning agent is allowed (the app surfaces it as an explicit picker row);
   // `cron.update` accepts it for unscoped operator callers, which this route is.
   const agentId = nonEmptyString(body.agentId);
