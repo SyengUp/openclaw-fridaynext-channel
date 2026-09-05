@@ -1,4 +1,5 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
+import crypto from "node:crypto";
 import { abortRunForSessionKey } from "../../agent/abort-run.js";
 import { markUserAbort } from "../../agent/recent-aborts.js";
 import { getRuntimeV3Store } from "../../runtime-v3/runtime-store.js";
@@ -6,6 +7,10 @@ import type { DurableRuntimeEvent } from "../../runtime-v3/durable-run-store.js"
 import { extractBearerToken } from "../middleware/auth.js";
 import { readJsonBody } from "../middleware/body.js";
 import { PLUGIN_VERSION } from "../../version.js";
+import { normalizeHistoryMessages } from "../../history/normalize-message.js";
+import { readSessionTranscriptRawMessages } from "../../history/read-transcript.js";
+import { resolveHistoryMessageMedia } from "./history-messages.js";
+import { readSessionUsageSnapshotFromStore } from "../../session-usage-store.js";
 
 function json(res: ServerResponse, status: number, body: Record<string, unknown>): boolean {
   res.statusCode = status;
@@ -173,14 +178,29 @@ export async function handleRuntimeV3SessionSnapshot(
   );
   const dedupedEvents = [...new Map(events.map((event) => [`${event.runId}:${event.runSeq}`, event])).values()]
     .sort((a, b) => a.occurredAt - b.occurredAt || a.runSeq - b.runSeq);
+  const transcript = normalizeHistoryMessages(
+    readSessionTranscriptRawMessages(key, Number.MAX_SAFE_INTEGER),
+  );
+  resolveHistoryMessageMedia(transcript);
+  const sessionUsage = readSessionUsageSnapshotFromStore(key);
+  const revision = crypto
+    .createHash("sha256")
+    .update(JSON.stringify({
+      transcript: transcript.map((message) => [message.id, message.seq, message.ts]),
+      runs: runs.map((run) => [run.runId, run.phase, run.lastRunSeq, run.updatedAt]),
+      segmentHead: dedupedEvents.map((event) => [event.runId, event.runSeq, event.eventType]),
+    }))
+    .digest("hex");
   return json(res, 200, {
     ok: true,
     protocolVersion: 3,
     serverInstanceId: store.serverInstanceId,
     sessionKey: key,
-    revision: dedupedEvents.length,
+    revision,
     runs,
-    events: dedupedEvents,
+    transcript,
+    segments: dedupedEvents,
+    ...(sessionUsage ? { sessionUsage } : {}),
   });
 }
 

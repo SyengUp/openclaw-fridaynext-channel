@@ -13,9 +13,17 @@ import { __setDetachedWebhookWorkImporterForTests } from "../../agent/detached-w
 import { clearFridayNextRuntime, setFridayNextRuntime } from "../../runtime.js";
 import { getRuntimeV3Store, setRuntimeV3RootForTest } from "../../runtime-v3/runtime-store.js";
 import { handleMessages } from "./messages.js";
-import { handleRuntimeV3Acknowledge, handleRuntimeV3Sync } from "./runtime-v3.js";
+import {
+  handleRuntimeV3Acknowledge,
+  handleRuntimeV3SessionSnapshot,
+  handleRuntimeV3Sync,
+} from "./runtime-v3.js";
 import { sseEmitter } from "../../sse/emitter.js";
 import { restoreDurableRuntimeV3 } from "../../runtime-v3/runtime-recovery.js";
+import {
+  resetFridayAgentForwardRuntimeForTest,
+  setFridayAgentForwardRuntime,
+} from "../../agent-forward-runtime.js";
 
 class MockRes extends EventEmitter {
   statusCode = 0;
@@ -75,11 +83,99 @@ afterEach(() => {
   __resetMockFridayDispatchForTests();
   __setDetachedWebhookWorkImporterForTests(null);
   setRuntimeV3RootForTest(null);
+  resetFridayAgentForwardRuntimeForTest();
   clearFridayNextRuntime();
   for (const root of roots.splice(0)) fs.rmSync(root, { recursive: true, force: true });
 });
 
 describe("runtime protocol v3", () => {
+  it("returns a reconstructable session snapshot with transcript, segments and stable revision", async () => {
+    const root = configure();
+    const sessionKey = "agent:main:snapshot";
+    const transcriptFile = path.join(root, "snapshot.jsonl");
+    fs.writeFileSync(
+      transcriptFile,
+      [
+        { type: "session", sessionId: "snapshot-session" },
+        {
+          type: "message",
+          id: "user-entry",
+          timestamp: "2026-09-05T00:00:00.000Z",
+          message: { role: "user", content: "hello" },
+        },
+        {
+          type: "message",
+          id: "assistant-entry",
+          timestamp: "2026-09-05T00:00:01.000Z",
+          message: { role: "assistant", content: [{ type: "text", text: "world" }] },
+        },
+      ].map((line) => JSON.stringify(line)).join("\n") + "\n",
+      "utf8",
+    );
+    setFridayAgentForwardRuntime({
+      runtime: {
+        agent: {
+          session: {
+            resolveStorePath: () => path.join(root, "sessions.json"),
+            loadSessionStore: () => ({
+              [sessionKey]: { sessionId: "snapshot-session", sessionFile: transcriptFile },
+            }),
+          },
+        },
+        config: { current: () => ({}) },
+      },
+    } as never);
+    const store = getRuntimeV3Store();
+    const run = store.acceptCommand({
+      clientRequestId: "snapshot-request",
+      deviceId: "PHONE-1",
+      sessionKey,
+      agentId: "main",
+      text: "hello",
+      attachments: [],
+    }).run!;
+    store.appendRunEvent(run.runId, "run.started", {});
+    store.appendRunEvent(run.runId, "assistant.delta", { text: "world" });
+
+    const request = {
+      method: "GET",
+      url: `/friday-next/v3/sessions/${encodeURIComponent(sessionKey)}/snapshot`,
+      headers: { authorization: "Bearer tok" },
+    } as IncomingMessage;
+    const firstResponse = new MockRes();
+    await handleRuntimeV3SessionSnapshot(
+      request,
+      firstResponse as unknown as ServerResponse,
+      sessionKey,
+    );
+    const first = JSON.parse(firstResponse.body) as {
+      revision: string;
+      transcript: Array<{ id: string; role: string; text?: string }>;
+      segments: Array<{ eventType: string }>;
+      runs: Array<{ runId: string }>;
+    };
+
+    expect(firstResponse.statusCode).toBe(200);
+    expect(first.transcript.map((message) => [message.id, message.role, message.text])).toEqual([
+      ["user-entry", "user", "hello"],
+      ["assistant-entry", "assistant", "world"],
+    ]);
+    expect(first.segments.map((event) => event.eventType)).toEqual([
+      "run.started",
+      "assistant.delta",
+    ]);
+    expect(first.runs.map((item) => item.runId)).toEqual([run.runId]);
+    expect(first.revision).toMatch(/^[a-f0-9]{64}$/);
+
+    const secondResponse = new MockRes();
+    await handleRuntimeV3SessionSnapshot(
+      request,
+      secondResponse as unknown as ServerResponse,
+      sessionKey,
+    );
+    expect(JSON.parse(secondResponse.body).revision).toBe(first.revision);
+  });
+
   it("resumes a queued command after reconstructing the plugin runtime", async () => {
     const root = configure();
     let dispatchCount = 0;
