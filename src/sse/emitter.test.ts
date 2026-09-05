@@ -28,6 +28,8 @@ describe("sseEmitter", () => {
   });
 
   afterEach(() => {
+    vi.useRealTimers();
+    sseEmitter.resetForTest();
     setRuntimeV3RootForTest(null);
     setOfflineQueueBaseDirForTest(null);
     try {
@@ -160,6 +162,80 @@ describe("sseEmitter", () => {
     expect(fridaySseOfflineQueue.readAfter("device-a-talk", 0)).toEqual([]);
     sseEmitter.removeConnection("device-a-talk");
     sseEmitter.removeConnection("device-b-talk");
+  });
+
+  it("batches captured interleaved updates without losing source order before terminal", () => {
+    setRuntimeV3RootForTest(path.join(tmp, "runtime-v3-captured"));
+    const store = getRuntimeV3Store();
+    const run = store.acceptCommand({
+      clientRequestId: "captured-updates", deviceId: "DEVICE-CAPTURED",
+      sessionKey: "agent:main:captured", agentId: "main", text: "test", attachments: [],
+    }).run!;
+    const captured = JSON.parse(fs.readFileSync(new URL("./fixtures/runtime-streaming-updates.json", import.meta.url), "utf8")) as Array<{
+      payload: { _sourceEventType: "agent"; _sourceEventData: Record<string, unknown> };
+    }>;
+    const sources = captured.map(({ payload }) => ({
+      type: payload._sourceEventType,
+      data: { ...payload._sourceEventData, runId: run.runId, sessionKey: run.sessionKey },
+    }));
+    for (const source of sources) sseEmitter.broadcastToRun(run.runId, source);
+    // 结束帧是顺序屏障，不必等定时器才提交最后几个字。
+    sseEmitter.broadcastToRun(run.runId, {
+      type: "agent", data: { runId: run.runId, seq: 9999, stream: "lifecycle", data: { phase: "end" } },
+    });
+    const events = store.eventsForRun(run.runId);
+    expect(events.length).toBeLessThanOrEqual(3);
+    expect(events.at(-1)?.eventType).toBe("run.completed");
+    const replay = events.slice(0, -1).flatMap(({ payload }) =>
+      Array.isArray(payload._sourceEventBatch)
+        ? payload._sourceEventBatch
+        : [{ type: payload._sourceEventType, data: payload._sourceEventData }],
+    );
+    expect(replay).toEqual(sources);
+  });
+
+  it("flushes updates on the timer and keeps concurrent runs isolated", async () => {
+    vi.useFakeTimers();
+    setRuntimeV3RootForTest(path.join(tmp, "runtime-v3-timer"));
+    const store = getRuntimeV3Store();
+    const runs = ["one", "two"].map((key) => store.acceptCommand({
+      clientRequestId: `timer-${key}`, deviceId: "DEVICE-TIMER",
+      sessionKey: `agent:main:${key}`, agentId: "main", text: "test", attachments: [],
+    }).run!);
+    const source = (runId: string, seq: number) => ({
+      type: "agent" as const,
+      data: { runId, seq, stream: "assistant", data: { delta: String(seq) } },
+    });
+    sseEmitter.broadcastToRun(runs[0].runId, source(runs[0].runId, 1));
+    sseEmitter.broadcastToRun(runs[1].runId, source(runs[1].runId, 1));
+    sseEmitter.broadcastToRun(runs[0].runId, source(runs[0].runId, 2));
+    sseEmitter.broadcastToRun(runs[0].runId, source(runs[0].runId, 2));
+    expect(store.eventsForRun(runs[0].runId)).toHaveLength(0);
+    await vi.advanceTimersByTimeAsync(16);
+    expect(store.eventsForRun(runs[0].runId)).toHaveLength(1);
+    expect(store.eventsForRun(runs[1].runId)).toHaveLength(1);
+    expect(store.eventsForRun(runs[0].runId)[0].payload._sourceEventBatch).toEqual([
+      source(runs[0].runId, 1), source(runs[0].runId, 2),
+    ]);
+  });
+
+  it("bounds cumulative-text batches by bytes as well as event count", () => {
+    setRuntimeV3RootForTest(path.join(tmp, "runtime-v3-bytes"));
+    const store = getRuntimeV3Store();
+    const run = store.acceptCommand({
+      clientRequestId: "batch-bytes", deviceId: "DEVICE-BYTES",
+      sessionKey: "agent:main:bytes", agentId: "main", text: "test", attachments: [],
+    }).run!;
+    for (let seq = 1; seq <= 12; seq++) {
+      sseEmitter.broadcastToRun(run.runId, {
+        type: "agent", data: { runId: run.runId, seq, stream: "assistant", data: { delta: "字", text: "字".repeat(20000) } },
+      });
+    }
+    sseEmitter.flushRuntimeV3Run(run.runId);
+    const batches = store.eventsForRun(run.runId);
+    expect(batches.every((event) => Buffer.byteLength(JSON.stringify(event)) < 300_000)).toBe(true);
+    expect(batches.flatMap(({ payload }) => Array.isArray(payload._sourceEventBatch)
+      ? payload._sourceEventBatch : [{ type: payload._sourceEventType, data: payload._sourceEventData }])).toHaveLength(12);
   });
 
   it("mirrors the same core source event only once", () => {

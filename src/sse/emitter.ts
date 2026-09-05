@@ -38,6 +38,7 @@ type PendingRuntimeDeltaBatch = {
   store: DurableRunStore;
   eventType: string;
   events: SseEvent[];
+  bytes: number;
   timer: ReturnType<typeof setTimeout>;
 };
 
@@ -224,12 +225,17 @@ class SseEmitterRegistry {
     eventType: string,
     event: SseEvent,
   ): void {
+    const bytes = Buffer.byteLength(JSON.stringify(event));
     const existing = this.pendingRuntimeDeltas.get(runId);
-    if (existing && (existing.store !== store || existing.eventType !== eventType)) {
+    // 累计全文可能很大；按字节限制批次，避免合并后超过客户端单帧缓冲上限。
+    if (existing && (existing.store !== store || existing.bytes + bytes > 128 * 1024)) {
       this.flushRuntimeV3Run(runId);
     }
     const pending = this.pendingRuntimeDeltas.get(runId);
     if (pending) {
+      // 同一 run 的正文/推理/候选更新可交错；原始类型和顺序保存在 batch 中。
+      pending.eventType = eventType;
+      pending.bytes += bytes;
       pending.events.push(event);
       if (pending.events.length >= 32) this.flushRuntimeV3Run(runId);
       return;
@@ -240,6 +246,7 @@ class SseEmitterRegistry {
       store,
       eventType,
       events: [event],
+      bytes,
       timer,
     });
   }
@@ -294,7 +301,17 @@ class SseEmitterRegistry {
     } else if (event.type === "fridaynext-location-query") {
       eventType = "device.location.request";
     }
-    if (eventType.endsWith(".delta")) {
+    // 现场 assistant 带 delta 字段却没有 phase，被映射为 .update；不能只看事件名后缀。
+    // 仅合并可追加的文本更新及明确隐藏的候选进度，工具和生命周期仍作为顺序屏障。
+    const textUpdate = event.type === "agent"
+      && ["assistant", "thinking", "reasoning"].includes(stream)
+      && (nestedPhase === "" || nestedPhase === "update" || nestedPhase === "delta")
+      && typeof dataRecord?.delta === "string";
+    const hiddenCandidateUpdate = event.type === "agent"
+      && stream === "item" && nestedPhase === "update"
+      && dataRecord?.hideFromChannelProgress === true
+      && dataRecord?.kind === "answer_candidate";
+    if (eventType.endsWith(".delta") || textUpdate || hiddenCandidateUpdate) {
       this.enqueueRuntimeDelta(store, runId, eventType, event);
       return;
     }
