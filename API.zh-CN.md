@@ -219,9 +219,25 @@ App 侧管理网关内置调度器。插件 **1.0.16** 起提供。
 
 - `PATCH /friday-next-admin/cron/jobs?id=<jobId>` → `cron.update`
 
-  只认白名单字段：`name`、`schedule`、`enabled`、`deleteAfterRun`，以及
+  只认白名单字段：`name`、`agentId`、`schedule`、`enabled`、`deleteAfterRun`，以及
   `message` / `model` / `thinking` / `timeoutSeconds`（会被提升成 `agentTurn` 载荷补丁）。
-  带 `deviceId` 则把播报改钉到该设备。空补丁返回 `400`。
+  投递修改走受限的 `delivery` 补丁——`{ "mode": "announce", "channel": "friday-next", "to":
+  "<deviceId>" }`、`{ "mode": "announce", "channel": "telegram", "to": null }`（显式 `null`
+  表示清掉已存的接收目标、改用频道默认接收方；核心的按字段合并对「省略的键」是保留旧值，
+  所以省略 `to` 属于歧义，返回 `400`——`friday-next` 本身也不接受 `null`，没有目标的
+  friday-next 播报会退化成「唯一在线/最后见过的设备」猜测），或 `{ "mode": "none" }`；
+  `webhook` 和缺失/空白的 `channel` 都是 `400`。带旧式 `deviceId` 则把播报改钉到该设备；
+  `deviceId` 与 `delivery` 同给返回 `400`。空补丁返回 `400`。
+
+- `GET /friday-next-admin/cron/channels` → `channels.status`（裁剪）
+
+  投递目标选择器的选项来源：所有已配置账号的频道，按注册表 UI 序排列，滤掉 `webchat`
+  （核心不接受它做播报目标）。`friday-next` 永远排第一——它是选择器绝不能丢的那一项，
+  哪怕状态负载残缺。
+
+  ```json
+  { "ok": true, "channels": [ { "id": "friday-next", "label": "Friday Next" }, { "id": "telegram", "label": "Telegram" } ] }
+  ```
 
 - `DELETE /friday-next-admin/cron/jobs?id=<jobId>` → `cron.remove`
 

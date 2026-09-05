@@ -547,9 +547,24 @@ sends; public requests additionally pass the App Attest gate.
   Whitelisted body fields only: `name`, `agentId`, `schedule`, `enabled`, `deleteAfterRun`, and
   `message` / `model` / `thinking` / `timeoutSeconds` (lifted into an `agentTurn` payload patch).
   Delivery edits go through a restricted `delivery` patch — `{ "mode": "announce", "channel":
-  "friday-next", "to": "<deviceId>" }` or `{ "mode": "none" }`; `webhook` and missing `channel`/`to`
-  are `400`s. Passing the legacy `deviceId` alone re-pins delivery to that device; `deviceId` and
-  `delivery` together are a `400`. An empty patch is a `400`.
+  "friday-next", "to": "<deviceId>" }`, `{ "mode": "announce", "channel": "telegram", "to": null }`
+  (an explicit `null` clears the stored target so the channel's default recipient applies; core's
+  per-field merge keeps the old value when the key is merely omitted, so an omitted `to` is a
+  `400` as ambiguous — and `null` is refused for `friday-next` itself, where a targetless announce
+  would degrade to the sole-connected / last-seen device guess), or `{ "mode": "none" }`;
+  `webhook` and a missing/blank `channel` are `400`s. Passing the legacy `deviceId` alone re-pins
+  delivery to that device; `deviceId` and `delivery` together are a `400`. An empty patch is a
+  `400`.
+
+- `GET /friday-next-admin/cron/channels` → `channels.status` (reduced)
+
+  The delivery picker's option list: every channel with a configured account, in the registry's UI
+  order, with `webchat` filtered out (core refuses it as an announce target). `friday-next` is
+  always first — it is the one entry the picker must never lose, even to a partial status payload.
+
+  ```json
+  { "ok": true, "channels": [ { "id": "friday-next", "label": "Friday Next" }, { "id": "telegram", "label": "Telegram" } ] }
+  ```
 
 - `DELETE /friday-next-admin/cron/jobs?id=<jobId>` → `cron.remove`
 

@@ -45,7 +45,12 @@ import { attestGateDecision, ATTEST_REJECTION_BODY } from "../attest/attest-gate
 import { handleSessionDelete } from "./handlers/session-delete.js";
 import { handleAgentIdentity } from "./handlers/agent-identity.js";
 import { handleCommandsList } from "./handlers/commands-list.js";
-import { handleCronJobs, handleCronJobRun, handleCronRuns } from "./handlers/cron.js";
+import {
+  handleCronJobs,
+  handleCronJobRun,
+  handleCronRuns,
+  handleCronChannels,
+} from "./handlers/cron.js";
 import { handleTalk } from "./handlers/talk.js";
 import { handleHealthQueryResult } from "./handlers/health-query-result.js";
 import { handleCalendarResult } from "./handlers/calendar-result.js";
@@ -383,6 +388,15 @@ export function registerFridayNextHttpRoutes(api: {
   api.registerHttpRoute({
     path: "/friday-next-admin/cron/runs",
     handler: handleCronRuns,
+    auth: "gateway",
+    match: "exact",
+  });
+  // Delivery-target channel list for the cron editor's picker. Read-only like
+  // `/cron/runs`: `channels.status` only needs `operator.read`, so no
+  // "trusted-operator" surface here either.
+  api.registerHttpRoute({
+    path: "/friday-next-admin/cron/channels",
+    handler: handleCronChannels,
     auth: "gateway",
     match: "exact",
   });

@@ -4,7 +4,7 @@
 // cron answers with `ok: true` (`removed: false`, `ran: false`).
 import { Readable } from "node:stream";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { handleCronJobs, handleCronJobRun, handleCronRuns } from "./cron.js";
+import { handleCronJobs, handleCronJobRun, handleCronRuns, handleCronChannels } from "./cron.js";
 
 const { dispatchGatewayMethod } = vi.hoisted(() => ({
   dispatchGatewayMethod: vi.fn(),
@@ -298,6 +298,33 @@ describe("handleCronJobs — update", () => {
     });
   });
 
+  // 显式 `to:null` = 清掉存储的旧目标，让频道默认接收方（如 telegram 的 defaultTo）
+  // 生效——核心 mergeCronDelivery 只在键存在且为 null 时删字段，省略会保留旧 chat id。
+  it("forwards an explicit null `to` so the channel default target applies", async () => {
+    dispatchGatewayMethod.mockResolvedValue({ ok: true, payload: { id: "j1" } });
+    await invoke(handleCronJobs, "PATCH", "/friday-next-admin/cron/jobs?id=j1", {
+      delivery: { mode: "announce", channel: "telegram", to: null },
+    });
+    expect(dispatchGatewayMethod).toHaveBeenCalledWith("cron.update", {
+      id: "j1",
+      patch: { delivery: { mode: "announce", channel: "telegram", to: null } },
+    });
+  });
+
+  it("rejects a targetless friday-next announce (null `to`)", async () => {
+    const { captured } = await invoke(
+      handleCronJobs,
+      "PATCH",
+      "/friday-next-admin/cron/jobs?id=j1",
+      {
+        delivery: { mode: "announce", channel: "friday-next", to: null },
+      },
+    );
+    // 没有 to 的 friday-next 播报会退化成「唯一在线/最后见过的设备」，通知归属靠猜。
+    expect(captured.statusCode).toBe(400);
+    expect(dispatchGatewayMethod).not.toHaveBeenCalled();
+  });
+
   it.each([
     ["webhook mode", { mode: "webhook", to: "https://example.com/hook" }],
     ["unknown mode", { mode: "deliver" }],
@@ -451,6 +478,74 @@ describe("handleCronRuns", () => {
   it("returns 400 without dispatching when jobId is missing", async () => {
     const { captured } = await invoke(handleCronRuns, "GET", "/friday-next-admin/cron/runs");
     expect(captured.statusCode).toBe(400);
+    expect(dispatchGatewayMethod).not.toHaveBeenCalled();
+  });
+});
+
+describe("handleCronChannels", () => {
+  it("reduces channels.status to configured deliverable channels, friday-next first", async () => {
+    dispatchGatewayMethod.mockResolvedValue({
+      ok: true,
+      payload: {
+        channelOrder: ["webchat", "friday-next", "telegram", "discord", "slack"],
+        channelLabels: { "friday-next": "Friday Next", telegram: "Telegram", discord: "Discord" },
+        channels: {
+          "friday-next": { configured: true },
+          telegram: { configured: true },
+          // 未配置的频道不能进选择器——选了也只会在跑的时候 channel_not_found。
+          discord: { configured: false },
+          // slack 没有 summary（partial 掉落），但账号快照说配置了，照样算数。
+        },
+        channelAccounts: {
+          slack: [{ accountId: "default", configured: true }],
+          discord: [{ accountId: "default", configured: false }],
+        },
+      },
+    });
+
+    const { captured, json } = await invoke(
+      handleCronChannels,
+      "GET",
+      "/friday-next-admin/cron/channels",
+    );
+
+    expect(dispatchGatewayMethod).toHaveBeenCalledWith("channels.status", {});
+    expect(captured.statusCode).toBe(200);
+    expect(json).toMatchObject({
+      ok: true,
+      channels: [
+        { id: "friday-next", label: "Friday Next" },
+        { id: "telegram", label: "Telegram" },
+        { id: "slack", label: "slack" },
+      ],
+    });
+  });
+
+  it("keeps friday-next even when a partial payload dropped its summary", async () => {
+    dispatchGatewayMethod.mockResolvedValue({
+      ok: true,
+      payload: {
+        channelOrder: ["telegram"],
+        channelLabels: { telegram: "Telegram" },
+        channels: { telegram: { configured: true } },
+      },
+    });
+    const { json } = await invoke(handleCronChannels, "GET", "/friday-next-admin/cron/channels");
+    expect(json).toMatchObject({
+      channels: [
+        { id: "friday-next", label: "friday-next" },
+        { id: "telegram", label: "Telegram" },
+      ],
+    });
+  });
+
+  it("returns 405 for non-GET without dispatching", async () => {
+    const { captured } = await invoke(
+      handleCronChannels,
+      "POST",
+      "/friday-next-admin/cron/channels",
+    );
+    expect(captured.statusCode).toBe(405);
     expect(dispatchGatewayMethod).not.toHaveBeenCalled();
   });
 });

@@ -7,6 +7,7 @@
  *   DELETE /friday-next-admin/cron/jobs?id=<jobId>     → `cron.remove`
  *   POST   /friday-next-admin/cron/jobs/run            → `cron.run` (mode "force")
  *   GET    /friday-next-admin/cron/runs?jobId=<jobId>  → `cron.runs`
+ *   GET    /friday-next-admin/cron/channels            → `channels.status` (reduced)
  *
  * Cron runs INSIDE the gateway process and owns its own SQLite-backed store plus the
  * armed timers, so mutating the store directly (the read-only `loadCronStore` the
@@ -43,9 +44,11 @@
  * relying on the channel's sole-connected/last-seen fallback.
  *
  * PATCH accepts delivery edits through a restricted `delivery` patch (`mode:"announce"`
- * with an explicit `channel`+`to`, or `mode:"none"`) so the app can retarget a job it did
- * not create (e.g. a CLI-made command job announcing to telegram); the legacy bare
- * `deviceId` shorthand still re-pins to friday-next. The two are mutually exclusive.
+ * with an explicit `channel`, plus `to` as a non-empty string or an explicit `null`
+ * meaning "the channel's default target"; or `mode:"none"`) so the app can retarget a
+ * job it did not create (e.g. a CLI-made command job announcing to telegram); the
+ * legacy bare `deviceId` shorthand still re-pins to friday-next. The two are mutually
+ * exclusive. The `/cron/channels` list is what feeds the app's channel picker.
  *
  * Dispatch requires the manifest's `contracts.gatewayMethodDispatch:
  * ["authenticated-request"]` (already declared).
@@ -218,11 +221,15 @@ const SUPPORTED_DELIVERY_MODES = new Set(["announce", "none"]);
  * accept a free-form `CronDeliveryPatch` (including `mode:"webhook"`), but the app only
  * ever needs "announce to a channel I name" or "stop delivering" — anything else is a
  * 400 rather than a silent passthrough (same posture as the payload whitelist). Announce
- * must carry BOTH `channel` and `to`: merging a bare `{mode:"announce"}` would keep the
- * previous channel's target, and a friday-next announce without `to` falls back to the
- * channel's sole-connected / last-seen device, which breaks inbox attribution (see
- * createJob). A wrong `to` (unknown device id / chat id) is not validated here — the
- * run's deliveryError surfaces it, same as any channel-side failure.
+ * must always carry a non-empty `channel`. `to` has three spellings: a non-empty string
+ * pins the target; an EXPLICIT `null` clears any stored target so the channel's default
+ * applies (core's `mergeCronDelivery` only deletes a field when the key is present with
+ * a null value — omitting `to` would keep the previous channel's chat id, so omission
+ * is rejected as ambiguous); and `null` is refused for friday-next itself, because a
+ * targetless friday-next announce falls back to the sole-connected / last-seen device,
+ * which breaks inbox attribution (see createJob). A wrong `to` (unknown device id /
+ * chat id) is not validated here — the run's deliveryError surfaces it, same as any
+ * channel-side failure.
  */
 function readDeliveryPatch(value: unknown): Record<string, unknown> | undefined {
   if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
@@ -231,8 +238,15 @@ function readDeliveryPatch(value: unknown): Record<string, unknown> | undefined 
   if (!mode || !SUPPORTED_DELIVERY_MODES.has(mode)) return undefined;
   if (mode === "none") return { mode: "none" };
   const channel = nonEmptyString(raw.channel);
+  if (!channel) return undefined;
+  if (raw.to === null) {
+    // Explicit clear → the channel default target. Meaningless (and harmful) for
+    // friday-next — see the header comment.
+    if (channel === FRIDAY_NEXT_CHANNEL_ID) return undefined;
+    return { mode: "announce", channel, to: null };
+  }
   const to = nonEmptyString(raw.to);
-  if (!channel || !to) return undefined;
+  if (!to) return undefined;
   return { mode: "announce", channel, to };
 }
 
@@ -357,7 +371,7 @@ async function updateJob(req: IncomingMessage, res: ServerResponse, url: URL): P
     if (!delivery) {
       return json(res, 400, {
         error:
-          'Invalid delivery: mode must be "announce" (with non-empty channel and to) or "none"',
+          'Invalid delivery: mode must be "announce" (non-empty channel; `to` a non-empty string or explicit null for the channel default) or "none"',
       });
     }
     patch.delivery = delivery;
@@ -445,4 +459,62 @@ export async function handleCronRuns(req: IncomingMessage, res: ServerResponse):
   // the app-facing name is `runs`.
   const entries = outcome.payload.entries;
   return json(res, 200, { ok: true, jobId, runs: Array.isArray(entries) ? entries : [] });
+}
+
+/** `/friday-next-admin/cron/channels` — deliverable channel list for the delivery picker. */
+export async function handleCronChannels(
+  req: IncomingMessage,
+  res: ServerResponse,
+): Promise<boolean> {
+  if (req.method !== "GET") return json(res, 405, { error: "Method Not Allowed" });
+  if (attestRejects(req, "/friday-next-admin/cron/channels")) {
+    return json(res, 403, { ...ATTEST_REJECTION_BODY });
+  }
+  // `channels.status` (probe left off — config/runtime state only, no network probing)
+  // is the same source the CLI and Control UI use, so the picker can never offer a
+  // channel cron would reject as unconfigured.
+  const outcome = await dispatchCron(res, "channels.status", {});
+  if (!outcome.ok) return true;
+  return json(res, 200, { ok: true, channels: reduceDeliveryChannels(outcome.payload) });
+}
+
+/**
+ * The internal webchat channel is not a cron announce target (core refuses it with
+ * "Delivering to WebChat is not supported"), so it never belongs in the picker.
+ */
+const NON_DELIVERABLE_CHANNELS = new Set(["webchat"]);
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+/**
+ * `channels.status` payload → `[{id, label}]`, keeping only channels with a configured
+ * account (an unconfigured one would fail the run with channel_not_found). friday-next
+ * is pinned first: it is THIS plugin — the one entry the picker must never lose, even if
+ * a partial status payload dropped its summary.
+ */
+function reduceDeliveryChannels(
+  payload: Record<string, unknown>,
+): Array<{ id: string; label: string }> {
+  const order = Array.isArray(payload.channelOrder)
+    ? payload.channelOrder.filter((id): id is string => typeof id === "string" && id !== "")
+    : [];
+  const labels = isRecord(payload.channelLabels) ? payload.channelLabels : {};
+  const summaries = isRecord(payload.channels) ? payload.channels : {};
+  const accounts = isRecord(payload.channelAccounts) ? payload.channelAccounts : {};
+
+  const isConfigured = (id: string): boolean => {
+    const summary = summaries[id];
+    if (isRecord(summary) && summary.configured === true) return true;
+    const list = accounts[id];
+    return Array.isArray(list) && list.some((a) => isRecord(a) && a.configured === true);
+  };
+
+  const ids = order.filter((id) => !NON_DELIVERABLE_CHANNELS.has(id) && isConfigured(id));
+  const ordered = [FRIDAY_NEXT_CHANNEL_ID, ...ids.filter((id) => id !== FRIDAY_NEXT_CHANNEL_ID)];
+  return ordered.map((id) => {
+    const label = labels[id];
+    return { id, label: typeof label === "string" && label.trim() ? label : id };
+  });
 }
