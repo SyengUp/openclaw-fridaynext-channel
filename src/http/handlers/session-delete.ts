@@ -28,6 +28,7 @@ import { attestGateDecision, ATTEST_REJECTION_BODY } from "../../attest/attest-g
 import { resolveFridayNextConfig } from "../../config.js";
 import { getHostOpenClawConfigSnapshot } from "../../host-config.js";
 import { getFridayNextRuntime } from "../../runtime.js";
+import { getRuntimeV3Store } from "../../runtime-v3/runtime-store.js";
 
 function json(res: ServerResponse, status: number, body: Record<string, unknown>): true {
   res.statusCode = status;
@@ -133,6 +134,17 @@ export async function handleSessionDelete(
     deleted?: unknown;
     archived?: unknown;
   };
+  try {
+    // Core deletion is the authority boundary. Purge the plugin ledger afterwards even when
+    // core reports `deleted:false`: that is the retry path for a crash that landed between the
+    // core delete and this local compaction.
+    getRuntimeV3Store().deleteSession(sessionKey);
+  } catch (err) {
+    return json(res, 500, {
+      ok: false,
+      error: err instanceof Error ? err.message : String(err),
+    });
+  }
   return json(res, 200, {
     ok: true,
     sessionKey,

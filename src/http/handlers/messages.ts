@@ -54,6 +54,7 @@ import {
   resolveMediaUrl,
 } from "./files.js";
 import { runFridayDispatch } from "../../agent/dispatch-bridge.js";
+import { hasActiveSession } from "../../agent/active-runs.js";
 import { loadDetachedWebhookWork } from "../../agent/detached-webhook-work.js";
 import { ensureSubagentSpawnScope } from "../../agent/operator-scope.js";
 import { saveInboundMediaBuffer } from "../../agent/media-bridge.js";
@@ -665,7 +666,19 @@ export async function handleMessages(req: IncomingMessage, res: ServerResponse):
         JSON.stringify({
           error: "clientRequestId was already used with a different payload",
           clientRequestId,
-          runId: accepted.run?.runId,
+          runId: accepted.run?.runId ?? accepted.deletedRunId,
+        }),
+      );
+      return true;
+    }
+    if (accepted.outcome === "deleted") {
+      res.statusCode = 409;
+      res.setHeader("Content-Type", "application/json");
+      res.end(
+        JSON.stringify({
+          error: "clientRequestId belonged to a deleted session",
+          clientRequestId,
+          runId: accepted.deletedRunId,
         }),
       );
       return true;
@@ -825,6 +838,14 @@ export async function handleMessages(req: IncomingMessage, res: ServerResponse):
       const current = durableStore.run(runId);
       if (!current || current.phase === "cancelled" || current.phase === "failed") return false;
       if (current.phase !== "queued") return false;
+      // The durable ledger only knows about Friday requests. OpenClaw can already be running this
+      // same session from WebChat, Telegram, or another channel; lifecycle observation records those
+      // runs before Friday routing. Keep our command durably queued until the shared core session is
+      // idle so every producer obeys the same per-session serial execution contract.
+      if (hasActiveSession(baseSessionKey)) {
+        await new Promise<void>((resolve) => setTimeout(resolve, 100));
+        continue;
+      }
       if (durableStore.claimRun(runId)) return true;
       await new Promise<void>((resolve) => setTimeout(resolve, 100));
     }
@@ -838,9 +859,11 @@ export async function handleMessages(req: IncomingMessage, res: ServerResponse):
     try {
       const completed = await runAgentAttempt();
       if (completed) {
+        sseEmitter.flushRuntimeV3Run(runId);
         durableStore?.appendRunEvent(runId, "run.completed", { phase: "end" });
         log("RUN_COMPLETE", normalizedDeviceId, runId);
       } else if (durableStore?.run(runId)?.phase !== "failed") {
+        sseEmitter.flushRuntimeV3Run(runId);
         durableStore?.appendRunEvent(runId, "run.failed", { error: "dispatch failed" });
       }
     } finally {
@@ -1034,6 +1057,7 @@ export async function handleMessages(req: IncomingMessage, res: ServerResponse):
     });
     return runAgent();
   }).catch((err) => {
+    sseEmitter.flushRuntimeV3Run(runId);
     durableStore?.appendRunEvent(runId, "run.failed", { error: String(err) });
     log("RUN_ERROR", normalizedDeviceId, runId, String(err), "error");
     sseEmitter.untrackRun(runId);

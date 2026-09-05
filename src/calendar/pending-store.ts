@@ -1,7 +1,7 @@
 /**
  * In-flight calendar/reminders round-trips: SSE is pushed to the iPhone,
- * which POSTs the result back. One pending calendar request per device; 20s
- * timeout. Independent of the health pending store, so a health query and a
+ * which POSTs the result back. One pending calendar request per device; a suspended/killed app has
+ * a full day to return. Independent of the health pending store, so a health query and a
  * calendar request can be in flight on the same device concurrently.
  */
 
@@ -11,7 +11,7 @@ import {
   type DeviceRequestOutcome,
 } from "../device-request/pending-store.js";
 
-export const CALENDAR_REQUEST_TIMEOUT_MS = 20_000;
+export const CALENDAR_REQUEST_TIMEOUT_MS = 86_400_000;
 
 export type CalendarRequestError = DeviceRequestError;
 export type CalendarRequestOutcome = DeviceRequestOutcome;
@@ -24,6 +24,10 @@ const store = createDeviceRequestPendingStore({
 
 export function calendarBusyForDevice(deviceId: string): boolean {
   return store.busyForDevice(deviceId);
+}
+
+export function hasPendingCalendarRequest(requestId: string): boolean {
+  return store.hasPending(requestId);
 }
 
 export function waitForCalendarResult(params: {

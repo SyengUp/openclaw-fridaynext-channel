@@ -2,6 +2,7 @@ import type { ServerResponse } from "node:http";
 import { createFridayNextLogger } from "../logging.js";
 import { fridaySseOfflineQueue } from "./offline-queue.js";
 import { runtimeV3StoreIfInitialized } from "../runtime-v3/runtime-store.js";
+import type { DurableRunStore } from "../runtime-v3/durable-run-store.js";
 
 const logger = createFridayNextLogger("sse", "info");
 
@@ -31,6 +32,13 @@ export interface SseEvent {
 type BacklogEntry = {
   id: number;
   event: SseEvent;
+};
+
+type PendingRuntimeDeltaBatch = {
+  store: DurableRunStore;
+  eventType: string;
+  events: SseEvent[];
+  timer: ReturnType<typeof setTimeout>;
 };
 
 export class SseConnection {
@@ -135,6 +143,106 @@ class SseEmitterRegistry {
   private lastRunIdByDevice = new Map<string, string>();
   private eventSeqByDevice = new Map<string, number>();
   private backlogLimit = 200;
+  private pendingRuntimeDeltas = new Map<string, PendingRuntimeDeltaBatch>();
+  /**
+   * OpenClaw can transiently install the same agent-event listener twice while
+   * hot-reloading a plugin. Its `(runId, seq, stream)` tuple is the durable
+   * source identity, so duplicate callbacks must not mint new protocol events.
+   */
+  private mirroredRuntimeSourceKeysByRun = new Map<string, Set<string>>();
+
+  private runtimeSourceKey(event: SseEvent): string | undefined {
+    const sourceRunId = typeof event.data.runId === "string" ? event.data.runId.trim() : "";
+    const sourceSeq = event.data.seq;
+    if (!sourceRunId || typeof sourceSeq !== "number" || !Number.isFinite(sourceSeq)) {
+      return undefined;
+    }
+    const stream = typeof event.data.stream === "string" ? event.data.stream : "";
+    return `${event.type}\u0000${sourceRunId}\u0000${stream}\u0000${sourceSeq}`;
+  }
+
+  private persistedRuntimeSourceKeys(store: DurableRunStore, runId: string): Set<string> {
+    const cached = this.mirroredRuntimeSourceKeysByRun.get(runId);
+    if (cached) return cached;
+    const keys = new Set<string>();
+    for (const durableEvent of store.eventsForRun(runId)) {
+      const payload = durableEvent.payload;
+      const batch = payload._sourceEventBatch;
+      const sources = Array.isArray(batch)
+        ? batch
+        : [{ type: payload._sourceEventType, data: payload._sourceEventData }];
+      for (const source of sources) {
+        if (!source || typeof source !== "object" || Array.isArray(source)) continue;
+        const record = source as Record<string, unknown>;
+        const type = record.type;
+        const data = record.data;
+        if (typeof type !== "string" || !data || typeof data !== "object" || Array.isArray(data)) {
+          continue;
+        }
+        const key = this.runtimeSourceKey({ type: type as SseEventType, data: data as Record<string, unknown> });
+        if (key) keys.add(key);
+      }
+    }
+    this.mirroredRuntimeSourceKeysByRun.set(runId, keys);
+    return keys;
+  }
+
+  private appendRuntimeMirror(
+    store: DurableRunStore,
+    runId: string,
+    eventType: string,
+    events: SseEvent[],
+  ): void {
+    const last = events.at(-1);
+    if (!last) return;
+    store.appendRunEvent(runId, eventType, {
+      _sourceEventType: last.type,
+      _sourceEventData: last.data,
+      ...(events.length > 1
+        ? {
+            _sourceEventBatch: events.map((event) => ({
+              type: event.type,
+              data: event.data,
+            })),
+          }
+        : {}),
+    });
+  }
+
+  flushRuntimeV3Run(runId: string): void {
+    const key = runId.trim();
+    const pending = this.pendingRuntimeDeltas.get(key);
+    if (!pending) return;
+    clearTimeout(pending.timer);
+    this.pendingRuntimeDeltas.delete(key);
+    this.appendRuntimeMirror(pending.store, key, pending.eventType, pending.events);
+  }
+
+  private enqueueRuntimeDelta(
+    store: DurableRunStore,
+    runId: string,
+    eventType: string,
+    event: SseEvent,
+  ): void {
+    const existing = this.pendingRuntimeDeltas.get(runId);
+    if (existing && (existing.store !== store || existing.eventType !== eventType)) {
+      this.flushRuntimeV3Run(runId);
+    }
+    const pending = this.pendingRuntimeDeltas.get(runId);
+    if (pending) {
+      pending.events.push(event);
+      if (pending.events.length >= 32) this.flushRuntimeV3Run(runId);
+      return;
+    }
+    const timer = setTimeout(() => this.flushRuntimeV3Run(runId), 16);
+    timer.unref();
+    this.pendingRuntimeDeltas.set(runId, {
+      store,
+      eventType,
+      events: [event],
+      timer,
+    });
+  }
 
   private mirrorIntoRuntimeV3(event: SseEvent, hintedRunId?: string): void {
     const store = runtimeV3StoreIfInitialized();
@@ -142,6 +250,12 @@ class SseEmitterRegistry {
     const rawRunId = hintedRunId ?? event.data.runId;
     const runId = typeof rawRunId === "string" ? rawRunId.trim() : "";
     if (!runId || !store.run(runId)) return;
+    const sourceKey = this.runtimeSourceKey(event);
+    if (sourceKey) {
+      const seen = this.persistedRuntimeSourceKeys(store, runId);
+      if (seen.has(sourceKey)) return;
+      seen.add(sourceKey);
+    }
     const phase = typeof event.data.phase === "string" ? event.data.phase.toLowerCase() : "";
     const stream = typeof event.data.stream === "string" ? event.data.stream.toLowerCase() : "";
     const dataRecord =
@@ -167,12 +281,25 @@ class SseEmitterRegistry {
     } else if (event.type === "subagent") {
       eventType = `subagent.${phase || "update"}`;
     } else if (event.type === "approval") {
-      eventType = `approval.${phase || "update"}`;
+      const op = typeof event.data.op === "string" ? event.data.op.toLowerCase() : "update";
+      eventType = `approval.${op}`;
+    } else if (event.type === "fridaynext-health-query") {
+      eventType = "device.health.request";
+    } else if (event.type === "fridaynext-health-log") {
+      eventType = "device.health.request";
+    } else if (event.type === "fridaynext-calendar-query") {
+      eventType = "device.calendar.request";
+    } else if (event.type === "fridaynext-calendar-log") {
+      eventType = "device.calendar.request";
+    } else if (event.type === "fridaynext-location-query") {
+      eventType = "device.location.request";
     }
-    store.appendRunEvent(runId, eventType, {
-      _sourceEventType: event.type,
-      _sourceEventData: event.data,
-    });
+    if (eventType.endsWith(".delta")) {
+      this.enqueueRuntimeDelta(store, runId, eventType, event);
+      return;
+    }
+    this.flushRuntimeV3Run(runId);
+    this.appendRuntimeMirror(store, runId, eventType, [event]);
   }
 
   getConnectionCount(): number {
@@ -359,6 +486,9 @@ class SseEmitterRegistry {
     this.runEmitter.clear();
     this.lastRunIdByDevice.clear();
     this.eventSeqByDevice.clear();
+    for (const pending of this.pendingRuntimeDeltas.values()) clearTimeout(pending.timer);
+    this.pendingRuntimeDeltas.clear();
+    this.mirroredRuntimeSourceKeysByRun.clear();
   }
 }
 

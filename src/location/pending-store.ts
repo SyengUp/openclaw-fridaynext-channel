@@ -1,7 +1,7 @@
 /**
  * In-flight location queries: SSE is pushed to the iPhone, which resolves the
  * current location and POSTs the result back. One pending request per device;
- * 20s timeout.
+ * a one-day bounded wait so a suspended/killed app can return.
  * Implementation lives in the shared device-request pending store.
  */
 
@@ -11,7 +11,7 @@ import {
   type DeviceRequestOutcome,
 } from "../device-request/pending-store.js";
 
-export const LOCATION_QUERY_TIMEOUT_MS = 20_000;
+export const LOCATION_QUERY_TIMEOUT_MS = 86_400_000;
 
 export type LocationQueryError = DeviceRequestError;
 export type LocationQueryOutcome = DeviceRequestOutcome;
@@ -24,6 +24,10 @@ const store = createDeviceRequestPendingStore({
 
 export function locationQueryBusyForDevice(deviceId: string): boolean {
   return store.busyForDevice(deviceId);
+}
+
+export function hasPendingLocationQuery(requestId: string): boolean {
+  return store.hasPending(requestId);
 }
 
 export function waitForLocationQueryResult(params: {

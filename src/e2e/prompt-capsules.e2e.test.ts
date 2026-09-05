@@ -5,6 +5,7 @@ import {
   removeTempHistoryDir,
   setMockRuntime,
 } from "../test-support/mock-runtime.js";
+import { DEFAULT_SEED_CAPSULES } from "../prompt-capsules/capsules-store.js";
 
 /**
  * Exercises GET/PUT /friday-next/prompt-capsules through the real route table
@@ -55,7 +56,7 @@ describe("e2e prompt capsules", () => {
     expect(first.status).toBe(200);
     const firstBody = JSON.parse(first.body);
     expect(firstBody).toMatchObject({ ok: true, revision: 0 });
-    expect(firstBody.capsules).toHaveLength(2);
+    expect(firstBody.capsules).toHaveLength(DEFAULT_SEED_CAPSULES.length);
 
     const put = await app.rawRequest({
       method: "PUT",

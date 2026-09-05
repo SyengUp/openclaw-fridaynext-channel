@@ -115,4 +115,23 @@ describe("handleApprovalDecision", () => {
     expect(result.status).toBe(502);
     expect(result.json?.error).toBe("Approval resolution failed");
   });
+
+  it("does not resolve the same approval decision twice when the app retries", async () => {
+    const body = { decision: "allow-once", deviceId: "DEV1" };
+    const first = await invoke("POST", "exec-replay", body);
+    const replay = await invoke("POST", "exec-replay", body);
+
+    expect(first.status).toBe(200);
+    expect(replay.status).toBe(200);
+    expect(replay.json?.replayed).toBe(true);
+    expect(resolveApprovalOverGateway).toHaveBeenCalledTimes(1);
+  });
+
+  it("rejects a conflicting second decision for the same approval", async () => {
+    expect((await invoke("POST", "exec-conflict", { decision: "allow-once" })).status).toBe(200);
+    const replay = await invoke("POST", "exec-conflict", { decision: "deny" });
+
+    expect(replay.status).toBe(409);
+    expect(resolveApprovalOverGateway).toHaveBeenCalledTimes(1);
+  });
 });

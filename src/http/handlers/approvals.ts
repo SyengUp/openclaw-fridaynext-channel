@@ -5,6 +5,7 @@ import { extractBearerToken } from "../middleware/auth.js";
 import { getHostOpenClawConfigSnapshot } from "../../host-config.js";
 import { getFridayNextRuntime } from "../../runtime.js";
 import { createFridayNextLogger } from "../../logging.js";
+import { getRuntimeV3Store } from "../../runtime-v3/runtime-store.js";
 
 const VALID_DECISIONS = new Set(["allow-once", "allow-always", "deny"]);
 
@@ -40,6 +41,21 @@ export async function handleApprovalDecision(
     return json(400, { error: "decision must be allow-once | allow-always | deny" });
   }
   const deviceId = typeof body.deviceId === "string" ? body.deviceId.trim().toUpperCase() : "";
+  const receiptPayload = { decision, deviceId };
+  const store = getRuntimeV3Store();
+  const receiptStatus = store.commandReceiptStatus("approval", approvalId, receiptPayload);
+  if (receiptStatus === "conflict") {
+    return json(409, { error: "Approval decision conflicts with the accepted decision" });
+  }
+  if (receiptStatus === "replayed") {
+    return json(200, {
+      ...(store.commandReceipt("approval", approvalId)?.response ?? {}),
+      replayed: true,
+    });
+  }
+  if (receiptStatus === "missing") {
+    store.prepareCommandReceipt("approval", approvalId, receiptPayload);
+  }
 
   const cfg = getHostOpenClawConfigSnapshot(getFridayNextRuntime().config);
   try {
@@ -61,5 +77,7 @@ export async function handleApprovalDecision(
   }
 
   log.info(`approval ${approvalId} resolved decision=${decision} device=${deviceId || "(none)"}`);
-  return json(200, { ok: true, approvalId: approvalId.trim(), decision });
+  const response = { ok: true, approvalId: approvalId.trim(), decision };
+  store.completeCommandReceipt("approval", approvalId, receiptPayload, response);
+  return json(200, response);
 }

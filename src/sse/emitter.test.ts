@@ -5,6 +5,7 @@ import path from "node:path";
 import { EventEmitter } from "node:events";
 import { sseEmitter } from "./emitter.js";
 import { fridaySseOfflineQueue, setOfflineQueueBaseDirForTest } from "./offline-queue.js";
+import { getRuntimeV3Store, setRuntimeV3RootForTest } from "../runtime-v3/runtime-store.js";
 
 class MockRes extends EventEmitter {
   writes: string[] = [];
@@ -27,6 +28,7 @@ describe("sseEmitter", () => {
   });
 
   afterEach(() => {
+    setRuntimeV3RootForTest(null);
     setOfflineQueueBaseDirForTest(null);
     try {
       fs.rmSync(tmp, { recursive: true, force: true });
@@ -158,5 +160,33 @@ describe("sseEmitter", () => {
     expect(fridaySseOfflineQueue.readAfter("device-a-talk", 0)).toEqual([]);
     sseEmitter.removeConnection("device-a-talk");
     sseEmitter.removeConnection("device-b-talk");
+  });
+
+  it("mirrors the same core source event only once", () => {
+    setRuntimeV3RootForTest(path.join(tmp, "runtime-v3"));
+    const store = getRuntimeV3Store();
+    const run = store.acceptCommand({
+      clientRequestId: "request-dedup",
+      deviceId: "DEVICE-DEDUP",
+      sessionKey: "agent:operator:dedup",
+      agentId: "operator",
+      text: "hello",
+      attachments: [],
+    }).run!;
+    const source = {
+      type: "agent" as const,
+      data: {
+        runId: run.runId,
+        seq: 7,
+        stream: "assistant",
+        data: { text: "same source callback" },
+      },
+    };
+
+    sseEmitter.broadcastToRun(run.runId, source);
+    sseEmitter.broadcastToRun(run.runId, source);
+
+    expect(store.eventsForRun(run.runId)).toHaveLength(1);
+    expect(store.run(run.runId)?.lastRunSeq).toBe(1);
   });
 });

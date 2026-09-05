@@ -4,7 +4,7 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import os from "node:os";
 import path from "node:path";
 import { PassThrough } from "node:stream";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   __resetMockFridayDispatchForTests,
   __setMockFridayDispatchForTests,
@@ -24,6 +24,10 @@ import {
   resetFridayAgentForwardRuntimeForTest,
   setFridayAgentForwardRuntime,
 } from "../../agent-forward-runtime.js";
+import {
+  observeAgentEventForActiveRuns,
+  resetActiveRunsForTest,
+} from "../../agent/active-runs.js";
 
 class MockRes extends EventEmitter {
   statusCode = 0;
@@ -80,6 +84,8 @@ function postJSONRequest(url: string, body: Record<string, unknown>): IncomingMe
 }
 
 afterEach(() => {
+  sseEmitter.resetForTest();
+  resetActiveRunsForTest();
   __resetMockFridayDispatchForTests();
   __setDetachedWebhookWorkImporterForTests(null);
   setRuntimeV3RootForTest(null);
@@ -275,6 +281,99 @@ describe("runtime protocol v3", () => {
     expect(dispatchCount).toBe(1);
   });
 
+  it("keeps a Friday command queued while another client is running the same session", async () => {
+    configure();
+    let dispatchCount = 0;
+    __setMockFridayDispatchForTests(async () => {
+      dispatchCount += 1;
+    });
+    const sessionKey = "agent:main:shared-session";
+    observeAgentEventForActiveRuns({
+      stream: "lifecycle",
+      runId: "external-webchat-run",
+      sessionKey,
+      data: { phase: "start" },
+    });
+
+    const response = await postMessage({
+      deviceId: "phone-1",
+      clientRequestId: "queued-behind-external-run",
+      text: "run after webchat",
+      sessionKey,
+    });
+    const runId = String((JSON.parse(response.body) as Record<string, unknown>).runId);
+    await new Promise<void>((resolve) => setTimeout(resolve, 30));
+
+    expect(response.statusCode).toBe(202);
+    expect(dispatchCount).toBe(0);
+    expect(getRuntimeV3Store().run(runId)?.phase).toBe("queued");
+
+    observeAgentEventForActiveRuns({
+      stream: "lifecycle",
+      runId: "external-webchat-run",
+      sessionKey,
+      data: { phase: "end" },
+    });
+    await vi.waitFor(() => expect(dispatchCount).toBe(1));
+    expect(getRuntimeV3Store().run(runId)?.phase).toBe("completed");
+  });
+
+  it("serializes commands within one session through the detached dispatch boundary", async () => {
+    configure();
+    const dispatchedBodies: string[] = [];
+    const releases: Array<() => void> = [];
+    __setMockFridayDispatchForTests(async (args: unknown) => {
+      const body = String((args as { ctx?: { Body?: unknown } }).ctx?.Body ?? "");
+      dispatchedBodies.push(body);
+      await new Promise<void>((resolve) => releases.push(resolve));
+    });
+    const base = {
+      deviceId: "phone-1",
+      sessionKey: "agent:main:serial-session",
+    };
+
+    await postMessage({ ...base, clientRequestId: "serial-1", text: "first" });
+    await postMessage({ ...base, clientRequestId: "serial-2", text: "second" });
+    await vi.waitFor(() => expect(dispatchedBodies).toEqual(["first"]));
+
+    releases.shift()?.();
+    await vi.waitFor(() => expect(dispatchedBodies).toEqual(["first", "second"]));
+    releases.shift()?.();
+    await vi.waitFor(() => {
+      expect(getRuntimeV3Store().unfinishedRuns("phone-1")).toHaveLength(0);
+    });
+  });
+
+  it("dispatches different sessions concurrently", async () => {
+    configure();
+    const dispatchedBodies: string[] = [];
+    const releases: Array<() => void> = [];
+    __setMockFridayDispatchForTests(async (args: unknown) => {
+      const body = String((args as { ctx?: { Body?: unknown } }).ctx?.Body ?? "");
+      dispatchedBodies.push(body);
+      await new Promise<void>((resolve) => releases.push(resolve));
+    });
+
+    await postMessage({
+      deviceId: "phone-1",
+      clientRequestId: "parallel-1",
+      text: "one",
+      sessionKey: "agent:main:parallel-one",
+    });
+    await postMessage({
+      deviceId: "phone-1",
+      clientRequestId: "parallel-2",
+      text: "two",
+      sessionKey: "agent:main:parallel-two",
+    });
+    await vi.waitFor(() => expect(new Set(dispatchedBodies)).toEqual(new Set(["one", "two"])));
+
+    for (const release of releases.splice(0)) release();
+    await vi.waitFor(() => {
+      expect(getRuntimeV3Store().unfinishedRuns("phone-1")).toHaveLength(0);
+    });
+  });
+
   it("syncs durable events and advances acknowledgement monotonically", async () => {
     configure();
     const store = getRuntimeV3Store();
@@ -310,6 +409,56 @@ describe("runtime protocol v3", () => {
       ackRes as unknown as ServerResponse,
     );
     expect(JSON.parse(ackRes.body)).toMatchObject({ ok: true, acknowledgedEventId: 2 });
+  });
+
+  it("reports a compacted journal gap while the session snapshot retains every run segment", async () => {
+    configure();
+    const store = getRuntimeV3Store();
+    const sessionKey = "agent:main:compacted";
+    const run = store.acceptCommand({
+      clientRequestId: "request-compacted",
+      deviceId: "PHONE-1",
+      sessionKey,
+      agentId: "main",
+      text: "hello",
+      attachments: [],
+    }).run!;
+    store.appendRunEvent(run.runId, "run.started", {});
+    store.appendRunEvent(run.runId, "assistant.delta", { text: "hello" });
+    store.appendRunEvent(run.runId, "run.completed", {});
+    store.acknowledge("PHONE-1", 3);
+
+    const syncReq = {
+      method: "GET",
+      url: "/friday-next/v3/sync?deviceId=PHONE-1&afterEventId=0",
+      headers: { authorization: "Bearer tok" },
+    } as IncomingMessage;
+    const syncRes = new MockRes();
+    await handleRuntimeV3Sync(syncReq, syncRes as unknown as ServerResponse);
+    expect(JSON.parse(syncRes.body)).toMatchObject({
+      floorEventId: 4,
+      headEventId: 3,
+      gapDetected: true,
+      hasMore: false,
+      events: [],
+    });
+
+    const snapshotReq = {
+      method: "GET",
+      url: `/friday-next/v3/sessions/${encodeURIComponent(sessionKey)}/snapshot`,
+      headers: { authorization: "Bearer tok" },
+    } as IncomingMessage;
+    const snapshotRes = new MockRes();
+    await handleRuntimeV3SessionSnapshot(
+      snapshotReq,
+      snapshotRes as unknown as ServerResponse,
+      sessionKey,
+    );
+    expect(
+      (JSON.parse(snapshotRes.body) as { segments: Array<{ eventType: string }> }).segments.map(
+        (event) => event.eventType,
+      ),
+    ).toEqual(["run.started", "assistant.delta", "run.completed"]);
   });
 
   it("mirrors existing agent, tool and subagent SSE frames into the durable run journal", () => {
@@ -352,6 +501,49 @@ describe("runtime protocol v3", () => {
     expect(store.eventsAfter(run.deviceId, 0)[0]?.payload).toMatchObject({
       _sourceEventType: "agent",
       _sourceEventData: { runId: run.runId, sessionKey: run.sessionKey },
+    });
+  });
+
+  it("durably coalesces consecutive high-frequency deltas before a tool boundary", () => {
+    configure();
+    const store = getRuntimeV3Store();
+    const run = store.acceptCommand({
+      clientRequestId: "request-delta-batch",
+      deviceId: "PHONE-1",
+      sessionKey: "agent:main:delta-batch",
+      agentId: "main",
+      text: "hello",
+      attachments: [],
+    }).run!;
+    sseEmitter.trackDeviceForRun(run.deviceId, run.runId);
+
+    for (const text of ["first", "second"]) {
+      sseEmitter.broadcastToRun(run.runId, {
+        type: "agent",
+        data: {
+          deviceId: run.deviceId,
+          sessionKey: run.sessionKey,
+          runId: run.runId,
+          stream: "assistant",
+          data: { phase: "delta", text },
+        },
+      });
+    }
+    sseEmitter.broadcastToolEvent(run.deviceId, run.runId, {
+      type: "tool-hook",
+      data: { runId: run.runId, phase: "start", toolName: "exec" },
+    });
+
+    const events = store.eventsAfter(run.deviceId, 0);
+    expect(events.map((event) => event.eventType)).toEqual([
+      "agent.assistant.delta",
+      "tool.start",
+    ]);
+    expect(events[0]?.payload).toMatchObject({
+      _sourceEventBatch: [
+        { type: "agent", data: { data: { text: "first" } } },
+        { type: "agent", data: { data: { text: "second" } } },
+      ],
     });
   });
 });

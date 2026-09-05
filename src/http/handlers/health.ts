@@ -5,6 +5,10 @@ import { loadNodePairingModule } from "../../agent/node-pairing-bridge.js";
 import { createFridayNextLogger } from "../../logging.js";
 import { readOrInitCapsules } from "../../prompt-capsules/capsules-store.js";
 import { PLUGIN_VERSION } from "../../version.js";
+import {
+  FRIDAY_NEXT_PROTOCOL_VERSIONS,
+  FRIDAY_NEXT_RUNTIME_CAPABILITIES,
+} from "../../runtime-v3/capabilities.js";
 
 const REQUIRED_NODE_CAPS = ["location", "canvas"];
 const REQUIRED_NODE_COMMANDS = [
@@ -38,6 +42,8 @@ export interface HealthCheckResult {
   deviceId: string;
   nodeDeviceId: string;
   pluginVersion: string;
+  protocolVersions: readonly number[];
+  capabilities: readonly string[];
   /**
    * Stable identity of **this gateway**, so a client can tell "same gateway, new address"
    * (DHCP moved the LAN IP, a tunnel domain was added) apart from "an entirely different
@@ -84,6 +90,8 @@ export async function handleHealth(req: IncomingMessage, res: ServerResponse): P
     deviceId,
     nodeDeviceId,
     pluginVersion: PLUGIN_VERSION,
+    protocolVersions: FRIDAY_NEXT_PROTOCOL_VERSIONS,
+    capabilities: FRIDAY_NEXT_RUNTIME_CAPABILITIES,
   };
 
   const log = createFridayNextLogger("health");

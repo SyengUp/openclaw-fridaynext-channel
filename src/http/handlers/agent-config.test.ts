@@ -11,6 +11,10 @@ import {
   resetFridayAgentForwardRuntimeForTest,
 } from "../../agent-forward-runtime.js";
 import { setUpgradeRuntime, resetUpgradeRuntimeForTest } from "../../upgrade-runtime.js";
+import {
+  resetOpenClawRootCacheForTest,
+  setOpenClawRootForTest,
+} from "../../skills-discovery.js";
 
 class MockRes extends EventEmitter {
   statusCode = 0;
@@ -72,6 +76,9 @@ describe("handleAgentConfig", () => {
     savedHome = process.env.HOME;
     isolatedHome = fs.mkdtempSync(path.join(os.tmpdir(), "agent-config-home-"));
     process.env.HOME = isolatedHome;
+    // Keep exact availableSkills assertions independent from the host's installed
+    // OpenClaw bundle. Production discovery remains enabled outside these tests.
+    setOpenClawRootForTest(null);
   });
   afterEach(() => {
     if (savedHome === undefined) delete process.env.HOME;
@@ -79,6 +86,7 @@ describe("handleAgentConfig", () => {
     fs.rmSync(isolatedHome, { recursive: true, force: true });
     resetFridayAgentForwardRuntimeForTest();
     resetUpgradeRuntimeForTest();
+    resetOpenClawRootCacheForTest();
   });
 
   it("rejects unsupported methods with 405", async () => {

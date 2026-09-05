@@ -4,11 +4,12 @@
 
 import { randomUUID } from "node:crypto";
 import { sseEmitter } from "../sse/emitter.js";
-import {
-  getLastRegisteredFridayDeviceId,
-  resolveFridayDeviceIdForSessionKey,
-} from "../friday-session.js";
 import { calendarBusyForDevice, waitForCalendarResult } from "../calendar/pending-store.js";
+import {
+  completeDeviceToolRequest,
+  registerDeviceToolRequest,
+  resolveDeviceToolRoute,
+} from "./device-tool-route.js";
 
 export const CALENDAR_LOG_TOOL_NAME = "fridaynext_calendar_log";
 
@@ -75,15 +76,6 @@ function jsonToolResult(payload: unknown): {
     content: [{ type: "text", text: JSON.stringify(payload, null, 2) }],
     details: payload,
   };
-}
-
-function resolveDeviceId(sessionKey: string | undefined): string | null {
-  const sk = sessionKey?.trim() ?? "";
-  if (sk) {
-    const mapped = resolveFridayDeviceIdForSessionKey(sk);
-    if (mapped) return mapped;
-  }
-  return sseEmitter.getSoleConnectedDeviceId() ?? getLastRegisteredFridayDeviceId() ?? null;
 }
 
 type CalendarLogItemWire = {
@@ -158,8 +150,8 @@ export function createCalendarLogTool(ctx: { sessionKey?: string }): {
           },
         });
       }
-      const deviceId = resolveDeviceId(ctx.sessionKey);
-      if (!deviceId) {
+      const route = resolveDeviceToolRoute(ctx.sessionKey);
+      if (!route) {
         return jsonToolResult({
           ok: false,
           error: {
@@ -168,6 +160,7 @@ export function createCalendarLogTool(ctx: { sessionKey?: string }): {
           },
         });
       }
+      const { deviceId } = route;
       if (!sseEmitter.getConnection(deviceId)) {
         return jsonToolResult({
           ok: false,
@@ -188,13 +181,21 @@ export function createCalendarLogTool(ctx: { sessionKey?: string }): {
       }
 
       const requestId = randomUUID();
+      const data: Record<string, unknown> = {
+        requestId,
+        items,
+        sessionKey: route.sessionKey,
+        ...(route.runId ? { runId: route.runId } : {}),
+      };
+      registerDeviceToolRequest(route, "calendar", "fridaynext-calendar-log", requestId, data);
       const waiter = waitForCalendarResult({ requestId, deviceId });
       sseEmitter.broadcast(
-        { type: "fridaynext-calendar-log", data: { requestId, items } },
+        { type: "fridaynext-calendar-log", data },
         deviceId,
         true,
       );
       const outcome = await waiter;
+      completeDeviceToolRequest("calendar", requestId);
       if (outcome.ok) {
         return jsonToolResult(outcome.payload);
       }

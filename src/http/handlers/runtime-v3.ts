@@ -11,6 +11,7 @@ import { normalizeHistoryMessages } from "../../history/normalize-message.js";
 import { readSessionTranscriptRawMessages } from "../../history/read-transcript.js";
 import { resolveHistoryMessageMedia } from "./history-messages.js";
 import { readSessionUsageSnapshotFromStore } from "../../session-usage-store.js";
+import { sseEmitter } from "../../sse/emitter.js";
 
 function json(res: ServerResponse, status: number, body: Record<string, unknown>): boolean {
   res.statusCode = status;
@@ -70,19 +71,22 @@ export async function handleRuntimeV3Events(
   });
 
   const head = store.eventHead(deviceId);
+  const floor = store.eventFloor(deviceId);
   res.write(
     `event: hello\ndata: ${JSON.stringify({
       protocolVersion: 3,
       pluginVersion: PLUGIN_VERSION,
       serverInstanceId: store.serverInstanceId,
       deviceId,
-      floorEventId: head > 0 ? 1 : 0,
+      floorEventId: floor,
       headEventId: head,
       acknowledgedEventId: store.acknowledgedEventId(deviceId),
       unfinishedRuns: store.unfinishedRuns(deviceId),
+      pendingDeviceRequests: store.pendingDeviceRequests(deviceId),
     })}\n\n`,
   );
-  for (const event of store.eventsAfter(deviceId, afterEventId, Number.MAX_SAFE_INTEGER)) {
+  const replayAfter = floor > 0 && afterEventId < floor - 1 ? floor - 1 : afterEventId;
+  for (const event of store.eventsAfter(deviceId, replayAfter, Number.MAX_SAFE_INTEGER)) {
     if (event.eventId <= lastSent) continue;
     lastSent = event.eventId;
     writeRuntimeEvent(res, event);
@@ -145,18 +149,22 @@ export async function handleRuntimeV3Sync(
   const limit = Math.min(5_000, Math.max(1, integerQuery(url, "limit", 1_000)));
   const store = getRuntimeV3Store();
   const headEventId = store.eventHead(deviceId);
-  const events = store.eventsAfter(deviceId, afterEventId, limit);
+  const floorEventId = store.eventFloor(deviceId);
+  const gapDetected = floorEventId > 0 && afterEventId < floorEventId - 1;
+  const effectiveAfterEventId = gapDetected ? floorEventId - 1 : afterEventId;
+  const events = store.eventsAfter(deviceId, effectiveAfterEventId, limit);
   return json(res, 200, {
     ok: true,
     protocolVersion: 3,
     serverInstanceId: store.serverInstanceId,
-    floorEventId: headEventId > 0 ? 1 : 0,
+    floorEventId,
     headEventId,
     acknowledgedEventId: store.acknowledgedEventId(deviceId),
-    gapDetected: false,
-    hasMore: (events.at(-1)?.eventId ?? afterEventId) < headEventId,
+    gapDetected,
+    hasMore: (events.at(-1)?.eventId ?? effectiveAfterEventId) < headEventId,
     events,
     runs: store.runs(deviceId),
+    pendingDeviceRequests: store.pendingDeviceRequests(deviceId),
   });
 }
 
@@ -171,13 +179,7 @@ export async function handleRuntimeV3SessionSnapshot(
   if (!key) return json(res, 400, { error: "Missing session key" });
   const store = getRuntimeV3Store();
   const runs = store.runs().filter((run) => run.sessionKey === key);
-  const events = runs.flatMap((run) =>
-    store
-      .eventsAfter(run.deviceId, 0, Number.MAX_SAFE_INTEGER)
-      .filter((event) => event.sessionKey === key),
-  );
-  const dedupedEvents = [...new Map(events.map((event) => [`${event.runId}:${event.runSeq}`, event])).values()]
-    .sort((a, b) => a.occurredAt - b.occurredAt || a.runSeq - b.runSeq);
+  const dedupedEvents = store.eventsForSession(key);
   const transcript = normalizeHistoryMessages(
     readSessionTranscriptRawMessages(key, Number.MAX_SAFE_INTEGER),
   );
@@ -200,6 +202,9 @@ export async function handleRuntimeV3SessionSnapshot(
     runs,
     transcript,
     segments: dedupedEvents,
+    pendingDeviceRequests: store
+      .pendingDeviceRequests()
+      .filter((request) => request.sessionKey === key),
     ...(sessionUsage ? { sessionUsage } : {}),
   });
 }
@@ -218,6 +223,7 @@ export async function handleRuntimeV3Cancel(
     return json(res, 200, { ok: true, runId, phase: run.phase, replayed: true });
   }
   if (run.phase === "queued") {
+    sseEmitter.flushRuntimeV3Run(runId);
     const event = store.appendRunEvent(runId, "run.cancelled", { reason: "cancelled before dispatch" });
     return json(res, 200, { ok: true, runId, phase: "cancelled", eventId: event.eventId });
   }
@@ -225,6 +231,7 @@ export async function handleRuntimeV3Cancel(
   store.transition(runId, "cancelPending");
   markUserAbort(run.sessionKey);
   const result = await abortRunForSessionKey(run.sessionKey);
+  sseEmitter.flushRuntimeV3Run(runId);
   const event = store.appendRunEvent(runId, "run.cancelled", {
     reason: "user",
     aborted: result.aborted,

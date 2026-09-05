@@ -7,13 +7,14 @@
 import { randomUUID } from "node:crypto";
 import { sseEmitter } from "../sse/emitter.js";
 import {
-  getLastRegisteredFridayDeviceId,
-  resolveFridayDeviceIdForSessionKey,
-} from "../friday-session.js";
-import {
   locationQueryBusyForDevice,
   waitForLocationQueryResult,
 } from "../location/pending-store.js";
+import {
+  completeDeviceToolRequest,
+  registerDeviceToolRequest,
+  resolveDeviceToolRoute,
+} from "./device-tool-route.js";
 
 export const LOCATION_QUERY_TOOL_NAME = "fridaynext_location_query";
 
@@ -36,15 +37,6 @@ function jsonToolResult(payload: unknown): {
   };
 }
 
-function resolveDeviceId(sessionKey: string | undefined): string | null {
-  const sk = sessionKey?.trim() ?? "";
-  if (sk) {
-    const mapped = resolveFridayDeviceIdForSessionKey(sk);
-    if (mapped) return mapped;
-  }
-  return sseEmitter.getSoleConnectedDeviceId() ?? getLastRegisteredFridayDeviceId() ?? null;
-}
-
 export function createLocationQueryTool(ctx: { sessionKey?: string }): {
   name: string;
   label: string;
@@ -62,8 +54,8 @@ export function createLocationQueryTool(ctx: { sessionKey?: string }): {
     parameters: LocationQueryParameters,
     async execute(_toolCallId, args) {
       void args;
-      const deviceId = resolveDeviceId(ctx.sessionKey);
-      if (!deviceId) {
+      const route = resolveDeviceToolRoute(ctx.sessionKey);
+      if (!route) {
         return jsonToolResult({
           ok: false,
           error: {
@@ -72,6 +64,7 @@ export function createLocationQueryTool(ctx: { sessionKey?: string }): {
           },
         });
       }
+      const { deviceId } = route;
       if (!sseEmitter.getConnection(deviceId)) {
         return jsonToolResult({
           ok: false,
@@ -92,11 +85,17 @@ export function createLocationQueryTool(ctx: { sessionKey?: string }): {
       }
 
       const requestId = randomUUID();
-      const data: Record<string, unknown> = { requestId };
+      const data: Record<string, unknown> = {
+        requestId,
+        sessionKey: route.sessionKey,
+        ...(route.runId ? { runId: route.runId } : {}),
+      };
 
+      registerDeviceToolRequest(route, "location", "fridaynext-location-query", requestId, data);
       const waiter = waitForLocationQueryResult({ requestId, deviceId });
       sseEmitter.broadcast({ type: "fridaynext-location-query", data }, deviceId, true);
       const outcome = await waiter;
+      completeDeviceToolRequest("location", requestId);
       if (outcome.ok) {
         return jsonToolResult(outcome.payload);
       }

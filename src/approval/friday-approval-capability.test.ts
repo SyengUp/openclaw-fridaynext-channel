@@ -29,14 +29,14 @@ const pluginView = {
   expiresAtMs: 456,
 };
 
-const reqWith = (sessionKey: string) => ({ request: { sessionKey } });
+const reqWith = (sessionKey: string, runId?: string) => ({ request: { sessionKey, runId } });
 
 describe("buildPayload", () => {
   it("maps an exec approval view (command/cwd/host + actions)", () => {
     const p = buildPayload({
       op: "request",
       view: execView,
-      request: reqWith("agent:main:fridaynext:s1"),
+      request: reqWith("agent:main:fridaynext:s1", "run-exact-1"),
       deviceId: "DEV1",
     });
     expect(p.op).toBe("request");
@@ -47,6 +47,7 @@ describe("buildPayload", () => {
     expect(p.host).toBe("sandbox");
     expect(p.actions.map((a) => a.decision)).toEqual(["allow-once", "deny"]);
     expect(p.sessionKey).toBe("agent:main:fridaynext:s1");
+    expect(p.runId).toBe("run-exact-1");
     expect(p.deviceId).toBe("DEV1");
     expect(p.expiresAtMs).toBe(123);
   });
