@@ -5,16 +5,8 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import {
-  handleMessages,
-  composeBodyWithMediaRefs,
-  inboundMediaKindFromMime,
-} from "./messages.js";
-import {
-  clearFileIndexForTest,
-  setAttachmentsDirForTest,
-  storeFile,
-} from "./files.js";
+import { handleMessages, composeBodyWithMediaRefs, inboundMediaKindFromMime } from "./messages.js";
+import { clearFileIndexForTest, setAttachmentsDirForTest, storeFile } from "./files.js";
 import { clearFridayNextRuntime, setFridayNextRuntime } from "../../runtime.js";
 import {
   __resetMockFridayDispatchForTests,
@@ -360,9 +352,7 @@ describe("handleMessages inbound media facts", () => {
     ]);
     // LEGACY-COMPAT: older cores keep hydrating via the MediaUrl(s) projection + body markers.
     expect(ctx!.MediaUrls).toEqual([channelUrl]);
-    expect(ctx!.BodyForAgent).toBe(
-      `看图\n\n[media attached: ${`file://${savedInboundPath}`}]`,
-    );
+    expect(ctx!.BodyForAgent).toBe(`看图\n\n[media attached: ${`file://${savedInboundPath}`}]`);
   });
 
   it("emits no media facts when the attachment id cannot be resolved", async () => {

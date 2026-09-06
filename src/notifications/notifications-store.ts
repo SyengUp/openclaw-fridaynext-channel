@@ -264,7 +264,10 @@ export class FridayNotificationsStore {
     if (all.length <= keep) return;
     fs.writeFileSync(
       file,
-      all.slice(-keep).map((e) => JSON.stringify(e) + "\n").join(""),
+      all
+        .slice(-keep)
+        .map((e) => JSON.stringify(e) + "\n")
+        .join(""),
       "utf8",
     );
   }

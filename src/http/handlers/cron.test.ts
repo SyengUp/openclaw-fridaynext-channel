@@ -352,18 +352,28 @@ describe("handleCronJobs — update", () => {
     ["announce without to", { mode: "announce", channel: "telegram" }],
     ["not an object", "none"],
   ])("rejects an invalid delivery patch (%s) with a 400", async (_label, delivery) => {
-    const { captured } = await invoke(handleCronJobs, "PATCH", "/friday-next-admin/cron/jobs?id=j1", {
-      delivery,
-    });
+    const { captured } = await invoke(
+      handleCronJobs,
+      "PATCH",
+      "/friday-next-admin/cron/jobs?id=j1",
+      {
+        delivery,
+      },
+    );
     expect(captured.statusCode).toBe(400);
     expect(dispatchGatewayMethod).not.toHaveBeenCalled();
   });
 
   it("refuses a body carrying both delivery and deviceId", async () => {
-    const { captured } = await invoke(handleCronJobs, "PATCH", "/friday-next-admin/cron/jobs?id=j1", {
-      deviceId: "DEVICE-2",
-      delivery: { mode: "none" },
-    });
+    const { captured } = await invoke(
+      handleCronJobs,
+      "PATCH",
+      "/friday-next-admin/cron/jobs?id=j1",
+      {
+        deviceId: "DEVICE-2",
+        delivery: { mode: "none" },
+      },
+    );
     expect(captured.statusCode).toBe(400);
     expect(dispatchGatewayMethod).not.toHaveBeenCalled();
   });

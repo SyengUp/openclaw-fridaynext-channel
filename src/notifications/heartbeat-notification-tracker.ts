@@ -32,10 +32,7 @@ let originAgentId: string | null = null;
 /** Record a heartbeat run starting (from `before_agent_run` with `trigger === "heartbeat"`).
  *  `agentId` is the run's origin agent (extracted from `ctx.sessionKey`) so the outbound capture
  *  can attribute the push to it instead of the delivery-routing session's agent. */
-export function noteHeartbeatActivity(
-  nowMs: number = Date.now(),
-  agentId?: string | null,
-): void {
+export function noteHeartbeatActivity(nowMs: number = Date.now(), agentId?: string | null): void {
   atMs = nowMs;
   originAgentId = agentId?.trim() || null;
 }

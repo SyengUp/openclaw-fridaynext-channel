@@ -33,9 +33,7 @@ export async function handleCancel(req: IncomingMessage, res: ServerResponse): P
     res.end(JSON.stringify({ error: "Missing sessionKey or runId" }));
     return true;
   }
-  const result = sessionKey
-    ? await abortRunForSessionKey(sessionKey)
-    : { aborted: false };
+  const result = sessionKey ? await abortRunForSessionKey(sessionKey) : { aborted: false };
   // Record the user stop so abort-induced error deliveries are suppressed for a short window
   // (the aborted run's own failover, or a generic failure on the immediate next turn).
   if (sessionKey) markUserAbort(sessionKey);

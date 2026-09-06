@@ -40,6 +40,7 @@ export function resolveBackgroundPushKind(deviceId?: string): {
       agentId: recentCronAgentId(nowMs, deviceId),
     };
   }
-  if (hbAt != null) return { kind: "heartbeat", cron: null, agentId: recentHeartbeatAgentId(nowMs) };
+  if (hbAt != null)
+    return { kind: "heartbeat", cron: null, agentId: recentHeartbeatAgentId(nowMs) };
   return { kind: null, cron: null, agentId: null };
 }

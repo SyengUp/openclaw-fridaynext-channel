@@ -159,11 +159,13 @@ describe("handleHealthQueryResult", () => {
     const req = mockReq("POST", { authorization: "Bearer test-token" });
     const res = new MockRes() as unknown as ServerResponse;
     const pending = handleHealthQueryResult(req as unknown as IncomingMessage, res);
-    req.end(JSON.stringify({
-      requestId: "r-after-restart",
-      ok: true,
-      payload: { metrics: { steps: { total: 12 } } },
-    }));
+    req.end(
+      JSON.stringify({
+        requestId: "r-after-restart",
+        ok: true,
+        payload: { metrics: { steps: { total: 12 } } },
+      }),
+    );
     await pending;
 
     expect((res as unknown as MockRes).statusCode).toBe(200);

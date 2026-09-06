@@ -9,9 +9,9 @@ import {
 
 describe("agentRosterKind", () => {
   it("prefers entries when the key is present", () => {
-    expect(
-      agentRosterKind({ agents: { entries: { main: {} }, list: [{ id: "stale" }] } }),
-    ).toBe("entries");
+    expect(agentRosterKind({ agents: { entries: { main: {} }, list: [{ id: "stale" }] } })).toBe(
+      "entries",
+    );
   });
 
   it("COMPAT(openclaw<2026.8.1): reads list on a legacy roster", () => {

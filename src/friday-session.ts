@@ -282,11 +282,7 @@ function replayWatermarkForDevice(deviceId: string): Map<string, number> {
 }
 
 /** Record that `deviceId` already received `runId` up to inner seq `seq`. */
-function noteReplayWatermark(
-  deviceId: string,
-  runId: string,
-  seq: number | undefined,
-): void {
+function noteReplayWatermark(deviceId: string, runId: string, seq: number | undefined): void {
   const did = deviceId.trim().toUpperCase();
   const rid = (runId ?? "").trim();
   if (!did || !rid || typeof seq !== "number" || !Number.isFinite(seq)) return;

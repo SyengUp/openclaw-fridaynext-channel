@@ -67,7 +67,9 @@ export function resolveTalkConsultSessionKey(
   stored: string | undefined,
   requested: string | undefined,
 ): string {
-  return optionalNonEmptyString(requested) ?? optionalNonEmptyString(stored) ?? FALLBACK_SESSION_KEY;
+  return (
+    optionalNonEmptyString(requested) ?? optionalNonEmptyString(stored) ?? FALLBACK_SESSION_KEY
+  );
 }
 
 export async function defaultTalkConsultDispatch(
@@ -232,7 +234,11 @@ export async function completeTalkRelayToolCall(
   const callId = optionalNonEmptyString(request.callId);
   const name = optionalNonEmptyString(request.name);
   if (!sessionId || !callId || !name) {
-    return { ok: false, error: "talk.session.toolCall requires sessionId, callId, and name", code: "INVALID_REQUEST" };
+    return {
+      ok: false,
+      error: "talk.session.toolCall requires sessionId, callId, and name",
+      code: "INVALID_REQUEST",
+    };
   }
 
   const sessionKey = resolveTalkConsultSessionKey(undefined, request.sessionKey);
@@ -256,9 +262,7 @@ export async function completeTalkRelayToolCall(
       callId,
       steered.ok ? steered.payload : { error: steered.error ?? "talk.session.steer failed" },
     );
-    return steered.ok
-      ? { ok: true }
-      : { ok: false, error: steered.error, code: steered.code };
+    return steered.ok ? { ok: true } : { ok: false, error: steered.error, code: steered.code };
   }
 
   if (name !== REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME) {
@@ -269,7 +273,9 @@ export async function completeTalkRelayToolCall(
   }
 
   if (request.forced) {
-    await submitToolResult(dispatch, sessionId, callId, WORKING_CONSULT_RESULT, { willContinue: true });
+    await submitToolResult(dispatch, sessionId, callId, WORKING_CONSULT_RESULT, {
+      willContinue: true,
+    });
   }
 
   const started = await dispatch("talk.client.toolCall", {
@@ -328,7 +334,12 @@ export async function completeTalkRelayToolCall(
     return { ok: false, runId, error: message, code: waited.code };
   }
 
-  await submitToolResult(dispatch, sessionId, callId, speakableConsultResult("OpenClaw finished with no text."));
+  await submitToolResult(
+    dispatch,
+    sessionId,
+    callId,
+    speakableConsultResult("OpenClaw finished with no text."),
+  );
   logger.info(`consult complete session=${sessionId} runId=${runId} chars=0`);
   return { ok: true, runId };
 }

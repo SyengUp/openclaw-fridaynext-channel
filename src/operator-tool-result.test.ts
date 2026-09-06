@@ -32,7 +32,9 @@ describe("isOperatorToolResultEnvelope", () => {
 
   it("does NOT match a normal reply that only quotes one signal", () => {
     // method header alone (someone discussing openclaw) — no advisory line
-    expect(isOperatorToolResultEnvelope("You can call (gateway.restart) from the CLI.")).toBe(false);
+    expect(isOperatorToolResultEnvelope("You can call (gateway.restart) from the CLI.")).toBe(
+      false,
+    );
     // advisory phrase alone in prose — no parenthesised method header
     expect(
       isOperatorToolResultEnvelope("Reason: because I said so. Here's my recommended follow-up."),

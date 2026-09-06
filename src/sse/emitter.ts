@@ -180,7 +180,10 @@ class SseEmitterRegistry {
         if (typeof type !== "string" || !data || typeof data !== "object" || Array.isArray(data)) {
           continue;
         }
-        const key = this.runtimeSourceKey({ type: type as SseEventType, data: data as Record<string, unknown> });
+        const key = this.runtimeSourceKey({
+          type: type as SseEventType,
+          data: data as Record<string, unknown>,
+        });
         if (key) keys.add(key);
       }
     }
@@ -303,14 +306,17 @@ class SseEmitterRegistry {
     }
     // 现场 assistant 带 delta 字段却没有 phase，被映射为 .update；不能只看事件名后缀。
     // 仅合并可追加的文本更新及明确隐藏的候选进度，工具和生命周期仍作为顺序屏障。
-    const textUpdate = event.type === "agent"
-      && ["assistant", "thinking", "reasoning"].includes(stream)
-      && (nestedPhase === "" || nestedPhase === "update" || nestedPhase === "delta")
-      && typeof dataRecord?.delta === "string";
-    const hiddenCandidateUpdate = event.type === "agent"
-      && stream === "item" && nestedPhase === "update"
-      && dataRecord?.hideFromChannelProgress === true
-      && dataRecord?.kind === "answer_candidate";
+    const textUpdate =
+      event.type === "agent" &&
+      ["assistant", "thinking", "reasoning"].includes(stream) &&
+      (nestedPhase === "" || nestedPhase === "update" || nestedPhase === "delta") &&
+      typeof dataRecord?.delta === "string";
+    const hiddenCandidateUpdate =
+      event.type === "agent" &&
+      stream === "item" &&
+      nestedPhase === "update" &&
+      dataRecord?.hideFromChannelProgress === true &&
+      dataRecord?.kind === "answer_candidate";
     if (eventType.endsWith(".delta") || textUpdate || hiddenCandidateUpdate) {
       this.enqueueRuntimeDelta(store, runId, eventType, event);
       return;

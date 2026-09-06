@@ -16,25 +16,14 @@
 import { execFile, execFileSync, spawn, type ChildProcess } from "node:child_process";
 import { createSocket } from "node:dgram";
 import { request as httpsRequest } from "node:https";
-import {
-  existsSync,
-  writeFileSync,
-  readFileSync,
-  chmodSync,
-  rmSync,
-  renameSync,
-} from "node:fs";
+import { existsSync, writeFileSync, readFileSync, chmodSync, rmSync, renameSync } from "node:fs";
 import { promisify } from "node:util";
 import { createHash, createPublicKey, X509Certificate } from "node:crypto";
 import { homedir, platform, arch, networkInterfaces } from "node:os";
 import { join } from "node:path";
 import type { Server } from "node:http";
 import { startFilterProxy, stopFilterProxy } from "./filter-proxy.js";
-import {
-  createCsrPem,
-  createSelfSignedCertPem,
-  generateRsaKeyPairPem,
-} from "./cert-selfsign.js";
+import { createCsrPem, createSelfSignedCertPem, generateRsaKeyPairPem } from "./cert-selfsign.js";
 import { verifySession } from "../attest/attest-store.js";
 import { resolveFridayNextConfig } from "../config.js";
 import { getHostOpenClawConfigSnapshot } from "../host-config.js";
@@ -60,7 +49,7 @@ export function expectedFrpcArchiveSHA256(base: string): string | null {
 
 /** Archive file name for a platform base — Windows releases are .zip, everything else .tar.gz. */
 export function frpcArchiveFileName(base: string): string {
-  return `${base}.${base.includes("_windows_") ? "zip" : "tar.gz"}`
+  return `${base}.${base.includes("_windows_") ? "zip" : "tar.gz"}`;
 }
 
 export function frpcDownloadSources(controlPlaneUrl: string, base: string): string[] {
@@ -310,7 +299,8 @@ function frpcPath(): string {
  * `lanUrl` bricks pairing outright: `PairingVoucherClaim` tries ONLY the LAN address, so the
  * voucher exchange dies and the user reads it as "can't connect".
  */
-const VIRTUAL_IFACE_NAME = /^(docker|br-|bridge|virbr|veth|vmenet|vnic|utun|tun|tap|tailscale|zt|wg|anpi|llw|awdl|feth)/i;
+const VIRTUAL_IFACE_NAME =
+  /^(docker|br-|bridge|virbr|veth|vmenet|vnic|utun|tun|tap|tailscale|zt|wg|anpi|llw|awdl|feth)/i;
 
 /**
  * Pick the LAN IP from an interface enumeration, skipping virtual adapters. Pure — exported
@@ -393,8 +383,7 @@ async function ensureBinary(controlPlaneUrl: string, log: Logger): Promise<void>
   }
   if (existsSync(p) && installed === FRP_VERSION) return;
   ensureDir();
-  const plat =
-    platform() === "darwin" ? "darwin" : platform() === "win32" ? "windows" : "linux";
+  const plat = platform() === "darwin" ? "darwin" : platform() === "win32" ? "windows" : "linux";
   const a = arch() === "arm64" ? "arm64" : "amd64";
   const base = `frp_${FRP_VERSION}_${plat}_${a}`;
   const binName = plat === "windows" ? "frpc.exe" : "frpc";
@@ -450,9 +439,13 @@ async function ensureBinary(controlPlaneUrl: string, log: Logger): Promise<void>
       { timeout: 60_000 },
     );
   } else {
-    execFileSync("tar", ["xzf", tgz, "-C", DATA_DIR, "--strip-components=1", `${base}/${binName}`], {
-      timeout: 60_000,
-    });
+    execFileSync(
+      "tar",
+      ["xzf", tgz, "-C", DATA_DIR, "--strip-components=1", `${base}/${binName}`],
+      {
+        timeout: 60_000,
+      },
+    );
   }
   if (platform() !== "win32") chmodSync(p, 0o755);
   writeFileSync(frpcVersionPath(), FRP_VERSION);
@@ -517,14 +510,24 @@ function firstCertPem(pem: string): string {
 /** Leaf SHA-256 fingerprint of a PEM cert/fullchain (lowercase hex, no colons). */
 function leafFingerprint(crtPath: string): string {
   // X509Certificate.fingerprint256 is the same digest as `openssl x509 -fingerprint -sha256`.
-  return new X509Certificate(firstCertPem(readFileSync(crtPath, "utf8")))
-    .fingerprint256.replace(/:/g, "")
+  return new X509Certificate(firstCertPem(readFileSync(crtPath, "utf8"))).fingerprint256
+    .replace(/:/g, "")
     .toLowerCase();
 }
 
 const X509_VALID_TO_MONTHS: Record<string, number> = {
-  Jan: 0, Feb: 1, Mar: 2, Apr: 3, May: 4, Jun: 5,
-  Jul: 6, Aug: 7, Sep: 8, Oct: 9, Nov: 10, Dec: 11,
+  Jan: 0,
+  Feb: 1,
+  Mar: 2,
+  Apr: 3,
+  May: 4,
+  Jun: 5,
+  Jul: 6,
+  Aug: 7,
+  Sep: 8,
+  Oct: 9,
+  Nov: 10,
+  Dec: 11,
 };
 
 /** Parse X509Certificate.validTo ("Aug 26 03:14:52 2036 GMT") without relying on Date's
@@ -596,12 +599,7 @@ async function ensureRealCert(
     const keyHash = createHash("sha256")
       .update(cfg.authToken || "")
       .digest("hex");
-    const fullchain = await requestSignedCert(
-      cfg.certSignUrl,
-      cfg.relayToken,
-      keyHash,
-      csrPem,
-    );
+    const fullchain = await requestSignedCert(cfg.certSignUrl, cfg.relayToken, keyHash, csrPem);
     writeFileSync(crt, fullchain);
     log(`obtained Let's Encrypt cert for ${cn}`);
     return { crt, key, fingerprint: leafFingerprint(crt) };
@@ -1082,7 +1080,7 @@ function scheduleBringUpRetry(cfg: PublicAccessConfig, log: Logger): void {
     tunnelTransition = tunnelTransition
       .catch(() => undefined)
       .then(async () => {
-        if (stopped || baseTunnel) return;   // 排到队时世界可能已经变了
+        if (stopped || baseTunnel) return; // 排到队时世界可能已经变了
         await startPublicAccess(cfg, log);
       });
   }, 30_000);
@@ -1207,7 +1205,8 @@ export async function startPublicAccess(
   log: Logger,
 ): Promise<PairingInfo | null> {
   let cfg = rawCfg;
-  if (!cfg.enabled) {    // Hidden operator hard stop. Normal unentitled users never enter this branch: they stay in
+  if (!cfg.enabled) {
+    // Hidden operator hard stop. Normal unentitled users never enter this branch: they stay in
     // standby with zero proxies. Reap a prior-process frpc as well so zero-egress is literal.
     const wasRunning = child != null || filterServer != null || cachedPairing != null;
     stopPublicAccess();
@@ -1387,7 +1386,7 @@ export function normalizedServedSubdomains(desired: string[]): string[] {
 function startGatewaySubdomainPoll(cfg: PublicAccessConfig, log: Logger): void {
   if (subdomainPollTimer) return;
   const generation = standbyLoop.begin();
-  if (generation === null) return;   // 已有活循环（可能正挂在 25s 长轮询上）
+  if (generation === null) return; // 已有活循环（可能正挂在 25s 长轮询上）
   const gatewayKey = createHash("sha256")
     .update(cfg.authToken || "")
     .digest("hex");
@@ -1491,7 +1490,7 @@ export function stopPublicAccess(): void {
     clearTimeout(subdomainPollTimer);
     subdomainPollTimer = null;
   }
-  standbyLoop.invalidate();   // 在途的长轮询醒来即退场，不会与随后 start 的新循环并存
+  standbyLoop.invalidate(); // 在途的长轮询醒来即退场，不会与随后 start 的新循环并存
   standbyRevision = "";
   tunnelTransition = Promise.resolve();
   baseTunnel = null;

@@ -60,7 +60,10 @@ function readString(value: unknown): string | undefined {
 function addConfiguredModelEntry(
   modelKey: string,
   alias: unknown,
-  providerMeta: Map<string, { name?: string; reasoning?: boolean; contextWindow?: number; maxTokens?: number }>,
+  providerMeta: Map<
+    string,
+    { name?: string; reasoning?: boolean; contextWindow?: number; maxTokens?: number }
+  >,
   seen: Set<string>,
   entries: FridayModelEntry[],
 ): void {
@@ -97,7 +100,13 @@ function resolveConfiguredModels(agentId?: string): ResolvedModels {
 
   if (agentModels) {
     for (const [modelKey, info] of Object.entries(agentModels)) {
-      addConfiguredModelEntry(modelKey, (info as Record<string, unknown> | undefined)?.alias, providerMeta, seen, entries);
+      addConfiguredModelEntry(
+        modelKey,
+        (info as Record<string, unknown> | undefined)?.alias,
+        providerMeta,
+        seen,
+        entries,
+      );
     }
   }
 
@@ -113,7 +122,13 @@ function resolveConfiguredModels(agentId?: string): ResolvedModels {
     const perAgentModels = agent?.models as Record<string, Record<string, unknown>> | undefined;
     if (perAgentModels) {
       for (const [modelKey, info] of Object.entries(perAgentModels)) {
-        addConfiguredModelEntry(modelKey, (info as Record<string, unknown> | undefined)?.alias, providerMeta, seen, entries);
+        addConfiguredModelEntry(
+          modelKey,
+          (info as Record<string, unknown> | undefined)?.alias,
+          providerMeta,
+          seen,
+          entries,
+        );
       }
     }
   }
@@ -130,13 +145,7 @@ function resolveConfiguredModels(agentId?: string): ResolvedModels {
       for (const m of providerModels) {
         const modelId = typeof m.id === "string" ? m.id : typeof m.name === "string" ? m.name : "";
         if (!modelId || !providerId) continue;
-        addConfiguredModelEntry(
-          `${providerId}/${modelId}`,
-          m.name,
-          providerMeta,
-          seen,
-          entries,
-        );
+        addConfiguredModelEntry(`${providerId}/${modelId}`, m.name, providerMeta, seen, entries);
       }
     }
   }
@@ -258,9 +267,13 @@ export function mapCoreModelChoice(choice: CoreModelChoice): FridayModelEntry | 
       .filter((level) => level.id && level.label);
     if (levels.length > 0) entry.thinkingLevels = levels;
   }
-  const thinkingDefault = typeof choice.thinkingDefault === "string" ? choice.thinkingDefault.trim() : "";
+  const thinkingDefault =
+    typeof choice.thinkingDefault === "string" ? choice.thinkingDefault.trim() : "";
   if (thinkingDefault) entry.thinkingDefault = thinkingDefault;
-  const runtime = choice.agentRuntime && typeof choice.agentRuntime.id === "string" ? choice.agentRuntime.id.trim() : "";
+  const runtime =
+    choice.agentRuntime && typeof choice.agentRuntime.id === "string"
+      ? choice.agentRuntime.id.trim()
+      : "";
   if (runtime) entry.runtime = runtime;
   return entry;
 }
@@ -282,7 +295,9 @@ function dedupeModels(models: FridayModelEntry[]): FridayModelEntry[] {
  * Returns undefined when the method is unavailable (old core / plugin-authed
  * scope) or fails, so callers fall back to config parsing.
  */
-export async function fetchCoreModelsList(agentId?: string): Promise<FridayModelEntry[] | undefined> {
+export async function fetchCoreModelsList(
+  agentId?: string,
+): Promise<FridayModelEntry[] | undefined> {
   let response;
   try {
     response = await dispatchGatewayMethod("models.list", agentId ? { agentId } : {});
@@ -299,11 +314,7 @@ export async function fetchCoreModelsList(agentId?: string): Promise<FridayModel
   return dedupeModels(mapped);
 }
 
-function sendJson(
-  res: ServerResponse,
-  status: number,
-  body: Record<string, unknown>,
-): true {
+function sendJson(res: ServerResponse, status: number, body: Record<string, unknown>): true {
   res.statusCode = status;
   res.setHeader("Content-Type", "application/json");
   res.end(JSON.stringify(body));

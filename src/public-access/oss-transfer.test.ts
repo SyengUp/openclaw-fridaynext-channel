@@ -13,7 +13,11 @@ import { decryptAttachment } from "./attachment-crypto.js";
 
 // A tiny fake "control plane + OSS" in one process: POST /v1/oss/sign returns a URL that points
 // back at this same server's /blob/<objectId>; PUT stores ciphertext; GET returns it.
-function startFakeStack(): Promise<{ base: string; close: () => void; blobs: Map<string, Buffer> }> {
+function startFakeStack(): Promise<{
+  base: string;
+  close: () => void;
+  blobs: Map<string, Buffer>;
+}> {
   const blobs = new Map<string, Buffer>();
   const server = http.createServer(async (req, res) => {
     const url = new URL(req.url!, "http://localhost");
@@ -84,7 +88,11 @@ describe("plugin OSS transfer (Phase E5)", () => {
 
   it("uploads encrypted, returns a tunnel ref, and stores only ciphertext", async () => {
     const pt = Buffer.from("outbound image bytes 星期五", "utf8");
-    const ref = await uploadOutboundMedia(cfg, pt, { name: "out.png", mime: "image/png", isImage: true });
+    const ref = await uploadOutboundMedia(cfg, pt, {
+      name: "out.png",
+      mime: "image/png",
+      isImage: true,
+    });
     expect(ref).not.toBeNull();
     expect(isOSSAttachmentRef(ref)).toBe(true);
     expect(ref!.size).toBe(pt.length);
@@ -99,14 +107,25 @@ describe("plugin OSS transfer (Phase E5)", () => {
 
   it("round-trips upload → downloadInbound", async () => {
     const pt = Buffer.from("a".repeat(200_000), "utf8"); // multi-frame
-    const ref = await uploadOutboundMedia(cfg, pt, { name: "big.bin", mime: "application/octet-stream", isImage: false });
+    const ref = await uploadOutboundMedia(cfg, pt, {
+      name: "big.bin",
+      mime: "application/octet-stream",
+      isImage: false,
+    });
     const got = await downloadInboundMedia(cfg, ref!);
     expect(got!.equals(pt)).toBe(true);
   });
 
   it("falls back (null) when the control plane returns 503", async () => {
-    const bad: OSSTransferConfig = { controlPlaneUrl: `${stack.base}/__nope`, authToken: "gw-token" };
-    const ref = await uploadOutboundMedia(bad, Buffer.from("x"), { name: "a", mime: "text/plain", isImage: false });
+    const bad: OSSTransferConfig = {
+      controlPlaneUrl: `${stack.base}/__nope`,
+      authToken: "gw-token",
+    };
+    const ref = await uploadOutboundMedia(bad, Buffer.from("x"), {
+      name: "a",
+      mime: "text/plain",
+      isImage: false,
+    });
     expect(ref).toBeNull();
   });
 
@@ -119,9 +138,13 @@ describe("plugin OSS transfer (Phase E5)", () => {
 
 describe("fnoss URI codec (Phase E wiring bridge)", () => {
   const ref = {
-    oss: 1 as const, objectId: "abc123",
+    oss: 1 as const,
+    objectId: "abc123",
     key: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
-    mime: "image/png", name: "p.png", size: 42, isImage: true,
+    mime: "image/png",
+    name: "p.png",
+    size: 42,
+    isImage: true,
   };
 
   it("round-trips encode → decode", () => {

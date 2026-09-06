@@ -18,9 +18,8 @@ import { resolveModelThinkingForRef } from "../../thinking-levels.js";
 
 function pluginHistoryDir(): string | undefined {
   try {
-    return resolveFridayNextConfig(
-      getHostOpenClawConfigSnapshot(getFridayNextRuntime().config),
-    ).historyDir;
+    return resolveFridayNextConfig(getHostOpenClawConfigSnapshot(getFridayNextRuntime().config))
+      .historyDir;
   } catch {
     return undefined;
   }
@@ -147,9 +146,10 @@ export async function handleSessionsSettings(
   return true;
 }
 
-function parsePermissionModeField(
-  body: Record<string, unknown> | null,
-): { value?: SessionPermissionMode | null; error?: string } {
+function parsePermissionModeField(body: Record<string, unknown> | null): {
+  value?: SessionPermissionMode | null;
+  error?: string;
+} {
   if (!body || !Object.hasOwn(body, "permissionMode")) return {};
   const value = body.permissionMode;
   if (value === null) return { value: null };

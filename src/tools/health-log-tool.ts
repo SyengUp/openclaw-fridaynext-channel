@@ -38,7 +38,10 @@ const HealthLogParameters = {
         properties: {
           metric: { type: "string", enum: [...WRITABLE_METRIC_IDS] },
           value: { type: "number", description: "Non-negative amount in `unit`." },
-          unit: { type: "string", description: "Optional. Examples: mL, L, kcal, kJ, g, kg, lb, %, cm, m, min." },
+          unit: {
+            type: "string",
+            description: "Optional. Examples: mL, L, kcal, kJ, g, kg, lb, %, cm, m, min.",
+          },
           at: { type: "string", description: "Optional ISO-8601 timestamp. Default now." },
         },
       },
@@ -145,11 +148,7 @@ export function createHealthLogTool(ctx: { sessionKey?: string }): {
       };
       registerDeviceToolRequest(route, "health", "fridaynext-health-log", requestId, data);
       const waiter = waitForHealthQueryResult({ requestId, deviceId });
-      sseEmitter.broadcast(
-        { type: "fridaynext-health-log", data },
-        deviceId,
-        true,
-      );
+      sseEmitter.broadcast({ type: "fridaynext-health-log", data }, deviceId, true);
       const outcome = await waiter;
       completeDeviceToolRequest("health", requestId);
       if (outcome.ok) {

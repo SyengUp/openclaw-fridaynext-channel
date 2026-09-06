@@ -146,7 +146,11 @@ async function dispatchTalk(
     });
   }
   if (!response.ok) {
-    return json(res, statusForErrorCode(response.error?.code), errorEnvelope(response, `${method} failed`));
+    return json(
+      res,
+      statusForErrorCode(response.error?.code),
+      errorEnvelope(response, `${method} failed`),
+    );
   }
   const payload = (response.payload ?? {}) as Record<string, unknown>;
   return json(res, 200, { ok: true, ...payload });
@@ -180,7 +184,9 @@ function optionalBoolean(value: unknown): boolean | undefined {
 }
 
 /** Whitelist of `talk.speak` params the app is allowed to forward. */
-function speakParamsFromBody(body: Record<string, unknown>): Record<string, unknown> | { error: string } {
+function speakParamsFromBody(
+  body: Record<string, unknown>,
+): Record<string, unknown> | { error: string } {
   const text = optionalNonEmptyString(body.text);
   if (!text) return { error: "talk.speak requires text" };
 
@@ -378,8 +384,10 @@ async function handleTalkSessionAudio(
   if (!body) return json(res, 400, { ok: false, error: "invalid JSON body" });
   const sessionId = optionalNonEmptyString(body.sessionId);
   const audioBase64 = optionalNonEmptyString(body.audioBase64);
-  if (!sessionId) return json(res, 400, { ok: false, error: "talk.session.appendAudio requires sessionId" });
-  if (!audioBase64) return json(res, 400, { ok: false, error: "talk.session.appendAudio requires audioBase64" });
+  if (!sessionId)
+    return json(res, 400, { ok: false, error: "talk.session.appendAudio requires sessionId" });
+  if (!audioBase64)
+    return json(res, 400, { ok: false, error: "talk.session.appendAudio requires audioBase64" });
 
   const entry = lookupTalkSession(sessionId);
   if (!entry) return json(res, 404, { ok: false, error: "unknown talk session" });
@@ -417,7 +425,8 @@ async function handleTalkSessionToolCall(
   const sessionId = optionalNonEmptyString(body.sessionId);
   const callId = optionalNonEmptyString(body.callId);
   const name = optionalNonEmptyString(body.name);
-  if (!sessionId) return json(res, 400, { ok: false, error: "talk.session.toolCall requires sessionId" });
+  if (!sessionId)
+    return json(res, 400, { ok: false, error: "talk.session.toolCall requires sessionId" });
   if (!callId) return json(res, 400, { ok: false, error: "talk.session.toolCall requires callId" });
   if (!name) return json(res, 400, { ok: false, error: "talk.session.toolCall requires name" });
 
@@ -473,7 +482,8 @@ async function handleTalkSessionCancel(
 ): Promise<true> {
   if (!body) return json(res, 400, { ok: false, error: "invalid JSON body" });
   const sessionId = optionalNonEmptyString(body.sessionId);
-  if (!sessionId) return json(res, 400, { ok: false, error: "talk.session.cancelOutput requires sessionId" });
+  if (!sessionId)
+    return json(res, 400, { ok: false, error: "talk.session.cancelOutput requires sessionId" });
   const entry = lookupTalkSession(sessionId);
   if (!entry) return json(res, 404, { ok: false, error: "unknown talk session" });
   const reason = optionalNonEmptyString(body.reason);
@@ -508,7 +518,8 @@ async function handleTalkSessionClose(
 ): Promise<true> {
   if (!body) return json(res, 400, { ok: false, error: "invalid JSON body" });
   const sessionId = optionalNonEmptyString(body.sessionId);
-  if (!sessionId) return json(res, 400, { ok: false, error: "talk.session.close requires sessionId" });
+  if (!sessionId)
+    return json(res, 400, { ok: false, error: "talk.session.close requires sessionId" });
   const entry = lookupTalkSession(sessionId);
   if (!entry) return json(res, 404, { ok: false, error: "unknown talk session" });
 

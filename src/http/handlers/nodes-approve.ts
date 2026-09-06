@@ -195,7 +195,8 @@ async function approveNodeRoleDevice(
     return false;
   }
 
-  const sameId = (id: unknown) => (typeof id === "string" ? id : "").trim().toUpperCase() === normalizedNodeId;
+  const sameId = (id: unknown) =>
+    (typeof id === "string" ? id : "").trim().toUpperCase() === normalizedNodeId;
   const isNodeRole = (entry: { role?: string; roles?: string[] }) =>
     entry.role === "node" || (entry.roles ?? []).includes("node");
 
@@ -206,7 +207,12 @@ async function approveNodeRoleDevice(
     res.statusCode = 200;
     res.setHeader("Content-Type", "application/json");
     res.end(
-      JSON.stringify({ ok: true, nodeId: normalizedNodeId, alreadyApproved: true, viaDevice: true }),
+      JSON.stringify({
+        ok: true,
+        nodeId: normalizedNodeId,
+        alreadyApproved: true,
+        viaDevice: true,
+      }),
     );
     return true;
   }

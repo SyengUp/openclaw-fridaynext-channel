@@ -10,9 +10,7 @@ describe("absoluteModuleSpecifier", () => {
     const spec = absoluteModuleSpecifier("/opt/homebrew/lib/node_modules/openclaw/dist/chunk.js");
     expect(spec.startsWith("file://")).toBe(true);
     expect(spec.startsWith("/")).toBe(false);
-    expect(spec).toBe(
-      pathToFileURL("/opt/homebrew/lib/node_modules/openclaw/dist/chunk.js").href,
-    );
+    expect(spec).toBe(pathToFileURL("/opt/homebrew/lib/node_modules/openclaw/dist/chunk.js").href);
   });
 });
 

@@ -69,7 +69,9 @@ describe("observeAgentEventForActiveRuns", () => {
 
   it("does not flip hasActiveRun while another run on the same session is live", () => {
     observeAgentEventForActiveRuns(lifecycle("start", "r1", "agent:main:s"));
-    expect(observeAgentEventForActiveRuns(lifecycle("start", "r2", "agent:main:s"))).toBeUndefined();
+    expect(
+      observeAgentEventForActiveRuns(lifecycle("start", "r2", "agent:main:s")),
+    ).toBeUndefined();
     expect(observeAgentEventForActiveRuns(lifecycle("end", "r1"))).toBeUndefined();
     expect(hasActiveSession("agent:main:s")).toBe(true);
     expect(observeAgentEventForActiveRuns(lifecycle("error", "r2"))).toEqual({

@@ -79,8 +79,7 @@ export function readGreetings(): AgentGreetingsFile {
     }
     return {
       version: 1,
-      updatedAt:
-        typeof p.updatedAt === "number" && Number.isFinite(p.updatedAt) ? p.updatedAt : 0,
+      updatedAt: typeof p.updatedAt === "number" && Number.isFinite(p.updatedAt) ? p.updatedAt : 0,
       greetings,
     };
   } catch {
@@ -114,7 +113,9 @@ export function setGreeting(agentId: string, greeting: string): AgentGreetingsFi
   return state;
 }
 
-export type GreetingValidationResult = { ok: true; greeting: string } | { ok: false; error: string };
+export type GreetingValidationResult =
+  | { ok: true; greeting: string }
+  | { ok: false; error: string };
 
 /** Validate + normalize an inbound `greeting` from a PUT body. Empty string clears the override. */
 export function validateGreeting(raw: unknown): GreetingValidationResult {

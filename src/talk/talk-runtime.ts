@@ -22,7 +22,8 @@ let openSession: TalkSdkOpenSession | null = null;
 
 export function setTalkRuntime(runtime: unknown): void {
   const talk = (runtime as { talk?: { openSession?: unknown } } | null | undefined)?.talk;
-  openSession = typeof talk?.openSession === "function" ? (talk.openSession as TalkSdkOpenSession) : null;
+  openSession =
+    typeof talk?.openSession === "function" ? (talk.openSession as TalkSdkOpenSession) : null;
 }
 
 export function getTalkOpenSession(): TalkSdkOpenSession | null {

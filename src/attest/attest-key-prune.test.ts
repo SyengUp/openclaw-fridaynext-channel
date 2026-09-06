@@ -8,12 +8,18 @@ const NOW = 1_000 * DAY;
 
 describe("planAttestKeyPrune", () => {
   it("drops a key that was never asserted and is old enough", () => {
-    const plan = planAttestKeyPrune({ dead: { signCount: 0, createdAt: NOW - 2 * DAY } }, { now: NOW });
+    const plan = planAttestKeyPrune(
+      { dead: { signCount: 0, createdAt: NOW - 2 * DAY } },
+      { now: NOW },
+    );
     expect(plan.dead).toEqual(["dead"]);
   });
 
   it("keeps a freshly attested key whose first assertion may still be in flight", () => {
-    const plan = planAttestKeyPrune({ fresh: { signCount: 0, createdAt: NOW - HOUR } }, { now: NOW });
+    const plan = planAttestKeyPrune(
+      { fresh: { signCount: 0, createdAt: NOW - HOUR } },
+      { now: NOW },
+    );
     expect(plan.drop).toEqual([]);
   });
 
@@ -65,7 +71,8 @@ describe("planAttestKeyPrune", () => {
     const keys: Record<string, { signCount: number; createdAt: number; lastUsedAt?: number }> = {
       live: { signCount: 15, createdAt: NOW - 12 * HOUR, lastUsedAt: NOW - 60_000 },
     };
-    for (let i = 0; i < 37; i++) keys[`dead${i}`] = { signCount: 0, createdAt: NOW - (2 + i) * DAY };
+    for (let i = 0; i < 37; i++)
+      keys[`dead${i}`] = { signCount: 0, createdAt: NOW - (2 + i) * DAY };
 
     const plan = planAttestKeyPrune(keys, { now: NOW, max: 200 });
 

@@ -20,10 +20,7 @@
  * shows the generic label) instead of confidently naming the wrong task.
  */
 
-import {
-  UNKNOWN_CRON_DELIVERY,
-  type CronDeliveryTarget,
-} from "./cron-delivery-target.js";
+import { UNKNOWN_CRON_DELIVERY, type CronDeliveryTarget } from "./cron-delivery-target.js";
 
 type CronRunRecord = {
   jobId: string;

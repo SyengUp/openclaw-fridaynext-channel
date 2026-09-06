@@ -394,11 +394,7 @@ export const fridayNextChannelPlugin = createChatChannelPlugin({
       fridayNotificationsStore.append({
         deviceId,
         ts: Date.now(),
-        sourceSessionKey: backgroundPushSourceSessionKey(
-          bgForMedia.kind,
-          runIdFromCtx,
-          sessionKey,
-        ),
+        sourceSessionKey: backgroundPushSourceSessionKey(bgForMedia.kind, runIdFromCtx, sessionKey),
         text: caption,
         hasMedia: true,
         fallbackKind: bgForMedia.kind ?? (sseEmitter.getConnection(deviceId) ? null : "push"),

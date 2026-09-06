@@ -4,11 +4,7 @@ import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { X509Certificate, createPublicKey, verify as cryptoVerify } from "node:crypto";
-import {
-  createCsrPem,
-  createSelfSignedCertPem,
-  generateRsaKeyPairPem,
-} from "./cert-selfsign.js";
+import { createCsrPem, createSelfSignedCertPem, generateRsaKeyPairPem } from "./cert-selfsign.js";
 
 const hasOpenssl = (() => {
   try {
@@ -30,7 +26,12 @@ describe("cert-selfsign", () => {
   });
 
   it("mints a self-signed cert that parses, self-verifies, and carries CN + SAN", () => {
-    const pem = createSelfSignedCertPem("fn0123456789.na.gw.syengup.host", privateKeyPem, publicKeyPem, 3650);
+    const pem = createSelfSignedCertPem(
+      "fn0123456789.na.gw.syengup.host",
+      privateKeyPem,
+      publicKeyPem,
+      3650,
+    );
     const cert = new X509Certificate(pem);
     expect(cert.subject).toContain("CN=fn0123456789.na.gw.syengup.host");
     expect(cert.issuer).toBe(cert.subject);
@@ -39,9 +40,7 @@ describe("cert-selfsign", () => {
     // SAN present (Go/modern TLS stacks ignore CN without it).
     expect(cert.subjectAltName).toContain("DNS:fn0123456789.na.gw.syengup.host");
     // Roughly 3650 days out.
-    expect(new Date(cert.validTo).getTime()).toBeGreaterThan(
-      Date.now() + 3600 * 24 * 3600 * 1000,
-    );
+    expect(new Date(cert.validTo).getTime()).toBeGreaterThan(Date.now() + 3600 * 24 * 3600 * 1000);
   });
 
   it("tbs signature on the cert verifies with crypto.verify over the raw tbs bytes", () => {

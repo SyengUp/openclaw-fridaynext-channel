@@ -40,8 +40,10 @@ function writeOwner(pid: number, role: string): void {
 
 function ownerFilePid(): number | null {
   try {
-    return (JSON.parse(readFileSync(join(dir, "public-access-owner.json"), "utf8")) as { pid?: number })
-      .pid ?? null;
+    return (
+      (JSON.parse(readFileSync(join(dir, "public-access-owner.json"), "utf8")) as { pid?: number })
+        .pid ?? null
+    );
   } catch {
     return null;
   }

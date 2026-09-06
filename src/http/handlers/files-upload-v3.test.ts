@@ -3,10 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import {
-  IdempotentUploadConflictError,
-  storeIdempotentUpload,
-} from "./files-upload.js";
+import { IdempotentUploadConflictError, storeIdempotentUpload } from "./files-upload.js";
 import { clearFileIndexForTest, setAttachmentsDirForTest } from "./files.js";
 
 const roots: string[] = [];

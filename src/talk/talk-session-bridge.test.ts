@@ -58,7 +58,11 @@ describe("talk-session-bridge", () => {
     installTalkEventBridge(context);
     const connId = mintTalkOwnerConnId("phone-2");
     rememberTalkSession("sess-2", { kind: "dispatch", deviceId: "PHONE-2", connId });
-    context.broadcastToConnIds("talk.event", { type: "ready", relaySessionId: "sess-2" }, new Set([connId]));
+    context.broadcastToConnIds(
+      "talk.event",
+      { type: "ready", relaySessionId: "sess-2" },
+      new Set([connId]),
+    );
     expect(original).toHaveBeenCalledTimes(1);
     context.broadcastToConnIds("agent", { text: "x" }, new Set(["other"]));
     expect(original).toHaveBeenCalledTimes(2);

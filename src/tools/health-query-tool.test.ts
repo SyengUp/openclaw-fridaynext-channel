@@ -77,9 +77,9 @@ describe("createHealthQueryTool", () => {
     };
     expect(data.sessionKey).toBe("agent:main:s1");
     expect(data.runId).toBe(run.runId);
-    expect(resolveHealthQueryResult(data.requestId, { ok: true, payload: { metrics: { steps: 3 } } })).toBe(
-      true,
-    );
+    expect(
+      resolveHealthQueryResult(data.requestId, { ok: true, payload: { metrics: { steps: 3 } } }),
+    ).toBe(true);
     const result = await pending;
     const parsed = JSON.parse(result.content[0].text) as { metrics: { steps: number } };
     expect(parsed.metrics.steps).toBe(3);

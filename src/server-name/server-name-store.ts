@@ -60,8 +60,7 @@ export function readServerName(): ServerNameFile {
     return {
       version: 1,
       name: typeof p.name === "string" ? p.name : "",
-      updatedAt:
-        typeof p.updatedAt === "number" && Number.isFinite(p.updatedAt) ? p.updatedAt : 0,
+      updatedAt: typeof p.updatedAt === "number" && Number.isFinite(p.updatedAt) ? p.updatedAt : 0,
     };
   } catch {
     return emptyFile();
@@ -80,9 +79,7 @@ export function writeServerName(name: string): ServerNameFile {
   return next;
 }
 
-export type ServerNameValidationResult =
-  | { ok: true; name: string }
-  | { ok: false; error: string };
+export type ServerNameValidationResult = { ok: true; name: string } | { ok: false; error: string };
 
 /** Validate + normalize an inbound `name` from a PUT body. Empty string clears the name. */
 export function validateServerName(raw: unknown): ServerNameValidationResult {

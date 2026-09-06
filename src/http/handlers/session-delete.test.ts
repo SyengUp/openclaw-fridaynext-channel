@@ -115,10 +115,7 @@ describe("handleSessionDelete", () => {
       payload: { ok: true, key: "agent:main:abc", deleted: true },
     });
 
-    await invoke(
-      "DELETE",
-      "/friday-next-admin/sessions?sessionKey=agent:main:abc&sessionId=s-456",
-    );
+    await invoke("DELETE", "/friday-next-admin/sessions?sessionKey=agent:main:abc&sessionId=s-456");
 
     expect(dispatchGatewayMethod).toHaveBeenCalledWith("sessions.delete", {
       key: "agent:main:abc",
@@ -181,7 +178,10 @@ describe("handleSessionDelete", () => {
   it("maps an INVALID_REQUEST gateway error (e.g. main session) to 400", async () => {
     dispatchGatewayMethod.mockResolvedValue({
       ok: false,
-      error: { code: "INVALID_REQUEST", message: "Cannot delete the main session (agent:main:main)" },
+      error: {
+        code: "INVALID_REQUEST",
+        message: "Cannot delete the main session (agent:main:main)",
+      },
     });
 
     const { captured, json } = await invoke(

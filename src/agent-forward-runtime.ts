@@ -113,9 +113,11 @@ export function setFridayAgentForwardRuntime(api: OpenClawPluginApi): void {
   forwardRuntime = {
     resolveStorePath: api.runtime.agent.session.resolveStorePath,
     loadSessionStore: api.runtime.agent.session.loadSessionStore,
-    updateSessionStoreEntry: session.updateSessionStoreEntry as FridayAgentForwardRuntime["updateSessionStoreEntry"],
+    updateSessionStoreEntry:
+      session.updateSessionStoreEntry as FridayAgentForwardRuntime["updateSessionStoreEntry"],
     getSessionEntry: session.getSessionEntry as FridayAgentForwardRuntime["getSessionEntry"],
-    listSessionEntries: session.listSessionEntries as FridayAgentForwardRuntime["listSessionEntries"],
+    listSessionEntries:
+      session.listSessionEntries as FridayAgentForwardRuntime["listSessionEntries"],
     loadTranscriptEventsSync: resolveLoadTranscriptEventsSync(session),
     patchSessionEntry: session.patchSessionEntry as FridayAgentForwardRuntime["patchSessionEntry"],
     resolveAgentWorkspaceDir: (api.runtime.agent as Record<string, unknown>)

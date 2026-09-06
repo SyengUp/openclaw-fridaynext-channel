@@ -37,10 +37,7 @@ export function waitForHealthQueryResult(params: {
   return store.waitForResult(params);
 }
 
-export function resolveHealthQueryResult(
-  requestId: string,
-  outcome: HealthQueryOutcome,
-): boolean {
+export function resolveHealthQueryResult(requestId: string, outcome: HealthQueryOutcome): boolean {
   return store.resolveResult(requestId, outcome);
 }
 

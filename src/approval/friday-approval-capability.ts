@@ -63,7 +63,11 @@ function sessionKeyOf(request: unknown): string | undefined {
   return typeof sk === "string" && sk.trim() ? sk.trim() : undefined;
 }
 
-function runIdOf(request: unknown, sessionKey: string | undefined, deviceId: string): string | undefined {
+function runIdOf(
+  request: unknown,
+  sessionKey: string | undefined,
+  deviceId: string,
+): string | undefined {
   const inner = (request as { request?: { runId?: unknown } } | undefined)?.request;
   if (typeof inner?.runId === "string" && inner.runId.trim()) return inner.runId.trim();
   if (!sessionKey) return undefined;
@@ -182,7 +186,9 @@ const fridayApprovalNativeRuntime = createChannelApprovalNativeRuntimeAdapter<
     },
     deliverPending: ({ preparedTarget, pendingPayload }) => {
       const deviceId = preparedTarget.deviceId;
-      logger.info(`deliver approval ${pendingPayload.approvalId} kind=${pendingPayload.kind} -> ${deviceId}`);
+      logger.info(
+        `deliver approval ${pendingPayload.approvalId} kind=${pendingPayload.kind} -> ${deviceId}`,
+      );
       emitApproval(deviceId, { ...pendingPayload, deviceId });
       return { deviceId, approvalId: pendingPayload.approvalId };
     },

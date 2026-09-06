@@ -78,8 +78,7 @@ export function nodePairingModuleCandidates(filenames: string[]): string[] {
   const js = filenames.filter((f) => f.endsWith(".js"));
   const current = js.filter((f) => f.startsWith("device-pairing-node-"));
   const legacy = js.filter(
-    (f) =>
-      f.startsWith("node-pairing-") && !f.includes("authz") && !f.includes("migration"),
+    (f) => f.startsWith("node-pairing-") && !f.includes("authz") && !f.includes("migration"),
   );
   return [...current, ...legacy];
 }

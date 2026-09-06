@@ -86,7 +86,9 @@ export async function resolveNpmRegistry(nowMs: number): Promise<string> {
   ) {
     chosen = OFFICIAL_NPM_REGISTRY;
   } else {
-    chosen = reachable.reduce((fastest, r) => (r.latencyMs < fastest.latencyMs ? r : fastest)).registry;
+    chosen = reachable.reduce((fastest, r) =>
+      r.latencyMs < fastest.latencyMs ? r : fastest,
+    ).registry;
   }
   cache = { registry: chosen, resolvedAt: nowMs };
   return chosen;

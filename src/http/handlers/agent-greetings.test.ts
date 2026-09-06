@@ -44,7 +44,12 @@ function makeRes(): { res: ServerResponseLike; captured: Captured } {
   return { res, captured };
 }
 
-async function invoke(method: string, body?: unknown, token: string | null = TOKEN, agentId = "main") {
+async function invoke(
+  method: string,
+  body?: unknown,
+  token: string | null = TOKEN,
+  agentId = "main",
+) {
   const { res, captured } = makeRes();
   const handled = await handleAgentGreeting(makeReq(method, body, token), res, agentId);
   return {

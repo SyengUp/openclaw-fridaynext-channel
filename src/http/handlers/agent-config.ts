@@ -293,9 +293,10 @@ function applyToolsPatch(
     delete entry.tools;
     return;
   }
-  const existing = entry.tools && typeof entry.tools === "object" && !Array.isArray(entry.tools)
-    ? { ...(entry.tools as Record<string, unknown>) }
-    : {};
+  const existing =
+    entry.tools && typeof entry.tools === "object" && !Array.isArray(entry.tools)
+      ? { ...(entry.tools as Record<string, unknown>) }
+      : {};
   const merged: Record<string, unknown> = {
     ...existing,
     ...((tools.value as Record<string, unknown>) ?? {}),

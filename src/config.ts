@@ -108,7 +108,10 @@ export function resolveFridayNextConfig(cfg: unknown): FridayNextConfig {
   return {
     channelId: "friday-next",
     historyLimit: asNumber(section.historyLimit, 25, 1, 200),
-    historyDir: asString(section.historyDir, join(homedir(), ".openclaw", "friday-next", "history")),
+    historyDir: asString(
+      section.historyDir,
+      join(homedir(), ".openclaw", "friday-next", "history"),
+    ),
     logLevel: asLogLevel(section.logLevel),
     authToken,
     corsEnabled: asBool(cors.enabled, false),

@@ -34,7 +34,9 @@ describe("createHealthLogTool", () => {
     const tool = createHealthLogTool({ sessionKey: "agent:main:s1" });
     expect(tool.name).toBe(HEALTH_LOG_TOOL_NAME);
     expect(tool.description).toContain("Write samples");
-    expect(tool.parameters.properties.samples.items.properties.metric.enum).toContain("dietaryCaffeine");
+    expect(tool.parameters.properties.samples.items.properties.metric.enum).toContain(
+      "dietaryCaffeine",
+    );
     expect(tool.parameters.properties.samples.items.properties.metric.enum).not.toContain("sleep");
   });
 

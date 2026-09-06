@@ -65,13 +65,19 @@ function makeRes(): { res: ServerResponseLike; captured: Captured } {
 async function postUpgrade() {
   const { res, captured } = makeRes();
   await handlePluginUpgrade(makeReq("POST"), res);
-  return { status: captured.statusCode, json: captured.body ? JSON.parse(captured.body) : undefined };
+  return {
+    status: captured.statusCode,
+    json: captured.body ? JSON.parse(captured.body) : undefined,
+  };
 }
 
 async function getStatus() {
   const { res, captured } = makeRes();
   await handlePluginUpgradeStatus(makeReq("GET"), res);
-  return { status: captured.statusCode, json: captured.body ? JSON.parse(captured.body) : undefined };
+  return {
+    status: captured.statusCode,
+    json: captured.body ? JSON.parse(captured.body) : undefined,
+  };
 }
 
 /** A promise that never settles — stands in for a long-running install. */
@@ -202,7 +208,11 @@ describe("upgrade status machine", () => {
   });
 
   it("reports failed with the stderr tail when the install exits non-zero", async () => {
-    runtime.runCommandWithTimeout.mockResolvedValue({ code: 1, stdout: "", stderr: "npm ERR! boom" });
+    runtime.runCommandWithTimeout.mockResolvedValue({
+      code: 1,
+      stdout: "",
+      stderr: "npm ERR! boom",
+    });
     await postUpgrade();
     await vi.advanceTimersByTimeAsync(1_000);
     const { json } = await getStatus();
@@ -234,7 +244,10 @@ describe("upgrade status machine", () => {
     expect(json.phase).toBe("installed");
     expect(runtime.runCommandWithTimeout).toHaveBeenCalledTimes(2);
     // The retry env was built for the alternate registry.
-    expect(npmRegistryEnv).toHaveBeenLastCalledWith(expect.any(Number), "https://registry.npmmirror.com/");
+    expect(npmRegistryEnv).toHaveBeenLastCalledWith(
+      expect.any(Number),
+      "https://registry.npmmirror.com/",
+    );
   });
 
   it("reports failed when both the install and the alternate retry fail", async () => {

@@ -72,7 +72,9 @@ export async function handleApprovalDecision(
       clientDisplayName: deviceId ? `Friday Next (${deviceId})` : "Friday Next",
     });
   } catch (err) {
-    log.error(`resolveApprovalOverGateway failed: ${err instanceof Error ? err.message : String(err)}`);
+    log.error(
+      `resolveApprovalOverGateway failed: ${err instanceof Error ? err.message : String(err)}`,
+    );
     return json(502, { error: "Approval resolution failed", detail: String(err) });
   }
 

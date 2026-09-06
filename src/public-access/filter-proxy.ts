@@ -10,7 +10,12 @@
  * rest, so the public tunnel exposes just the FridayNext API + node WebSocket.
  * LAN clients hit core directly and are unaffected.
  */
-import { createServer, request as httpRequest, type IncomingHttpHeaders, type Server } from "node:http";
+import {
+  createServer,
+  request as httpRequest,
+  type IncomingHttpHeaders,
+  type Server,
+} from "node:http";
 import { connect as netConnect } from "node:net";
 import type { Duplex } from "node:stream";
 import { attestGateDecision, ATTEST_REJECTION_BODY } from "../attest/attest-gate.js";

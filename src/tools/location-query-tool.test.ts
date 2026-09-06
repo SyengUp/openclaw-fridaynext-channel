@@ -124,7 +124,12 @@ describe("createLocationQueryTool", () => {
     const dataLine = frame.split("\n").find((line) => line.startsWith("data: "));
     expect(dataLine).toBeTruthy();
     const data = JSON.parse(dataLine!.slice("data: ".length)) as { requestId: string };
-    const payload = { latitude: 31.2, longitude: 121.5, horizontalAccuracy: 9, timestampMs: 1_700_000_000_000 };
+    const payload = {
+      latitude: 31.2,
+      longitude: 121.5,
+      horizontalAccuracy: 9,
+      timestampMs: 1_700_000_000_000,
+    };
     expect(resolveLocationQueryResult(data.requestId, { ok: true, payload })).toBe(true);
     const result = await pending;
     const parsed = JSON.parse(result.content[0].text) as { latitude: number };

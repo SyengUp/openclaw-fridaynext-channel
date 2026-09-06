@@ -130,9 +130,7 @@ function parseMediaMarker(payload: string): FridayHistoryImage | null {
   const value = payload.trim();
   if (!value) return null;
 
-  const projected = value.match(
-    /^(.*?)\s+\(([^()]+)\)\s+\|\s+(\S+?)(?:\s+"([^"]+)")?\s*$/,
-  );
+  const projected = value.match(/^(.*?)\s+\(([^()]+)\)\s+\|\s+(\S+?)(?:\s+"([^"]+)")?\s*$/);
   if (projected) {
     const url = projected[3]?.trim();
     if (!url) return null;

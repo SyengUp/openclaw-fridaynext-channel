@@ -88,7 +88,11 @@ export function saveKey(keyId: string, k: AttestedKey, nowMs: number = Date.now(
   }
   persistKeys();
 }
-export function updateSignCount(keyId: string, signCount: number, nowMs: number = Date.now()): void {
+export function updateSignCount(
+  keyId: string,
+  signCount: number,
+  nowMs: number = Date.now(),
+): void {
   const k = keys[keyId];
   if (k) {
     k.signCount = signCount;

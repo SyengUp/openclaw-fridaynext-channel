@@ -23,7 +23,12 @@ describe("FNEA attachment crypto", () => {
 
   it("round-trips across chunk boundaries (multi-frame)", () => {
     const key = generateAttachmentKey();
-    for (const size of [DEFAULT_CHUNK - 1, DEFAULT_CHUNK, DEFAULT_CHUNK + 1, DEFAULT_CHUNK * 3 + 7]) {
+    for (const size of [
+      DEFAULT_CHUNK - 1,
+      DEFAULT_CHUNK,
+      DEFAULT_CHUNK + 1,
+      DEFAULT_CHUNK * 3 + 7,
+    ]) {
       const pt = Buffer.alloc(size);
       for (let i = 0; i < size; i++) pt[i] = (i * 31 + 7) & 0xff;
       const env = decryptAttachment(encryptAttachment(pt, key), key);
@@ -61,9 +66,9 @@ describe("FNEA attachment crypto", () => {
   });
 
   it("rejects a non-FNEA buffer", () => {
-    expect(() => decryptAttachment(Buffer.from("not an envelope"), generateAttachmentKey())).toThrow(
-      /not an FNEA/,
-    );
+    expect(() =>
+      decryptAttachment(Buffer.from("not an envelope"), generateAttachmentKey()),
+    ).toThrow(/not an FNEA/);
   });
 
   it("INTEROP swift→node: decrypts an envelope produced by the Swift AttachmentCrypto", () => {

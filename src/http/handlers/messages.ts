@@ -522,9 +522,7 @@ async function buildBodyForAgentWithAttachments(
           if (ossRef.name) rememberInboundMediaName(saved.path, ossRef.name, ossRef.mime);
           const channelUrl = fridayFilesPublicUrl(id);
           mediaRefs.push(`[media attached: ${pathToFileURL(saved.path).href}]`);
-          mediaFacts.push(
-            toInboundMediaFact(saved.path, channelUrl, ossRef.mime, ossRef.name),
-          );
+          mediaFacts.push(toInboundMediaFact(saved.path, channelUrl, ossRef.mime, ossRef.name));
         }
       }
       continue;
@@ -540,7 +538,9 @@ async function buildBodyForAgentWithAttachments(
       // can restore it instead of surfacing the uuid.
       if (filename) rememberInboundMediaName(saved.path, filename, mimeType);
       mediaRefs.push(`[media attached: ${pathToFileURL(saved.path).href}]`);
-      mediaFacts.push(toInboundMediaFact(saved.path, fridayFilesPublicUrl(lookupKey), mimeType, filename));
+      mediaFacts.push(
+        toInboundMediaFact(saved.path, fridayFilesPublicUrl(lookupKey), mimeType, filename),
+      );
     }
   }
 
@@ -721,9 +721,7 @@ export async function handleMessages(req: IncomingMessage, res: ServerResponse):
     res.end(
       JSON.stringify({
         accepted: true,
-        ...(clientRequestId
-          ? { protocolVersion: 3, clientRequestId, phase: acceptedPhase }
-          : {}),
+        ...(clientRequestId ? { protocolVersion: 3, clientRequestId, phase: acceptedPhase } : {}),
         deviceId: normalizedDeviceId,
         runId,
       }),
@@ -772,7 +770,7 @@ export async function handleMessages(req: IncomingMessage, res: ServerResponse):
     "SESSION_SETTINGS",
     normalizedDeviceId,
     runId,
-    `sessionKey=${baseSessionKey} modelRef=${modelRef ?? "(default)"} reasoning=${reasoningLevel ?? "(default)"} thinking=${thinkingLevel ?? "(default)"} permission=${payload.permissionMode === undefined ? "(unchanged)" : payload.permissionMode ?? "(default)"}`,
+    `sessionKey=${baseSessionKey} modelRef=${modelRef ?? "(default)"} reasoning=${reasoningLevel ?? "(default)"} thinking=${thinkingLevel ?? "(default)"} permission=${payload.permissionMode === undefined ? "(unchanged)" : (payload.permissionMode ?? "(default)")}`,
   );
 
   const { body: bodyForAgent, mediaFacts: inboundMediaFacts } =

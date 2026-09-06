@@ -429,9 +429,7 @@ describe("handleAdminModelsList", () => {
     const res = new MockRes();
     await handleAdminModelsList(makeReq({}, "GET"), res as any);
 
-    expect(JSON.parse(res.body).models.map((m: any) => m.id)).toEqual([
-      "deepseek/deepseek-v4-pro",
-    ]);
+    expect(JSON.parse(res.body).models.map((m: any) => m.id)).toEqual(["deepseek/deepseek-v4-pro"]);
   });
 
   it("returns 405 for non-GET", async () => {

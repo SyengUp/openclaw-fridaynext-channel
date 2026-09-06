@@ -92,7 +92,12 @@ describe("handleAgentsList", () => {
     expect(JSON.parse(res.body).agents).toEqual([
       { id: "main", isDefault: true, defaultPermissionMode: "guarded" },
     ]);
-    expect(JSON.parse(res.body).permissionModes).toEqual(["read-only", "guarded", "workspace", "full"]);
+    expect(JSON.parse(res.body).permissionModes).toEqual([
+      "read-only",
+      "guarded",
+      "workspace",
+      "full",
+    ]);
   });
 
   it("omits the permission catalog when the gateway policy cannot be resolved", async () => {

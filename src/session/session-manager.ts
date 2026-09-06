@@ -126,8 +126,7 @@ export type SessionPermissionMode = (typeof SESSION_PERMISSION_MODES)[number];
 
 export function isSessionPermissionMode(value: unknown): value is SessionPermissionMode {
   return (
-    typeof value === "string" &&
-    (SESSION_PERMISSION_MODES as readonly string[]).includes(value)
+    typeof value === "string" && (SESSION_PERMISSION_MODES as readonly string[]).includes(value)
   );
 }
 
@@ -385,8 +384,7 @@ export function resolveCanonicalSessionTarget(
       }
     }
     for (const row of listed) {
-      const sessionId =
-        typeof row.entry?.sessionId === "string" ? row.entry.sessionId : undefined;
+      const sessionId = typeof row.entry?.sessionId === "string" ? row.entry.sessionId : undefined;
       if (sessionId && ids.has(sessionId)) {
         return { sessionKey: row.sessionKey, agentId };
       }
@@ -481,9 +479,7 @@ async function writeSdkSessionSettings(
         update: patch,
       });
       if (sdkSessionSettingsMatch(updated, patchBody)) return;
-      log.warn(
-        `patchSessionEntry did not persist session settings key=${target.sessionKey}`,
-      );
+      log.warn(`patchSessionEntry did not persist session settings key=${target.sessionKey}`);
     }
   } catch (err) {
     log.warn(
@@ -501,8 +497,8 @@ async function writeSdkSessionSettings(
         ? target.sessionKey
         : store[sessionKey] !== undefined
           ? sessionKey
-          : Object.keys(store).find((k) => k.toLowerCase() === target.sessionKey.toLowerCase()) ??
-            target.sessionKey;
+          : (Object.keys(store).find((k) => k.toLowerCase() === target.sessionKey.toLowerCase()) ??
+            target.sessionKey);
     const updated = await rt.updateSessionStoreEntry({
       storePath,
       sessionKey: storeKey,

@@ -38,8 +38,7 @@ export async function handleSessionsBind(
     deviceId?: unknown;
     sessionKey?: unknown;
   } | null;
-  const deviceId =
-    typeof body?.deviceId === "string" ? body.deviceId.trim().toUpperCase() : "";
+  const deviceId = typeof body?.deviceId === "string" ? body.deviceId.trim().toUpperCase() : "";
   const sessionKey = typeof body?.sessionKey === "string" ? body.sessionKey.trim() : "";
   if (!deviceId) {
     return json(res, 400, { error: "Missing required field: deviceId" });

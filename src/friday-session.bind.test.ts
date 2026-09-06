@@ -150,8 +150,9 @@ describe("session bind (watch a conversation started elsewhere)", () => {
     });
 
     expect(sseEmitter.broadcastToRun).toHaveBeenCalledTimes(1);
-    expect((sseEmitter.broadcastToRun as ReturnType<typeof vi.fn>).mock.calls[0][0])
-      .toBe("current-core-run");
+    expect((sseEmitter.broadcastToRun as ReturnType<typeof vi.fn>).mock.calls[0][0]).toBe(
+      "current-core-run",
+    );
   });
 
   it("does not buffer suppressed item frames, so bind replays nothing for them", () => {

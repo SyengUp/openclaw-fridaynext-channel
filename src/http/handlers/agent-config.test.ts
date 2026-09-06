@@ -11,10 +11,7 @@ import {
   resetFridayAgentForwardRuntimeForTest,
 } from "../../agent-forward-runtime.js";
 import { setUpgradeRuntime, resetUpgradeRuntimeForTest } from "../../upgrade-runtime.js";
-import {
-  resetOpenClawRootCacheForTest,
-  setOpenClawRootForTest,
-} from "../../skills-discovery.js";
+import { resetOpenClawRootCacheForTest, setOpenClawRootForTest } from "../../skills-discovery.js";
 
 class MockRes extends EventEmitter {
   statusCode = 0;
@@ -339,11 +336,7 @@ describe("handleAgentConfig", () => {
     };
     setRuntimes(config);
     const res = new MockRes();
-    await handleAgentConfig(
-      makeReq(AUTH, "PUT", { tools: { exec: null } }),
-      res as any,
-      "main",
-    );
+    await handleAgentConfig(makeReq(AUTH, "PUT", { tools: { exec: null } }), res as any, "main");
     expect(res.statusCode).toBe(200);
     expect((config.agents as any).entries.main.tools).toEqual({
       profile: "coding",

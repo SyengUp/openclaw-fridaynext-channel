@@ -152,10 +152,7 @@ describe("normalizeHistoryMessage", () => {
       },
       0,
     );
-    expect(out?.images).toEqual([
-      { url: "file:///a.jpg" },
-      { mimeType: "image/png", data: "BBB" },
-    ]);
+    expect(out?.images).toEqual([{ url: "file:///a.jpg" }, { mimeType: "image/png", data: "BBB" }]);
   });
 
   it("normalizes a toolResult message", () => {
@@ -363,8 +360,7 @@ describe("normalizeHistoryMessages", () => {
 
   it("collapses legacy and facts-first attachment mirrors by visible prompt text", () => {
     const prompt = "你能看到这张图吗";
-    const original =
-      "file:///Users/me/.openclaw/media/inbound/photo-32D437BF---f638b034.jpg";
+    const original = "file:///Users/me/.openclaw/media/inbound/photo-32D437BF---f638b034.jpg";
     const result = normalizeHistoryMessages([
       {
         role: "user",
@@ -394,9 +390,19 @@ describe("normalizeHistoryMessages", () => {
     const prompt = "“please speaking”这句话有语法问题吗？";
     const result = normalizeHistoryMessages([
       { role: "user", content: prompt, __openclaw: { id: "e6e7a6d3", seq: 1 } },
-      { role: "assistant", content: [], stopReason: "stop", __openclaw: { id: "83b7e378", seq: 2 } },
+      {
+        role: "assistant",
+        content: [],
+        stopReason: "stop",
+        __openclaw: { id: "83b7e378", seq: 2 },
+      },
       { role: "user", content: prompt, __openclaw: { id: "9ac18fe4", seq: 3 } },
-      { role: "assistant", content: [], stopReason: "stop", __openclaw: { id: "cbbe720c", seq: 4 } },
+      {
+        role: "assistant",
+        content: [],
+        stopReason: "stop",
+        __openclaw: { id: "cbbe720c", seq: 4 },
+      },
     ]);
     expect(result.filter((m) => m.role === "user").map((m) => m.id)).toEqual(["e6e7a6d3"]);
     expect(result.filter((m) => m.role === "user")[0]?.text).toBe(prompt);

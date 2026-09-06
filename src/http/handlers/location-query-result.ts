@@ -40,8 +40,12 @@ export async function handleLocationQueryResult(
     body.payload && typeof body.payload === "object" && !Array.isArray(body.payload)
       ? (body.payload as Record<string, unknown>)
       : {};
-  const errObj = body.error && typeof body.error === "object" ? (body.error as Record<string, unknown>) : {};
-  const code = typeof errObj.code === "string" && errObj.code.trim() ? errObj.code.trim() : "LOCATION_UNAVAILABLE";
+  const errObj =
+    body.error && typeof body.error === "object" ? (body.error as Record<string, unknown>) : {};
+  const code =
+    typeof errObj.code === "string" && errObj.code.trim()
+      ? errObj.code.trim()
+      : "LOCATION_UNAVAILABLE";
   const message =
     typeof errObj.message === "string" && errObj.message.trim()
       ? errObj.message.trim()
@@ -66,7 +70,10 @@ export async function handleLocationQueryResult(
   if (receiptStatus === "prepared" && !hasLiveWaiter) {
     flushRuntimeDeltas();
     store.completeDeviceRequestWithRunEvent("location", requestId, { ok });
-    store.completeCommandReceipt("location-result", requestId, receiptPayload, { ok: true, requestId });
+    store.completeCommandReceipt("location-result", requestId, receiptPayload, {
+      ok: true,
+      requestId,
+    });
     return json(200, { ok: true, requestId, recovered: true });
   }
   if (receiptStatus === "missing") {
@@ -84,7 +91,10 @@ export async function handleLocationQueryResult(
   }
   flushRuntimeDeltas();
   store.completeDeviceRequestWithRunEvent("location", requestId, { ok });
-  store.completeCommandReceipt("location-result", requestId, receiptPayload, { ok: true, requestId });
+  store.completeCommandReceipt("location-result", requestId, receiptPayload, {
+    ok: true,
+    requestId,
+  });
 
   if (ok) {
     log.info(

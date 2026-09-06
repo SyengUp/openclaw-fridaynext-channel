@@ -26,9 +26,10 @@ export function resolveDeviceToolRoute(sessionKey: string | undefined): DeviceTo
   if (!mapped) return null;
   const deviceId = mapped.trim().toUpperCase();
   if (!deviceId) return null;
-  const runId = runtimeV3StoreIfInitialized()
-    ?.activeRunForSession(normalizedSessionKey, deviceId)
-    ?.runId;
+  const runId = runtimeV3StoreIfInitialized()?.activeRunForSession(
+    normalizedSessionKey,
+    deviceId,
+  )?.runId;
   return {
     deviceId,
     sessionKey: normalizedSessionKey,

@@ -11,7 +11,11 @@
  * registry is keyed by — to `/v1/oss/sign`. `null` returns signal "fall back to the tunnel path".
  */
 import { createHash } from "node:crypto";
-import { encryptAttachment, decryptAttachment, generateAttachmentKey } from "./attachment-crypto.js";
+import {
+  encryptAttachment,
+  decryptAttachment,
+  generateAttachmentKey,
+} from "./attachment-crypto.js";
 
 export type OSSTransferConfig = {
   /** Control-plane base, e.g. "https://friday.syengup.host" (client appends /v1). */
@@ -31,10 +35,17 @@ export type OSSAttachmentRef = {
   isImage: boolean;
 };
 
-type SignResult = { objectKey: string; url: string; headers: Record<string, string>; expiresAt: number };
+type SignResult = {
+  objectKey: string;
+  url: string;
+  headers: Record<string, string>;
+  expiresAt: number;
+};
 
 function gatewayKey(authToken: string): string {
-  return createHash("sha256").update(authToken || "").digest("hex");
+  return createHash("sha256")
+    .update(authToken || "")
+    .digest("hex");
 }
 
 async function sign(
@@ -48,7 +59,13 @@ async function sign(
     const res = await fetch(`${cfg.controlPlaneUrl.replace(/\/$/, "")}/v1/oss/sign`, {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ op, gatewayKey: gatewayKey(cfg.authToken), objectId, size, contentType }),
+      body: JSON.stringify({
+        op,
+        gatewayKey: gatewayKey(cfg.authToken),
+        objectId,
+        size,
+        contentType,
+      }),
       signal: AbortSignal.timeout(15_000),
     });
     if (!res.ok) return null; // 503 not_configured / 429 quota / … → tunnel fallback
@@ -79,7 +96,11 @@ export async function uploadOutboundMedia(
       headers: signed.headers,
       // Node's fetch accepts a Uint8Array body at runtime; the DOM/undici BodyInit type union
       // rejects it (a known dual-fetch-typings friction), so cast the zero-copy view.
-      body: new Uint8Array(cipher.buffer, cipher.byteOffset, cipher.byteLength) as unknown as BodyInit,
+      body: new Uint8Array(
+        cipher.buffer,
+        cipher.byteOffset,
+        cipher.byteLength,
+      ) as unknown as BodyInit,
       signal: AbortSignal.timeout(120_000),
     });
     if (!res.ok) return null;

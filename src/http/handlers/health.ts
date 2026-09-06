@@ -100,9 +100,7 @@ export async function handleHealth(req: IncomingMessage, res: ServerResponse): P
   try {
     result.gatewayFingerprint = readOrInitCapsules().storeId;
   } catch (err) {
-    log.warn(
-      `gatewayFingerprint unavailable: ${err instanceof Error ? err.message : String(err)}`,
-    );
+    log.warn(`gatewayFingerprint unavailable: ${err instanceof Error ? err.message : String(err)}`);
   }
 
   if (nodeDeviceId) {
@@ -267,7 +265,8 @@ async function checkNodePairingViaDeviceStore(
     };
   }
 
-  const sameId = (id: unknown) => (typeof id === "string" ? id : "").trim().toUpperCase() === normalizedNodeId;
+  const sameId = (id: unknown) =>
+    (typeof id === "string" ? id : "").trim().toUpperCase() === normalizedNodeId;
   const isNodeRole = (entry: { role?: string; roles?: string[] }) =>
     entry.role === "node" || (entry.roles ?? []).includes("node");
 

@@ -45,7 +45,11 @@ function frameAAD(index: number, isFinal: boolean): Buffer {
 }
 
 /** Encrypt a whole plaintext buffer into an FNEA envelope. */
-export function encryptAttachment(plaintext: Buffer, key: Buffer, chunkSize = DEFAULT_CHUNK): Buffer {
+export function encryptAttachment(
+  plaintext: Buffer,
+  key: Buffer,
+  chunkSize = DEFAULT_CHUNK,
+): Buffer {
   if (key.length !== 32) throw new Error("attachment key must be 32 bytes");
   const header = Buffer.concat([MAGIC, Buffer.from([VERSION]), u32be(chunkSize)]);
   const out: Buffer[] = [header];
@@ -70,7 +74,8 @@ export function encryptAttachment(plaintext: Buffer, key: Buffer, chunkSize = DE
  * (tamper / truncation / reorder / wrong key). */
 export function decryptAttachment(envelope: Buffer, key: Buffer): Buffer {
   if (key.length !== 32) throw new Error("attachment key must be 32 bytes");
-  if (envelope.length < 9 || !envelope.subarray(0, 4).equals(MAGIC)) throw new Error("not an FNEA envelope");
+  if (envelope.length < 9 || !envelope.subarray(0, 4).equals(MAGIC))
+    throw new Error("not an FNEA envelope");
   if (envelope[4] !== VERSION) throw new Error(`unsupported FNEA version ${envelope[4]}`);
   let off = 9; // skip header (chunkSize is advisory on decrypt)
   const chunks: Buffer[] = [];

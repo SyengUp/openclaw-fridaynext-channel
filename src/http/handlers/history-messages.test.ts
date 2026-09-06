@@ -273,8 +273,7 @@ describe("handleHistoryMessages", () => {
           content: [
             {
               type: "text",
-              text:
-                `这是我昨天和今天吃的，记录一下\n\n[media attached: file://${a}]\n[media attached: file://${b}]`,
+              text: `这是我昨天和今天吃的，记录一下\n\n[media attached: file://${a}]\n[media attached: file://${b}]`,
             },
             { type: "image", mimeType: "image/jpeg", data: "AAA" },
             { type: "image", mimeType: "image/jpeg", data: "BBB" },
@@ -396,9 +395,9 @@ describe("serverLocalPathForImageUrl", () => {
   });
 
   it("treats Windows drive paths as local even on a POSIX test host", () => {
-    expect(serverLocalPathForImageUrl("C:\\Users\\tempuser\\.openclaw\\media\\inbound\\a.jpg")).toBe(
-      "C:\\Users\\tempuser\\.openclaw\\media\\inbound\\a.jpg",
-    );
+    expect(
+      serverLocalPathForImageUrl("C:\\Users\\tempuser\\.openclaw\\media\\inbound\\a.jpg"),
+    ).toBe("C:\\Users\\tempuser\\.openclaw\\media\\inbound\\a.jpg");
     expect(serverLocalPathForImageUrl("C:/Users/tempuser/.openclaw/media/inbound/a.jpg")).toBe(
       "C:/Users/tempuser/.openclaw/media/inbound/a.jpg",
     );

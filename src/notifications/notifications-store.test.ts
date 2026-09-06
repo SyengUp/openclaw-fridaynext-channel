@@ -2,10 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import {
-  FridayNotificationsStore,
-  classifyNotificationKind,
-} from "./notifications-store.js";
+import { FridayNotificationsStore, classifyNotificationKind } from "./notifications-store.js";
 
 let tmpDir = "";
 let store: FridayNotificationsStore;
@@ -34,16 +31,25 @@ describe("FridayNotificationsStore", () => {
 
   it("appends only background pushes, with monotonic seq + derived agent/kind", () => {
     const a = store.append({
-      deviceId: DEV, ts: 1000, sourceSessionKey: "agent:main:cron:x:run:y",
-      text: "家庭巡检报告", hasMedia: false,
+      deviceId: DEV,
+      ts: 1000,
+      sourceSessionKey: "agent:main:cron:x:run:y",
+      text: "家庭巡检报告",
+      hasMedia: false,
     });
     const b = store.append({
-      deviceId: DEV, ts: 2000, sourceSessionKey: "agent:ha-maestro:main:heartbeat",
-      text: "心跳巡检", hasMedia: false,
+      deviceId: DEV,
+      ts: 2000,
+      sourceSessionKey: "agent:ha-maestro:main:heartbeat",
+      text: "心跳巡检",
+      hasMedia: false,
     });
     const skipped = store.append({
-      deviceId: DEV, ts: 3000, sourceSessionKey: "agent:main:fridaynext:abc",
-      text: "普通回复", hasMedia: false,
+      deviceId: DEV,
+      ts: 3000,
+      sourceSessionKey: "agent:main:fridaynext:abc",
+      text: "普通回复",
+      hasMedia: false,
     });
     expect(a?.seq).toBe(1);
     expect(a?.agentId).toBe("main");
@@ -59,8 +65,12 @@ describe("FridayNotificationsStore", () => {
     // delivery key alone would mislabel it as `main` (→ "F.R.I.D.A.Y" subtitle). The run-start
     // tracker supplies the true origin agent, which must win.
     const captured = store.append({
-      deviceId: DEV, ts: 1000, sourceSessionKey: "agent:main:friday-next-AAAA-BBBB",
-      text: "巡检完毕，状态正常，无需打扰。", hasMedia: false, fallbackKind: "heartbeat",
+      deviceId: DEV,
+      ts: 1000,
+      sourceSessionKey: "agent:main:friday-next-AAAA-BBBB",
+      text: "巡检完毕，状态正常，无需打扰。",
+      hasMedia: false,
+      fallbackKind: "heartbeat",
       originAgentId: "hamaestro",
     });
     expect(captured?.agentId).toBe("hamaestro");
@@ -69,14 +79,22 @@ describe("FridayNotificationsStore", () => {
 
   it("originAgentId is normalized (trim/lowercase) and blank falls back to the key", () => {
     const upper = store.append({
-      deviceId: DEV, ts: 1000, sourceSessionKey: "agent:main:main:heartbeat",
-      text: "hb", hasMedia: false, originAgentId: "  HaMaestro  ",
+      deviceId: DEV,
+      ts: 1000,
+      sourceSessionKey: "agent:main:main:heartbeat",
+      text: "hb",
+      hasMedia: false,
+      originAgentId: "  HaMaestro  ",
     });
     expect(upper?.agentId).toBe("hamaestro");
 
     const blank = store.append({
-      deviceId: DEV, ts: 2000, sourceSessionKey: "agent:ha-maestro:main:heartbeat",
-      text: "hb2", hasMedia: false, originAgentId: "   ",
+      deviceId: DEV,
+      ts: 2000,
+      sourceSessionKey: "agent:ha-maestro:main:heartbeat",
+      text: "hb2",
+      hasMedia: false,
+      originAgentId: "   ",
     });
     expect(blank?.agentId).toBe("ha-maestro"); // blank override → derive from the key
   });
@@ -85,31 +103,61 @@ describe("FridayNotificationsStore", () => {
     // Offline device: a real cron delivery resolves to a device/history session key —
     // classification misses it, so the caller passes fallbackKind "push".
     const captured = store.append({
-      deviceId: DEV, ts: 1000, sourceSessionKey: "agent:main:friday-next-AAAA-BBBB",
-      text: "早上好", hasMedia: false, fallbackKind: "push",
+      deviceId: DEV,
+      ts: 1000,
+      sourceSessionKey: "agent:main:friday-next-AAAA-BBBB",
+      text: "早上好",
+      hasMedia: false,
+      fallbackKind: "push",
     });
     expect(captured?.kind).toBe("push");
     expect(captured?.seq).toBe(1);
 
     // Online device (fallbackKind null): unclassified keys stay ignored.
     const ignored = store.append({
-      deviceId: DEV, ts: 2000, sourceSessionKey: "agent:main:friday-next-AAAA-BBBB",
-      text: "普通回复", hasMedia: false, fallbackKind: null,
+      deviceId: DEV,
+      ts: 2000,
+      sourceSessionKey: "agent:main:friday-next-AAAA-BBBB",
+      text: "普通回复",
+      hasMedia: false,
+      fallbackKind: null,
     });
     expect(ignored).toBeNull();
 
     // Classified keys keep their real kind even when a fallback is provided.
     const cron = store.append({
-      deviceId: DEV, ts: 3000, sourceSessionKey: "agent:main:cron:x:run:y",
-      text: "定时", hasMedia: false, fallbackKind: "push",
+      deviceId: DEV,
+      ts: 3000,
+      sourceSessionKey: "agent:main:cron:x:run:y",
+      text: "定时",
+      hasMedia: false,
+      fallbackKind: "push",
     });
     expect(cron?.kind).toBe("cron");
   });
 
   it("readAfter returns only newer entries, oldest-first", () => {
-    store.append({ deviceId: DEV, ts: 1, sourceSessionKey: "agent:main:cron:a:run:1", text: "1", hasMedia: false });
-    store.append({ deviceId: DEV, ts: 2, sourceSessionKey: "agent:main:cron:a:run:2", text: "2", hasMedia: false });
-    store.append({ deviceId: DEV, ts: 3, sourceSessionKey: "agent:main:cron:a:run:3", text: "3", hasMedia: false });
+    store.append({
+      deviceId: DEV,
+      ts: 1,
+      sourceSessionKey: "agent:main:cron:a:run:1",
+      text: "1",
+      hasMedia: false,
+    });
+    store.append({
+      deviceId: DEV,
+      ts: 2,
+      sourceSessionKey: "agent:main:cron:a:run:2",
+      text: "2",
+      hasMedia: false,
+    });
+    store.append({
+      deviceId: DEV,
+      ts: 3,
+      sourceSessionKey: "agent:main:cron:a:run:3",
+      text: "3",
+      hasMedia: false,
+    });
     const after1 = store.readAfter(DEV, 1);
     expect(after1.map((n) => n.text)).toEqual(["2", "3"]);
     expect(store.readAfter(DEV, 0)).toHaveLength(3);
@@ -117,22 +165,53 @@ describe("FridayNotificationsStore", () => {
   });
 
   it("seq survives a fresh store instance (resumes from file)", () => {
-    store.append({ deviceId: DEV, ts: 1, sourceSessionKey: "agent:main:cron:a:run:1", text: "1", hasMedia: false });
+    store.append({
+      deviceId: DEV,
+      ts: 1,
+      sourceSessionKey: "agent:main:cron:a:run:1",
+      text: "1",
+      hasMedia: false,
+    });
     const store2 = new FridayNotificationsStore(tmpDir);
-    const n = store2.append({ deviceId: DEV, ts: 2, sourceSessionKey: "agent:main:cron:a:run:2", text: "2", hasMedia: false });
+    const n = store2.append({
+      deviceId: DEV,
+      ts: 2,
+      sourceSessionKey: "agent:main:cron:a:run:2",
+      text: "2",
+      hasMedia: false,
+    });
     expect(n?.seq).toBe(2); // continued, not reset to 1
   });
 
   it("is keyed per device (case-insensitive)", () => {
-    store.append({ deviceId: "dev-one", ts: 1, sourceSessionKey: "agent:main:cron:a:run:1", text: "one", hasMedia: false });
-    store.append({ deviceId: "DEV-TWO", ts: 1, sourceSessionKey: "agent:main:cron:b:run:1", text: "two", hasMedia: false });
+    store.append({
+      deviceId: "dev-one",
+      ts: 1,
+      sourceSessionKey: "agent:main:cron:a:run:1",
+      text: "one",
+      hasMedia: false,
+    });
+    store.append({
+      deviceId: "DEV-TWO",
+      ts: 1,
+      sourceSessionKey: "agent:main:cron:b:run:1",
+      text: "two",
+      hasMedia: false,
+    });
     expect(store.readAfter("DEV-ONE", 0).map((n) => n.text)).toEqual(["one"]);
     expect(store.readAfter("dev-two", 0).map((n) => n.text)).toEqual(["two"]);
   });
 
   it("caps the log to keep last N", () => {
     for (let i = 0; i < 10; i++) {
-      store.append({ deviceId: DEV, ts: i, sourceSessionKey: "agent:main:cron:a:run:" + i, text: String(i), hasMedia: false, keep: 5 });
+      store.append({
+        deviceId: DEV,
+        ts: i,
+        sourceSessionKey: "agent:main:cron:a:run:" + i,
+        text: String(i),
+        hasMedia: false,
+        keep: 5,
+      });
     }
     const all = store.readAfter(DEV, 0);
     expect(all).toHaveLength(5);
@@ -141,14 +220,26 @@ describe("FridayNotificationsStore", () => {
 
   it("delete removes one entry by seq and is idempotent", () => {
     for (let i = 1; i <= 3; i++) {
-      store.append({ deviceId: DEV, ts: i, sourceSessionKey: "agent:main:cron:a:run:" + i, text: String(i), hasMedia: false });
+      store.append({
+        deviceId: DEV,
+        ts: i,
+        sourceSessionKey: "agent:main:cron:a:run:" + i,
+        text: String(i),
+        hasMedia: false,
+      });
     }
     expect(store.delete(DEV, 2)).toBe(true);
     expect(store.readAfter(DEV, 0).map((n) => n.seq)).toEqual([1, 3]);
     // Deleting the same seq again is a no-op (already gone).
     expect(store.delete(DEV, 2)).toBe(false);
     // Seq counter stays monotonic — the next append does NOT reuse 2.
-    const next = store.append({ deviceId: DEV, ts: 4, sourceSessionKey: "agent:main:cron:a:run:4", text: "4", hasMedia: false });
+    const next = store.append({
+      deviceId: DEV,
+      ts: 4,
+      sourceSessionKey: "agent:main:cron:a:run:4",
+      text: "4",
+      hasMedia: false,
+    });
     expect(next?.seq).toBe(4);
   });
 
@@ -161,13 +252,25 @@ describe("FridayNotificationsStore", () => {
   // collides with the app's tombstone for the OLD notification and gets silently eaten.
   it("never reuses a seq after deletion, even across a store reload (restart)", () => {
     for (let i = 1; i <= 3; i++) {
-      store.append({ deviceId: DEV, ts: i, sourceSessionKey: "agent:main:cron:a:run:" + i, text: String(i), hasMedia: false });
+      store.append({
+        deviceId: DEV,
+        ts: i,
+        sourceSessionKey: "agent:main:cron:a:run:" + i,
+        text: String(i),
+        hasMedia: false,
+      });
     }
     store.delete(DEV, 3);
     store.delete(DEV, 2); // file max is now 1
     // Simulate a gateway restart: a fresh store reading the same dir must honor the durable counter.
     const restarted = new FridayNotificationsStore(tmpDir);
-    const next = restarted.append({ deviceId: DEV, ts: 4, sourceSessionKey: "agent:main:cron:a:run:4", text: "4", hasMedia: false });
+    const next = restarted.append({
+      deviceId: DEV,
+      ts: 4,
+      sourceSessionKey: "agent:main:cron:a:run:4",
+      text: "4",
+      hasMedia: false,
+    });
     expect(next?.seq).toBe(4); // NOT 2 (the post-deletion file max + 1)
   });
 
@@ -176,30 +279,60 @@ describe("FridayNotificationsStore", () => {
   // so seqs stay monotonic even if that counter file is corrupted or lost entirely.
   it("does not reuse a seq after deletion even if the counter file is corrupted", () => {
     for (let i = 1; i <= 3; i++) {
-      store.append({ deviceId: DEV, ts: i, sourceSessionKey: "agent:main:cron:a:run:" + i, text: String(i), hasMedia: false });
+      store.append({
+        deviceId: DEV,
+        ts: i,
+        sourceSessionKey: "agent:main:cron:a:run:" + i,
+        text: String(i),
+        hasMedia: false,
+      });
     }
     store.delete(DEV, 3);
     store.delete(DEV, 2);
     fs.writeFileSync(path.join(tmpDir, "_seq-counters.json"), "{ not valid json");
     const restarted = new FridayNotificationsStore(tmpDir);
-    const next = restarted.append({ deviceId: DEV, ts: 4, sourceSessionKey: "agent:main:cron:a:run:4", text: "4", hasMedia: false });
+    const next = restarted.append({
+      deviceId: DEV,
+      ts: 4,
+      sourceSessionKey: "agent:main:cron:a:run:4",
+      text: "4",
+      hasMedia: false,
+    });
     expect(next?.seq).toBe(4);
   });
 
   it("does not reuse a seq after deletion even if the counter file is lost", () => {
     for (let i = 1; i <= 3; i++) {
-      store.append({ deviceId: DEV, ts: i, sourceSessionKey: "agent:main:cron:a:run:" + i, text: String(i), hasMedia: false });
+      store.append({
+        deviceId: DEV,
+        ts: i,
+        sourceSessionKey: "agent:main:cron:a:run:" + i,
+        text: String(i),
+        hasMedia: false,
+      });
     }
     store.delete(DEV, 3);
     store.delete(DEV, 2);
     fs.rmSync(path.join(tmpDir, "_seq-counters.json"), { force: true });
     const restarted = new FridayNotificationsStore(tmpDir);
-    const next = restarted.append({ deviceId: DEV, ts: 4, sourceSessionKey: "agent:main:cron:a:run:4", text: "4", hasMedia: false });
+    const next = restarted.append({
+      deviceId: DEV,
+      ts: 4,
+      sourceSessionKey: "agent:main:cron:a:run:4",
+      text: "4",
+      hasMedia: false,
+    });
     expect(next?.seq).toBe(4);
   });
 
   it("soft-delete removes the content but keeps a tombstone (readAfter hides it)", () => {
-    store.append({ deviceId: DEV, ts: 1, sourceSessionKey: "agent:main:cron:a:run:1", text: "secret content", hasMedia: false });
+    store.append({
+      deviceId: DEV,
+      ts: 1,
+      sourceSessionKey: "agent:main:cron:a:run:1",
+      text: "secret content",
+      hasMedia: false,
+    });
     store.delete(DEV, 1);
     // Content is gone from the readable log …
     expect(store.readAfter(DEV, 0)).toHaveLength(0);

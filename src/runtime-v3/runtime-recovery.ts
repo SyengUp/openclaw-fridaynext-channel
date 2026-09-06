@@ -96,7 +96,11 @@ function defaultTranscriptProvesCompletion(run: DurableRunRecord): boolean {
     );
     if (sameRequest) return true;
     const timestamp = messageTimestamp(message);
-    return timestamp !== undefined && timestamp >= run.createdAt && messageText(message).trim() === run.text.trim();
+    return (
+      timestamp !== undefined &&
+      timestamp >= run.createdAt &&
+      messageText(message).trim() === run.text.trim()
+    );
   });
   if (userIndex < 0) return false;
   return messages.slice(userIndex + 1).some((message) => {
@@ -123,7 +127,9 @@ async function reconcileInterruptedRun(
     return;
   }
   if (originalPhase === "cancelPending") {
-    store.appendRunEvent(run.runId, "run.cancelled", { reason: "cancel resumed after plugin restart" });
+    store.appendRunEvent(run.runId, "run.cancelled", {
+      reason: "cancel resumed after plugin restart",
+    });
     store.transition(run.runId, "cancelled", "plugin_restart_cancelled");
     return;
   }
@@ -158,7 +164,8 @@ export async function restoreDurableRuntimeV3(overrides?: Partial<RuntimeRecover
   const interrupted = unfinished.filter((run) => run.phase !== "queued");
   const deps: RuntimeRecoveryDeps = {
     isRunActive: overrides?.isRunActive ?? defaultIsRunActive,
-    transcriptProvesCompletion: overrides?.transcriptProvesCompletion ?? defaultTranscriptProvesCompletion,
+    transcriptProvesCompletion:
+      overrides?.transcriptProvesCompletion ?? defaultTranscriptProvesCompletion,
   };
   const [resumed] = await Promise.all([
     Promise.all(queued.map((run) => replayQueuedCommand(run.runId))),

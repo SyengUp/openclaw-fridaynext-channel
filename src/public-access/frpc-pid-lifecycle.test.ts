@@ -1,8 +1,5 @@
 import { describe, expect, it } from "vitest";
-import {
-  pluginFrpcPidsFromProcessList,
-  shouldClearRecordedFrpcPid,
-} from "./frpc-manager.js";
+import { pluginFrpcPidsFromProcessList, shouldClearRecordedFrpcPid } from "./frpc-manager.js";
 
 describe("frpc pidfile lifecycle", () => {
   it("clears the pidfile when the recorded child exits", () => {

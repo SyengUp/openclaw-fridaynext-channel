@@ -7,10 +7,7 @@ import {
 } from "../../agent-forward-runtime.js";
 import { extractBearerToken } from "../middleware/auth.js";
 import { DEFAULT_AGENT_ID } from "../../agent-id.js";
-import {
-  listAgentRoster,
-  resolveRosterDefaultAgentId,
-} from "../../agent-roster.js";
+import { listAgentRoster, resolveRosterDefaultAgentId } from "../../agent-roster.js";
 import { readGreetingFor } from "../../agent-greetings/greetings-store.js";
 import {
   resolveDefaultPermissionMode,
@@ -218,7 +215,8 @@ export async function handleAgentsList(
     return true;
   }
 
-  const { agents, defaultAgentId, defaultPermissionMode, permissionModes } = resolveConfiguredAgents();
+  const { agents, defaultAgentId, defaultPermissionMode, permissionModes } =
+    resolveConfiguredAgents();
 
   res.statusCode = 200;
   res.setHeader("Content-Type", "application/json");

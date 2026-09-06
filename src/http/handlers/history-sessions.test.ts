@@ -9,10 +9,7 @@ import {
   setFridayAgentForwardRuntime,
   resetFridayAgentForwardRuntimeForTest,
 } from "../../agent-forward-runtime.js";
-import {
-  observeAgentEventForActiveRuns,
-  resetActiveRunsForTest,
-} from "../../agent/active-runs.js";
+import { observeAgentEventForActiveRuns, resetActiveRunsForTest } from "../../agent/active-runs.js";
 
 class MockRes extends EventEmitter {
   statusCode = 0;
@@ -49,7 +46,11 @@ function transcriptWith(name: string, userText: string, assistantContent: unknow
   const file = path.join(tmpDir, name);
   const lines = [
     JSON.stringify({ type: "message", id: "u", message: { role: "user", content: userText } }),
-    JSON.stringify({ type: "message", id: "a", message: { role: "assistant", content: assistantContent } }),
+    JSON.stringify({
+      type: "message",
+      id: "a",
+      message: { role: "assistant", content: assistantContent },
+    }),
   ];
   fs.writeFileSync(file, `${lines.join("\n")}\n`, "utf-8");
   return file;
@@ -261,7 +262,10 @@ describe("handleHistorySessions", () => {
           "agent:main:cron:job-old": {
             sessionId: "cr3",
             updatedAt: now - 30 * 24 * 60 * 60 * 1000,
-            sessionFile: transcriptWith("cr3.jsonl", "[cron:job-old 旧任务] 旧提示 Current time: X"),
+            sessionFile: transcriptWith(
+              "cr3.jsonl",
+              "[cron:job-old 旧任务] 旧提示 Current time: X",
+            ),
           },
         },
       },
@@ -286,12 +290,18 @@ describe("handleHistorySessions", () => {
           "agent:main:cron:run-a": {
             sessionId: "a",
             updatedAt: now - 5000,
-            sessionFile: transcriptWith("a.jsonl", "[cron:run-a 每日天气简报] 天气 Current time: X"),
+            sessionFile: transcriptWith(
+              "a.jsonl",
+              "[cron:run-a 每日天气简报] 天气 Current time: X",
+            ),
           },
           "agent:main:cron:run-b": {
             sessionId: "b",
             updatedAt: now - 1000, // newest run of the SAME job → the one kept
-            sessionFile: transcriptWith("b.jsonl", "[cron:run-b 每日天气简报] 天气 Current time: Y"),
+            sessionFile: transcriptWith(
+              "b.jsonl",
+              "[cron:run-b 每日天气简报] 天气 Current time: Y",
+            ),
           },
           "agent:main:cron:run-c": {
             sessionId: "c",
@@ -322,19 +332,30 @@ describe("handleHistorySessions", () => {
           "agent:main:cron:full": {
             sessionId: "f",
             updatedAt: now - 1000,
-            sessionFile: transcriptWith("full.jsonl", "[cron:full 巡检 A] p Current time: X", "结果"),
+            sessionFile: transcriptWith(
+              "full.jsonl",
+              "[cron:full 巡检 A] p Current time: X",
+              "结果",
+            ),
           },
           // Aborted run: preamble + a CONTENTLESS assistant turn → blank → dropped.
           "agent:main:cron:empty-asst": {
             sessionId: "e",
             updatedAt: now - 2000,
-            sessionFile: transcriptWith("empty.jsonl", "[cron:empty-asst 巡检 B] p Current time: X", ""),
+            sessionFile: transcriptWith(
+              "empty.jsonl",
+              "[cron:empty-asst 巡检 B] p Current time: X",
+              "",
+            ),
           },
           // Preamble only, no assistant record at all → dropped.
           "agent:main:cron:preamble-only": {
             sessionId: "p",
             updatedAt: now - 3000,
-            sessionFile: cronPreambleOnly("pre.jsonl", "[cron:preamble-only 巡检 C] p Current time: X"),
+            sessionFile: cronPreambleOnly(
+              "pre.jsonl",
+              "[cron:preamble-only 巡检 C] p Current time: X",
+            ),
           },
           // Tool-only run: no assistant text, only tool calls (its answer, if any, was
           // delivered elsewhere). Renders as just a collapsed thought trace → dropped.

@@ -79,7 +79,7 @@ describe("FridaySseOfflineQueue", () => {
     const all = q.readAfter("dev-e", 0);
     expect(all.length).toBeLessThanOrEqual(keep + Math.floor(keep / 2));
     expect(all.length).toBeGreaterThanOrEqual(keep);
-    expect(all[all.length - 1]?.id).toBe(200);   // 最新的一定还在
+    expect(all[all.length - 1]?.id).toBe(200); // 最新的一定还在
     // 每 keep/2 条才整文件重写一次：200 条约 18 次，而不是「每条一次」的 200 次。
     expect(truncateSpy.mock.calls.length).toBeLessThanOrEqual(20);
     truncateSpy.mockRestore();

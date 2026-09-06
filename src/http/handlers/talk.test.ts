@@ -254,9 +254,13 @@ describe("handleTalk", () => {
 
   describe("session", () => {
     it("returns false for an unknown nested talk path", async () => {
-      const { handled, captured } = await invoke("POST", "/friday-next-admin/talk/session/unknown", {
-        deviceId: "D1",
-      });
+      const { handled, captured } = await invoke(
+        "POST",
+        "/friday-next-admin/talk/session/unknown",
+        {
+          deviceId: "D1",
+        },
+      );
       expect(handled).toBe(false);
       expect(captured.body).toBe("");
       expect(dispatchGatewayMethod).not.toHaveBeenCalled();

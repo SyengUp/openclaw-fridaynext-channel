@@ -63,7 +63,11 @@ describe("per-agent session settings file routing", () => {
     seedSessionsFile("operator");
     const sessionKey = "agent:operator:friday:direct:dev:1";
 
-    await setSessionSettings(sessionKey, { reasoningLevel: "stream", thinkingLevel: "high" }, historyDir);
+    await setSessionSettings(
+      sessionKey,
+      { reasoningLevel: "stream", thinkingLevel: "high" },
+      historyDir,
+    );
 
     const entry = readEntry("operator", toSessionStoreKey(sessionKey));
     expect(entry?.reasoningLevel).toBe("stream");
@@ -553,7 +557,9 @@ describe("resolveDefaultPermissionMode", () => {
   });
 
   it("omits allowlist and sandboxed agents", () => {
-    expect(resolveDefaultPermissionMode({ tools: { exec: { mode: "allowlist" } } })).toBeUndefined();
+    expect(
+      resolveDefaultPermissionMode({ tools: { exec: { mode: "allowlist" } } }),
+    ).toBeUndefined();
     expect(
       resolveDefaultPermissionMode(
         { tools: { exec: { mode: "ask" } } },

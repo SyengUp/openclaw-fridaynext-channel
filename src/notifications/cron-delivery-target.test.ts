@@ -21,9 +21,9 @@ describe("readCronDeliveryTarget", () => {
   });
 
   it("excludes a job that announces to another channel", () => {
-    expect(
-      readCronDeliveryTarget({ delivery: { mode: "announce", channel: "telegram" } }),
-    ).toEqual({ deliversToFridayNext: false, to: null });
+    expect(readCronDeliveryTarget({ delivery: { mode: "announce", channel: "telegram" } })).toEqual(
+      { deliversToFridayNext: false, to: null },
+    );
   });
 
   // `cron add --no-deliver` writes {mode:"none", channel:"last"} — announces nothing, but its turn
@@ -46,7 +46,9 @@ describe("readCronDeliveryTarget", () => {
   });
 
   it("treats an announce with no explicit channel as unknown (origin-channel fallback)", () => {
-    expect(readCronDeliveryTarget({ delivery: { mode: "announce" } }).deliversToFridayNext).toBeNull();
+    expect(
+      readCronDeliveryTarget({ delivery: { mode: "announce" } }).deliversToFridayNext,
+    ).toBeNull();
   });
 
   it("degrades to unknown for a missing / malformed job", () => {

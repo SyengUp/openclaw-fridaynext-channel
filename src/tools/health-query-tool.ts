@@ -58,7 +58,9 @@ function readOptionalString(args: Record<string, unknown>, key: string): string 
 function readMetrics(args: Record<string, unknown>): string[] | undefined {
   const raw = args.metrics;
   if (!Array.isArray(raw)) return undefined;
-  const metrics = raw.filter((item): item is string => typeof item === "string" && item.trim() !== "");
+  const metrics = raw.filter(
+    (item): item is string => typeof item === "string" && item.trim() !== "",
+  );
   return metrics.length > 0 ? metrics : undefined;
 }
 

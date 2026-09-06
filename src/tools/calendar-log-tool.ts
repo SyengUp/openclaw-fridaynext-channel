@@ -190,11 +190,7 @@ export function createCalendarLogTool(ctx: { sessionKey?: string }): {
       };
       registerDeviceToolRequest(route, "calendar", "fridaynext-calendar-log", requestId, data);
       const waiter = waitForCalendarResult({ requestId, deviceId });
-      sseEmitter.broadcast(
-        { type: "fridaynext-calendar-log", data },
-        deviceId,
-        true,
-      );
+      sseEmitter.broadcast({ type: "fridaynext-calendar-log", data }, deviceId, true);
       const outcome = await waiter;
       completeDeviceToolRequest("calendar", requestId);
       if (outcome.ok) {

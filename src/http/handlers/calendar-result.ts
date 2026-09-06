@@ -7,10 +7,7 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { readJsonBody } from "../middleware/body.js";
 import { extractBearerToken } from "../middleware/auth.js";
-import {
-  hasPendingCalendarRequest,
-  resolveCalendarResult,
-} from "../../calendar/pending-store.js";
+import { hasPendingCalendarRequest, resolveCalendarResult } from "../../calendar/pending-store.js";
 import { createFridayNextLogger } from "../../logging.js";
 import { getRuntimeV3Store } from "../../runtime-v3/runtime-store.js";
 import { sseEmitter } from "../../sse/emitter.js";
@@ -71,7 +68,10 @@ export async function handleCalendarResult(
   if (receiptStatus === "prepared" && !hasLiveWaiter) {
     flushRuntimeDeltas();
     store.completeDeviceRequestWithRunEvent("calendar", requestId, { ok });
-    store.completeCommandReceipt("calendar-result", requestId, receiptPayload, { ok: true, requestId });
+    store.completeCommandReceipt("calendar-result", requestId, receiptPayload, {
+      ok: true,
+      requestId,
+    });
     return json(200, { ok: true, requestId, recovered: true });
   }
   if (receiptStatus === "missing") {
@@ -89,7 +89,10 @@ export async function handleCalendarResult(
   }
   flushRuntimeDeltas();
   store.completeDeviceRequestWithRunEvent("calendar", requestId, { ok });
-  store.completeCommandReceipt("calendar-result", requestId, receiptPayload, { ok: true, requestId });
+  store.completeCommandReceipt("calendar-result", requestId, receiptPayload, {
+    ok: true,
+    requestId,
+  });
 
   if (ok) {
     const eventCount = Array.isArray(payload.events) ? payload.events.length : 0;
