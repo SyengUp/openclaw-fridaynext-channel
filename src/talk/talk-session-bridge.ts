@@ -84,9 +84,7 @@ export function lookupTalkSession(sessionId: string): TalkSessionEntry | undefin
 }
 
 export function attachTalkOwnerConnId(connId: string): boolean {
-  const scope = getPluginRuntimeGatewayRequestScope() as
-    | { client?: { connId?: string }; context?: TalkGatewayContext }
-    | undefined;
+  const scope = getPluginRuntimeGatewayRequestScope();
   if (!scope?.client) return false;
   scope.client.connId = connId;
   if (scope.context) installTalkEventBridge(scope.context);
@@ -117,10 +115,7 @@ function connIdList(connIds: Iterable<string> | Set<string>): string[] {
   return [...connIds].filter((id) => typeof id === "string" && id.length > 0);
 }
 
-export function forwardTalkEvents(
-  payload: unknown,
-  connIds: Iterable<string> | Set<string>,
-): void {
+export function forwardTalkEvents(payload: unknown, connIds: Iterable<string> | Set<string>): void {
   const data = asRecord(payload);
   if (!data) return;
   const ids = connIdList(connIds);
@@ -143,8 +138,13 @@ export function forwardTalkEvents(
 export function emitTalkSse(deviceId: string, data: Record<string, unknown>): void {
   const event = { type: "talk" as const, data };
   const audio = typeof data.audioBase64 === "string" ? data.audioBase64.length : 0;
+  const eventType = typeof data.type === "string" ? data.type : "";
+  const sessionId =
+    (typeof data.sessionId === "string" && data.sessionId) ||
+    (typeof data.relaySessionId === "string" && data.relaySessionId) ||
+    "";
   logger.info(
-    `sse type=${String(data.type ?? "")} device=${deviceId} session=${String(data.sessionId ?? data.relaySessionId ?? "")} audioChars=${audio} live=${isLiveTalkEventType(data.type)}`,
+    `sse type=${eventType} device=${deviceId} session=${sessionId} audioChars=${audio} live=${isLiveTalkEventType(data.type)}`,
   );
   if (isLiveTalkEventType(data.type)) {
     sseEmitter.broadcastLiveToDevice(event, deviceId, true);

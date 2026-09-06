@@ -33,7 +33,12 @@ const utf8 = (s: string): Buffer => tlv(0x0c, Buffer.from(s, "utf8"));
 const utcTime = (d: Date): Buffer => {
   const p = (n: number) => String(n).padStart(2, "0");
   const yy = String(d.getUTCFullYear() % 100).padStart(2, "0");
-  return tlv(0x17, Buffer.from(`${yy}${p(d.getUTCMonth() + 1)}${p(d.getUTCDate())}${p(d.getUTCHours())}${p(d.getUTCMinutes())}${p(d.getUTCSeconds())}Z`));
+  return tlv(
+    0x17,
+    Buffer.from(
+      `${yy}${p(d.getUTCMonth() + 1)}${p(d.getUTCDate())}${p(d.getUTCHours())}${p(d.getUTCMinutes())}${p(d.getUTCSeconds())}Z`,
+    ),
+  );
 };
 function integer(bytes: Buffer): Buffer {
   let b = bytes;
@@ -45,13 +50,11 @@ const bitString = (payload: Buffer): Buffer =>
   tlv(0x03, Buffer.concat([Buffer.from([0x00]), payload]));
 
 // OID byte encodings (precomputed; standard arcs).
-const OID_RSA_ENCRYPTION = [0x2a, 0x86, 0x48, 0x86, 0xf7, 0x0d, 0x01, 0x01, 0x01]; // 1.2.840.113549.1.1.1
 const OID_SHA256_WITH_RSA = [0x2a, 0x86, 0x48, 0x86, 0xf7, 0x0d, 0x01, 0x01, 0x0b]; // 1.2.840.113549.1.1.11
 const OID_COMMON_NAME = [0x55, 0x04, 0x03]; // 2.5.4.3
 const OID_BASIC_CONSTRAINTS = [0x55, 0x1d, 0x13]; // 2.5.29.19
 const OID_SUBJECT_ALT_NAME = [0x55, 0x1d, 0x11]; // 2.5.29.17
 
-const ALGO_RSA = seq(oid(OID_RSA_ENCRYPTION), nullTag());
 const ALGO_SHA256_RSA = seq(oid(OID_SHA256_WITH_RSA), nullTag());
 
 const distinguishedName = (cn: string): Buffer => seq(set(seq(oid(OID_COMMON_NAME), utf8(cn))));
@@ -106,7 +109,11 @@ export function createSelfSignedCertPem(
   const serial = integer(cryptoRandomPositive(16));
   const extensions = seq(
     // basicConstraints critical CA:TRUE
-    seq(oid(OID_BASIC_CONSTRAINTS), tlv(0x01, Buffer.from([0xff])), tlv(0x04, seq(tlv(0x01, Buffer.from([0xff]))))),
+    seq(
+      oid(OID_BASIC_CONSTRAINTS),
+      tlv(0x01, Buffer.from([0xff])),
+      tlv(0x04, seq(tlv(0x01, Buffer.from([0xff])))),
+    ),
     // subjectAltName dNSName=cn (dNSName = context [2] primitive IA5String → tag 0x82)
     seq(oid(OID_SUBJECT_ALT_NAME), tlv(0x04, seq(tlv(0x82, Buffer.from(cn, "ascii"))))),
   );

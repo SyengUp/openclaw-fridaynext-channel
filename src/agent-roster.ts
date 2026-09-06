@@ -120,10 +120,7 @@ export function ensureAgentRosterConfig(
   const existing = findAgentRosterConfig(draft, id);
   if (existing) return existing;
 
-  const agents = (isRecord(draft.agents) ? draft.agents : (draft.agents = {})) as Record<
-    string,
-    unknown
-  >;
+  const agents = isRecord(draft.agents) ? draft.agents : (draft.agents = {});
 
   if (agentRosterKind(draft) === "entries") {
     const entries = agents.entries as Record<string, unknown>;
@@ -134,9 +131,9 @@ export function ensureAgentRosterConfig(
 
   // COMPAT(openclaw<2026.8.1): list-shaped roster, or implicit main with no roster —
   // materialize `{ id }` in `agents.list`. 2026.8.1+ must write `entries[id] = {}` instead.
-  const list = (
-    Array.isArray(agents.list) ? agents.list : (agents.list = [])
-  ) as Array<Record<string, unknown>>;
+  const list = (Array.isArray(agents.list) ? agents.list : (agents.list = [])) as Array<
+    Record<string, unknown>
+  >;
   const created: Record<string, unknown> = { id };
   list.push(created);
   return created;

@@ -237,7 +237,11 @@ function userMessageText(content: unknown): string | undefined {
   if (Array.isArray(content)) {
     const parts: string[] = [];
     for (const block of content) {
-      if (block && typeof block === "object" && (block as Record<string, unknown>).type === "text") {
+      if (
+        block &&
+        typeof block === "object" &&
+        (block as Record<string, unknown>).type === "text"
+      ) {
         const t = (block as Record<string, unknown>).text;
         if (typeof t === "string") parts.push(t);
       }
@@ -251,12 +255,13 @@ function userMessageText(content: unknown): string | undefined {
 function readAgentSessions(agentId: string): FridayHistorySessionSummary[] {
   const rt = getFridayAgentForwardRuntime();
   if (!rt) return [];
-  let storePath = "";
-  try {
-    storePath = rt.resolveStorePath(undefined, { agentId });
-  } catch {
-    storePath = "";
-  }
+  const storePath = (() => {
+    try {
+      return rt.resolveStorePath(undefined, { agentId });
+    } catch {
+      return "";
+    }
+  })();
   const summaries: FridayHistorySessionSummary[] = [];
   for (const row of listSessionStoreRows(agentId)) {
     const storeKey = row.sessionKey;

@@ -51,12 +51,13 @@ export function storeIdempotentUpload(params: {
     .update(`${deviceId}\0${clientAttachmentId}`)
     .digest("hex");
   const ledgerPath = path.join(getAttachmentsDir(), `.upload-${requestKey}.json`);
-  let existing: DurableUploadRecord | null = null;
-  try {
-    existing = JSON.parse(fs.readFileSync(ledgerPath, "utf8")) as DurableUploadRecord;
-  } catch {
-    existing = null;
-  }
+  const existing: DurableUploadRecord | null = (() => {
+    try {
+      return JSON.parse(fs.readFileSync(ledgerPath, "utf8")) as DurableUploadRecord;
+    } catch {
+      return null;
+    }
+  })();
   if (existing) {
     if (existing.sha256 !== claimedHash) {
       throw new IdempotentUploadConflictError(

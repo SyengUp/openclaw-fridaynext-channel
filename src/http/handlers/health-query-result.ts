@@ -40,8 +40,12 @@ export async function handleHealthQueryResult(
     body.payload && typeof body.payload === "object" && !Array.isArray(body.payload)
       ? (body.payload as Record<string, unknown>)
       : {};
-  const errObj = body.error && typeof body.error === "object" ? (body.error as Record<string, unknown>) : {};
-  const code = typeof errObj.code === "string" && errObj.code.trim() ? errObj.code.trim() : "HEALTH_UNAVAILABLE";
+  const errObj =
+    body.error && typeof body.error === "object" ? (body.error as Record<string, unknown>) : {};
+  const code =
+    typeof errObj.code === "string" && errObj.code.trim()
+      ? errObj.code.trim()
+      : "HEALTH_UNAVAILABLE";
   const message =
     typeof errObj.message === "string" && errObj.message.trim()
       ? errObj.message.trim()
@@ -66,7 +70,10 @@ export async function handleHealthQueryResult(
   if (receiptStatus === "prepared" && !hasLiveWaiter) {
     flushRuntimeDeltas();
     store.completeDeviceRequestWithRunEvent("health", requestId, { ok });
-    store.completeCommandReceipt("health-result", requestId, receiptPayload, { ok: true, requestId });
+    store.completeCommandReceipt("health-result", requestId, receiptPayload, {
+      ok: true,
+      requestId,
+    });
     return json(200, { ok: true, requestId, recovered: true });
   }
   if (receiptStatus === "missing") {
@@ -93,7 +100,7 @@ export async function handleHealthQueryResult(
         : "{}";
     const metricKeys =
       payload.metrics && typeof payload.metrics === "object" && !Array.isArray(payload.metrics)
-        ? Object.keys(payload.metrics as Record<string, unknown>).join(",")
+        ? Object.keys(payload.metrics).join(",")
         : "";
     log.info(`health-query ${requestId} ok metrics=[${metricKeys}] auth=${auth}`);
     return json(200, { ok: true, requestId });
