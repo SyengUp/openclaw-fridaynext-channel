@@ -7,6 +7,7 @@ import { sseEmitter } from "../sse/emitter.js";
 import { calendarBusyForDevice, waitForCalendarResult } from "../calendar/pending-store.js";
 import {
   completeDeviceToolRequest,
+  deviceOnlineForToolRequests,
   registerDeviceToolRequest,
   resolveDeviceToolRoute,
 } from "./device-tool-route.js";
@@ -99,7 +100,7 @@ export function createCalendarQueryTool(ctx: { sessionKey?: string }): {
         });
       }
       const { deviceId } = route;
-      if (!sseEmitter.getConnection(deviceId)) {
+      if (!deviceOnlineForToolRequests(deviceId)) {
         return jsonToolResult({
           ok: false,
           error: {

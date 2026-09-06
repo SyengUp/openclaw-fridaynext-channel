@@ -552,6 +552,13 @@ export class DurableRunStore {
     };
   }
 
+  /** Live protocol-v3 stream listeners for the device (`GET /friday-next/v3/events`). Device
+   * tools use this as their online gate alongside the legacy v1 emitter registry: the 1.5 app
+   * connects only to v3, so a v1-only check would report a connected iPhone as offline. */
+  deviceListenerCount(deviceId: string): number {
+    return this.listenersByDevice.get(normalizedDeviceId(deviceId))?.size ?? 0;
+  }
+
   eventsAfter(deviceId: string, afterEventId: number, limit = 1_000): DurableRuntimeEvent[] {
     return this.readDeliveryEvents(normalizedDeviceId(deviceId))
       .filter((event) => event.eventId > afterEventId)

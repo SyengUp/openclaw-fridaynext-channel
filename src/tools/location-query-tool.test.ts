@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { EventEmitter } from "node:events";
 import { sseEmitter } from "../sse/emitter.js";
 import { setMockRuntime } from "../test-support/mock-runtime.js";
+import { getRuntimeV3Store } from "../runtime-v3/runtime-store.js";
 import { createLocationQueryTool, LOCATION_QUERY_TOOL_NAME } from "./location-query-tool.js";
 import { resolveLocationQueryResult } from "../location/pending-store.js";
 
@@ -44,6 +45,71 @@ describe("createLocationQueryTool", () => {
       error: { code: string };
     };
     expect(parsed.error.code).toBe("LOCATION_DEVICE_OFFLINE");
+  });
+
+  it("returns LOCATION_DEVICE_OFFLINE when neither the v1 emitter nor a v3 stream is live", async () => {
+    getRuntimeV3Store();
+    const tool = createLocationQueryTool({ sessionKey: "agent:main:s1" });
+    const result = await tool.execute("call-1b", {});
+    const parsed = JSON.parse(result.content[0].text) as {
+      error: { code: string };
+    };
+    expect(parsed.error.code).toBe("LOCATION_DEVICE_OFFLINE");
+  });
+
+  it("delivers over the v3 delivery journal when only a protocol-v3 stream listener is connected", async () => {
+    // 1.5 app reality: no v1 SSE connection at all — only GET /friday-next/v3/events,
+    // which registers a store subscriber instead of a v1 emitter connection.
+    const store = getRuntimeV3Store();
+    const accepted = store.acceptCommand({
+      clientRequestId: "cr-1",
+      deviceId: "PHONE-1",
+      sessionKey: "agent:main:s1",
+      agentId: "main",
+      text: "hi",
+      attachments: [],
+    });
+    expect(accepted.outcome).toBe("accepted");
+    store.transition(accepted.run!.runId, "running");
+
+    const received: Array<{ eventType: string; payload: Record<string, unknown> }> = [];
+    const unsubscribe = store.subscribe("PHONE-1", (event) => {
+      received.push({
+        eventType: event.eventType,
+        payload: event.payload as Record<string, unknown>,
+      });
+    });
+
+    const tool = createLocationQueryTool({ sessionKey: "agent:main:s1" });
+    const pending = tool.execute("call-v3", {});
+    await vi.waitFor(() => {
+      expect(
+        received.filter((e) => e.eventType === "device.location.request").length,
+      ).toBeGreaterThan(0);
+    });
+
+    const request = received.find((e) => e.eventType === "device.location.request")!;
+    // The v3 mirror wraps the v1 broadcast: { _sourceEventType, _sourceEventData }.
+    const mirrored = (request.payload._sourceEventData ?? {}) as Record<string, unknown>;
+    const requestId = String(mirrored.requestId ?? "");
+    expect(requestId).toBeTruthy();
+    expect(mirrored.sessionKey).toBe("agent:main:s1");
+    expect(request.payload._sourceEventType).toBe("fridaynext-location-query");
+    expect(
+      resolveLocationQueryResult(requestId, {
+        ok: true,
+        payload: {
+          latitude: 31.2,
+          longitude: 121.5,
+          horizontalAccuracy: 9,
+          timestampMs: 1_700_000_000_000,
+        },
+      }),
+    ).toBe(true);
+    const result = await pending;
+    const parsed = JSON.parse(result.content[0].text) as { latitude: number };
+    expect(parsed.latitude).toBe(31.2);
+    unsubscribe();
   });
 
   it("broadcasts fridaynext-location-query and returns the POST payload", async () => {

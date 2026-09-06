@@ -11,6 +11,7 @@ import {
 import { QUERY_METRIC_IDS } from "./health-metrics.js";
 import {
   completeDeviceToolRequest,
+  deviceOnlineForToolRequests,
   registerDeviceToolRequest,
   resolveDeviceToolRoute,
 } from "./device-tool-route.js";
@@ -99,7 +100,7 @@ export function createHealthQueryTool(ctx: { sessionKey?: string }): {
         });
       }
       const { deviceId } = route;
-      if (!sseEmitter.getConnection(deviceId)) {
+      if (!deviceOnlineForToolRequests(deviceId)) {
         return jsonToolResult({
           ok: false,
           error: {

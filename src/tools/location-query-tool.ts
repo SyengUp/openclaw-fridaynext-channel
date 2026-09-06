@@ -12,6 +12,7 @@ import {
 } from "../location/pending-store.js";
 import {
   completeDeviceToolRequest,
+  deviceOnlineForToolRequests,
   registerDeviceToolRequest,
   resolveDeviceToolRoute,
 } from "./device-tool-route.js";
@@ -65,7 +66,7 @@ export function createLocationQueryTool(ctx: { sessionKey?: string }): {
         });
       }
       const { deviceId } = route;
-      if (!sseEmitter.getConnection(deviceId)) {
+      if (!deviceOnlineForToolRequests(deviceId)) {
         return jsonToolResult({
           ok: false,
           error: {
