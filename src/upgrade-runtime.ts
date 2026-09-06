@@ -33,7 +33,7 @@ export type UpgradeRuntime = {
   ) => Promise<SpawnResultLike>;
   /** Read the current (deep-readonly) OpenClaw config snapshot. */
   currentConfig: () => unknown;
-  /** Mutate the config file; `afterWrite: { mode: "restart" }` triggers a safe gateway restart. */
+  /** Mutate the config file. `afterWrite` describes a follow-up; it does not execute it. */
   mutateConfigFile: (params: {
     afterWrite: ConfigAfterWrite;
     mutate: (draft: unknown) => unknown;

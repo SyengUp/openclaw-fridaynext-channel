@@ -200,11 +200,65 @@ describe("upgrade status machine", () => {
     expect(mid.json.phase).toBe("installed");
 
     await vi.advanceTimersByTimeAsync(2_000); // restart delay elapses
-    expect(runtime.mutateConfigFile).toHaveBeenCalledTimes(1);
-    const mutateCall = runtime.mutateConfigFile.mock.calls[0]?.[0] as {
-      afterWrite?: { mode?: string };
-    };
-    expect(mutateCall?.afterWrite?.mode).toBe("restart");
+    expect(runtime.runCommandWithTimeout).toHaveBeenNthCalledWith(
+      2,
+      ["openclaw", "gateway", "restart", "--safe", "--skip-deferral"],
+      expect.any(Number),
+      undefined,
+    );
+  });
+
+  it("executes the gateway restart instead of only returning a config follow-up", async () => {
+    runtime.runCommandWithTimeout
+      .mockResolvedValueOnce({ code: 0, stdout: "", stderr: "" })
+      .mockResolvedValueOnce({ code: 0, stdout: "", stderr: "" });
+
+    await postUpgrade();
+    await vi.advanceTimersByTimeAsync(3_000);
+
+    expect(runtime.runCommandWithTimeout).toHaveBeenNthCalledWith(
+      2,
+      ["openclaw", "gateway", "restart", "--safe", "--skip-deferral"],
+      expect.any(Number),
+      undefined,
+    );
+    expect(runtime.mutateConfigFile).not.toHaveBeenCalled();
+  });
+
+  it("COMPAT: falls back to a plain restart when safe restart flags are unsupported", async () => {
+    runtime.runCommandWithTimeout
+      .mockResolvedValueOnce({ code: 0, stdout: "", stderr: "" })
+      .mockResolvedValueOnce({
+        code: 1,
+        stdout: "",
+        stderr: "error: unknown option '--safe'",
+      })
+      .mockResolvedValueOnce({ code: 0, stdout: "", stderr: "" });
+
+    await postUpgrade();
+    await vi.advanceTimersByTimeAsync(3_000);
+
+    expect(runtime.runCommandWithTimeout).toHaveBeenNthCalledWith(
+      3,
+      ["openclaw", "gateway", "restart"],
+      expect.any(Number),
+      undefined,
+    );
+  });
+
+  it("reports restart failure instead of waiting forever", async () => {
+    runtime.runCommandWithTimeout
+      .mockResolvedValueOnce({ code: 0, stdout: "", stderr: "" })
+      .mockResolvedValueOnce({ code: 1, stdout: "", stderr: "restart refused" });
+
+    await postUpgrade();
+    await vi.advanceTimersByTimeAsync(3_000);
+
+    expect((await getStatus()).json).toMatchObject({
+      phase: "failed",
+      error: "restart-exit-nonzero",
+      detail: expect.stringContaining("restart refused"),
+    });
   });
 
   it("reports failed with the stderr tail when the install exits non-zero", async () => {

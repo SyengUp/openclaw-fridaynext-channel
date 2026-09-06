@@ -26,7 +26,7 @@ import { getUpgradeRuntime, type SpawnResultLike } from "../../upgrade-runtime.j
  * a second POST while one is in flight returns 409, so two installs can never
  * race for memory or the config write lock again.
  *
- * On success the handler schedules a safe gateway restart (500ms after the
+ * On success the handler schedules a safe gateway restart (2s after the
  * 202 has flushed). The restart wipes the in-process upgrade state — which is
  * exactly right: a fresh process runs the new plugin, so `status` reads idle
  * again and the app confirms success by comparing /plugin/info versions.
@@ -49,6 +49,9 @@ const UPGRADE_INSTALL_TIMEOUT_MS = 10 * 60_000;
 /** Give the 202 response time to flush AND the app one status poll
  *  (phase "installed") before the restart drops the connection. */
 const RESTART_DELAY_MS = 2_000;
+/** The safe-restart RPC should acknowledge quickly. The gateway may terminate
+ *  this process immediately after that acknowledgement. */
+const GATEWAY_RESTART_TIMEOUT_MS = 30_000;
 
 export type UpgradePhase = "idle" | "installing" | "installed" | "failed";
 
@@ -80,6 +83,54 @@ function pluginInstallArgv(spec: string, acceptCapabilities: boolean): string[] 
 
 function isUnknownCliOption(stderr: string): boolean {
   return /unknown option/i.test(stderr);
+}
+
+/**
+ * Actually request a gateway restart through OpenClaw's supported CLI.
+ *
+ * `runtime.config.mutateConfigFile({ afterWrite: { mode: "restart" } })` does
+ * not perform the follow-up: OpenClaw returns `{ followUp: { mode: "restart" } }`
+ * to its caller and expects the caller to execute it. Treating that return value
+ * as a restart left the already-flushed plugin on disk while the old gateway
+ * process kept serving forever.
+ *
+ * `--skip-deferral` is intentional here: this detached upgrade task can itself
+ * appear as active gateway work. The install and HTTP response are complete by
+ * the time this runs, so there is no remaining upgrade work to protect.
+ */
+async function requestGatewayRestart(
+  rt: NonNullable<ReturnType<typeof getUpgradeRuntime>>,
+  log: ReturnType<typeof createFridayNextLogger>,
+): Promise<void> {
+  const runRestart = async (argv: string[]): Promise<SpawnResultLike> => {
+    try {
+      return await rt.runCommandWithTimeout(argv, GATEWAY_RESTART_TIMEOUT_MS, undefined);
+    } catch (err) {
+      return { code: -1, stdout: "", stderr: err instanceof Error ? err.message : String(err) };
+    }
+  };
+
+  let argv = ["openclaw", "gateway", "restart", "--safe", "--skip-deferral"];
+  let result = await runRestart(argv);
+
+  // COMPAT: older OpenClaw builds do not expose the safe-restart flags. A
+  // normal managed-service restart is still preferable to leaving the app in
+  // an endless reconnect wait.
+  if (result.code !== 0 && result.code !== -1 && isUnknownCliOption(result.stderr ?? "")) {
+    log.warn("host CLI has no safe gateway restart flags; retrying plain restart");
+    argv = ["openclaw", "gateway", "restart"];
+    result = await runRestart(argv);
+  }
+
+  if (result.code !== 0) {
+    const detail = (result.stderr ?? "").slice(-2000);
+    const errorCode = result.code === -1 ? "restart-spawn-failed" : "restart-exit-nonzero";
+    log.error(`gateway restart exited code=${result.code}: ${detail}`);
+    failUpgrade(errorCode, `exit code ${result.code}: ${detail}`.slice(0, 2000));
+    return;
+  }
+
+  log.info("Gateway restart accepted");
 }
 
 /** Runs the install off the HTTP request path. Mutates `upgradeState` through
@@ -152,16 +203,7 @@ async function runUpgradeInBackground(
   // Responding happened already; give the app one status poll (installed) before
   // the restart drops the connection, then trigger the safe restart.
   setTimeout(() => {
-    void rt
-      .mutateConfigFile({
-        afterWrite: { mode: "restart", reason: "friday-next 插件自动升级后重启" },
-        mutate: () => {},
-      })
-      .catch((err: unknown) => {
-        const msg = err instanceof Error ? err.message : String(err);
-        log.error(`gateway restart trigger failed: ${msg}`);
-        failUpgrade("restart-failed", msg);
-      });
+    void requestGatewayRestart(rt, log);
   }, RESTART_DELAY_MS).unref?.();
 }
 
