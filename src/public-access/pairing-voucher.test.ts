@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it } from "vitest";
-import { mkdtempSync } from "node:fs";
+import { mkdtempSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -10,8 +10,11 @@ import {
 } from "./pairing-voucher.js";
 
 describe("pairing voucher（D12 一次性配对券）", () => {
+  let dir: string;
+
   beforeEach(() => {
-    setPairingVoucherDirForTest(mkdtempSync(join(tmpdir(), "fn-voucher-")));
+    dir = mkdtempSync(join(tmpdir(), "fn-voucher-"));
+    setPairingVoucherDirForTest(dir);
     clearPairingVoucher();
   });
 
@@ -53,4 +56,14 @@ describe("pairing voucher（D12 一次性配对券）", () => {
   it("claim with no outstanding voucher is invalid", () => {
     expect(claimPairingVoucher("fnpv1-" + "a".repeat(32))).toBe("invalid");
   });
+
+  it.skipIf(process.platform === "win32")(
+    "stores the voucher hash owner-only, including rewrites",
+    () => {
+      const file = join(dir, "pairing-voucher.json");
+      writeFileSync(file, "{}", { mode: 0o644 });
+      mintPairingVoucher();
+      expect(statSync(file).mode & 0o777).toBe(0o600);
+    },
+  );
 });

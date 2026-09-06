@@ -3,7 +3,7 @@
 FridayNext is an independent iOS app for OpenClaw. It streams every answer live, shows you
 the thinking behind it, and keeps your agent one tap away — anywhere you go.
 
-[<img src="assets/download-on-the-app-store.png" width="120" alt="Download on the App Store">](https://apps.apple.com/us/app/fridaynext/id6768689875)
+[<img src="https://raw.githubusercontent.com/SyengUp/openclaw-fridaynext-channel/main/assets/download-on-the-app-store.png" width="120" alt="Download on the App Store">](https://apps.apple.com/us/app/fridaynext/id6768689875)
 
 ---
 
@@ -39,14 +39,14 @@ be online, and nothing is written without the write toggle on.
 ## A glimpse inside
 
 <p align="center">
-  <img src="assets/screenshots/frame-33.png" width="1055" alt="FridayNext screenshots — home, native markdown, transparent reasoning & tools, and agent management">
+  <img src="https://raw.githubusercontent.com/SyengUp/openclaw-fridaynext-channel/main/assets/screenshots/frame-33.png" width="1055" alt="FridayNext screenshots — home, native markdown, transparent reasoning & tools, and agent management">
 </p>
 
 <p align="center"><em>Your agents, your chats, your tools — all in one place.</em></p>
 
 ## Download
 
-[<img src="assets/download-on-the-app-store.png" width="120" alt="Download on the App Store">](https://apps.apple.com/us/app/fridaynext/id6768689875)
+[<img src="https://raw.githubusercontent.com/SyengUp/openclaw-fridaynext-channel/main/assets/download-on-the-app-store.png" width="120" alt="Download on the App Store">](https://apps.apple.com/us/app/fridaynext/id6768689875)
 
 Available now on the App Store for iPhone. Free to download.
 

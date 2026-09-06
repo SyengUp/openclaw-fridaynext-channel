@@ -18,7 +18,6 @@ import { createSocket } from "node:dgram";
 import { request as httpsRequest } from "node:https";
 import {
   existsSync,
-  mkdirSync,
   writeFileSync,
   readFileSync,
   chmodSync,
@@ -42,6 +41,7 @@ import { getHostOpenClawConfigSnapshot } from "../host-config.js";
 import { StandbyLoopGuard } from "./standby-loop-guard.js";
 import { TunnelWatchdogPolicy } from "./tunnel-watchdog-policy.js";
 import { getFridayNextRuntime } from "../runtime.js";
+import { ensurePrivateDirectory, writePrivateFile } from "./private-file.js";
 
 const FRP_VERSION = "0.69.1";
 const FRP_SHA256: Record<string, string> = {
@@ -297,7 +297,7 @@ function startTunnelHealthWatchdog(publicUrl: string, cfg: PublicAccessConfig, l
 }
 
 function ensureDir(): void {
-  mkdirSync(DATA_DIR, { recursive: true });
+  ensurePrivateDirectory(DATA_DIR);
 }
 
 function frpcPath(): string {
@@ -748,7 +748,7 @@ async function resolveSubdomain(cfg: PublicAccessConfig, log: Logger): Promise<s
       ? readFileSync(subdomainKeyPath(), "utf8").trim()
       : ""; // pre-key-file installs: keep the record and stamp the current key below
     if (s && isValidSubdomainLabel(s) && (!allocKey || allocKey === key)) {
-      if (!allocKey) writeFileSync(subdomainKeyPath(), key);
+      writePrivateFile(subdomainKeyPath(), key);
       return s;
     }
     if (s) log(`gateway key changed — discarding stale subdomain allocation "${s}"`);
@@ -762,7 +762,7 @@ async function resolveSubdomain(cfg: PublicAccessConfig, log: Logger): Promise<s
       return null;
     }
     writeFileSync(f, sub);
-    writeFileSync(subdomainKeyPath(), key);
+    writePrivateFile(subdomainKeyPath(), key);
     log(`allocated subdomain "${sub}" from relay registry`);
     return sub;
   } catch (e) {

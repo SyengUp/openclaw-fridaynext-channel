@@ -9,6 +9,7 @@ export default tseslint.config(
       "node_modules/**",
       "scripts/**",
       "install.js",
+      "install-runtime.js",
       "install-ui.js",
       "install-i18n.js",
       "eslint.config.js",

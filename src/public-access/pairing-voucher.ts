@@ -15,9 +15,10 @@
  * is persisted — a disk read never yields a claimable voucher.
  */
 import { createHash, randomBytes } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, unlinkSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
+import { ensurePrivateDirectory, writePrivateFile } from "./private-file.js";
 
 const VOUCHER_TTL_MS = 10 * 60_000; // D12: 10 minutes
 let dataDir = join(homedir(), ".openclaw", "friday-next", "public-access");
@@ -44,11 +45,18 @@ function loadStored(): StoredVoucher | null {
 }
 
 /** Mint a fresh voucher, replacing (= invalidating) any outstanding one. */
-export function mintPairingVoucher(nowMs = Date.now()): { voucher: string; expiresAt: number; ttlSec: number } {
+export function mintPairingVoucher(nowMs = Date.now()): {
+  voucher: string;
+  expiresAt: number;
+  ttlSec: number;
+} {
   const voucher = "fnpv1-" + randomBytes(16).toString("hex");
   const expiresAt = nowMs + VOUCHER_TTL_MS;
-  mkdirSync(dataDir, { recursive: true });
-  writeFileSync(storePath(), JSON.stringify({ codeHash: sha256Hex(voucher), expiresAt } satisfies StoredVoucher));
+  ensurePrivateDirectory(dataDir);
+  writePrivateFile(
+    storePath(),
+    JSON.stringify({ codeHash: sha256Hex(voucher), expiresAt } satisfies StoredVoucher),
+  );
   return { voucher, expiresAt, ttlSec: Math.floor(VOUCHER_TTL_MS / 1000) };
 }
 

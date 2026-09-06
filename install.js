@@ -6,6 +6,11 @@ import { homedir, networkInterfaces } from "node:os";
 import { join } from "node:path";
 import { createInstallerUI } from "./install-ui.js";
 import { strings } from "./install-i18n.js";
+import {
+  pollPairingSuperset as pollForPairingSuperset,
+  runShellCommand,
+  verifyGateway,
+} from "./install-runtime.js";
 
 const sudoUser = process.env.SUDO_USER;
 
@@ -239,11 +244,11 @@ async function resolveTaggedVersion(distTag, registry) {
     if (v) return v;
   }
   try {
-    const v = execSync(`npm view ${PKG}@${distTag} version`, {
-      encoding: "utf8",
+    const { stdout } = await runShellCommand(`npm view ${PKG}@${distTag} version`, {
       timeout: 20000,
       env: { ...process.env, ...(installEnvFor(registry) ?? {}) },
-    }).trim();
+    });
+    const v = stdout.trim();
     if (/^\d+\.\d+\.\d+/.test(v)) return v;
   } catch {
     /* fall through */
@@ -256,20 +261,23 @@ const installStep = ui.step(T.stepInstall);
 const registry = await resolveRegistry();
 const installEnv = installEnvFor(registry);
 const resolvedVersion = await resolveTaggedVersion(DIST_TAG, registry);
-// Registry lookup failed — fall back to the bare dist-tag so a transient network
-// hiccup doesn't block the install. Re-running later pins an exact spec.
-const installSpec = `${PKG}@${resolvedVersion ?? DIST_TAG}`;
+// Exact verification is a safety gate: without the resolved target version an old gateway
+// process could answer successfully while the newly-installed plugin never started.
+if (!resolvedVersion) {
+  installStep.fail();
+  die(T.failResolveVersion, RERUN_CMD);
+}
+const installSpec = `${PKG}@${resolvedVersion}`;
 
 // OpenClaw 2026.8.1+ refuses `plugins install` until the operator accepts the
 // plugin's declared capabilities. COMPAT(openclaw<2026.8.1): older CLIs do not
 // have `--accept-capabilities` (unknown option → install fails). Probe --help
 // once so we don't spend the 120s timeout discovering that.
 let cachedAcceptCapabilitiesFlag;
-function acceptCapabilitiesFlag() {
+async function acceptCapabilitiesFlag() {
   if (cachedAcceptCapabilitiesFlag !== undefined) return cachedAcceptCapabilitiesFlag;
   try {
-    const help = execSync(`${openclawCmd} plugins install --help`, {
-      encoding: "utf8",
+    const { stdout: help } = await runShellCommand(`${openclawCmd} plugins install --help`, {
       timeout: 20000,
     });
     cachedAcceptCapabilitiesFlag = String(help).includes("--accept-capabilities")
@@ -284,10 +292,9 @@ function acceptCapabilitiesFlag() {
   return cachedAcceptCapabilitiesFlag;
 }
 
-function runPluginInstall(spec, env) {
-  execSync(`${openclawCmd} plugins install ${spec} --force${acceptCapabilitiesFlag()}`, {
-    encoding: "utf8",
-    stdio: "pipe",
+async function runPluginInstall(spec, env) {
+  const capabilities = await acceptCapabilitiesFlag();
+  await runShellCommand(`${openclawCmd} plugins install ${spec} --force${capabilities}`, {
     timeout: 120000,
     env: { ...process.env, ...(env ?? {}) },
   });
@@ -296,14 +303,14 @@ function runPluginInstall(spec, env) {
 try {
   try {
     installStep.detail(registryHost(registry));
-    runPluginInstall(installSpec, installEnv);
+    await runPluginInstall(installSpec, installEnv);
   } catch (first) {
     // Same failover as plugin-upgrade: one retry on the other known candidate.
     // An explicit FRIDAY_NPM_REGISTRY override is authoritative — don't bypass it.
     const alternate = alternateRegistry(registry);
     if (!alternate) throw first;
     installStep.detail(registryHost(alternate));
-    runPluginInstall(installSpec, installEnvFor(alternate));
+    await runPluginInstall(installSpec, installEnvFor(alternate));
   }
 
   // Remove old manual install to avoid "duplicate plugin id" warning.
@@ -315,7 +322,7 @@ try {
       /* non-critical */
     }
   }
-  installStep.ok((resolvedVersion ?? DIST_TAG) + (DIST_TAG === "beta" ? " (beta)" : ""));
+  installStep.ok(resolvedVersion + (DIST_TAG === "beta" ? " (beta)" : ""));
 } catch (e) {
   const msg = (e.stderr || e.stdout || e.message || "").toString();
   installStep.fail();
@@ -501,13 +508,14 @@ const SERVICE_UNAVAILABLE_RE =
 try {
   // A full gateway restart commonly takes 20s+ on a fresh boot; give it plenty of room
   // so we don't kill it mid-restart and report a false failure.
-  const restartOut = execSync(`${openclawCmd} gateway restart`, {
-    encoding: "utf8",
-    stdio: "pipe",
-    timeout: 90000,
-  });
+  const { stdout: restartOut, stderr: restartErr } = await runShellCommand(
+    `${openclawCmd} gateway restart`,
+    {
+      timeout: 90000,
+    },
+  );
   // The core exits 0 while explaining there is no service — read what it said.
-  gatewayServiceUnavailable = SERVICE_UNAVAILABLE_RE.test(restartOut ?? "");
+  gatewayServiceUnavailable = SERVICE_UNAVAILABLE_RE.test(`${restartOut}\n${restartErr}`);
   restartStep.ok(gatewayServiceUnavailable ? T.detailRestartNoService : "");
 } catch (e) {
   gatewayServiceUnavailable = SERVICE_UNAVAILABLE_RE.test(`${e.stdout ?? ""}\n${e.stderr ?? ""}`);
@@ -586,53 +594,14 @@ const gatewayUrl =
 // and this avoids false negatives from LAN/NAT routing of the advertised IP.
 const verifyUrl = `http://127.0.0.1:${gatewayPort}`;
 
-async function verifyGateway(url, token, retries = 30) {
-  const http = await import("node:http");
-  const { hostname, port } = new URL(url);
-  for (let i = 1; i <= retries; i++) {
-    await new Promise((r) => setTimeout(r, 1000));
-    try {
-      const res = await new Promise((resolve, reject) => {
-        const req = http.request(
-          {
-            hostname,
-            port,
-            path: "/friday-next/status",
-            method: "GET",
-            headers: { authorization: `Bearer ${token}` },
-            timeout: 5000,
-          },
-          (res) => {
-            let body = "";
-            res.on("data", (c) => (body += c));
-            res.on("end", () => resolve({ status: res.statusCode, body }));
-          },
-        );
-        req.on("error", reject);
-        req.on("timeout", () => {
-          req.destroy();
-          reject(new Error("timeout"));
-        });
-        req.end();
-      });
-      if (res.status === 200) {
-        try {
-          const data = JSON.parse(res.body);
-          if (data.ok) return { ok: true, version: data.version };
-          return { ok: false, reason: T.reasonNotOk };
-        } catch {
-          verifyStep.detail(T.detailRetry(i, retries));
-          continue;
-        }
-      }
-      if (res.status === 401) return { ok: false, reason: T.reasonAuth };
-      if (res.status === 404) return { ok: false, reason: T.reasonNotLoaded };
-      verifyStep.detail(T.detailRetry(i, retries));
-    } catch {
-      verifyStep.detail(T.detailRetry(i, retries));
-    }
+function verifyFailureText(result) {
+  if (result.reason === "not-ok") return T.reasonNotOk;
+  if (result.reason === "auth") return T.reasonAuth;
+  if (result.reason === "not-loaded") return T.reasonNotLoaded;
+  if (result.reason === "version-mismatch") {
+    return T.reasonVersionMismatch(result.expectedVersion, result.actualVersion);
   }
-  return { ok: false, reason: T.reasonTimeout };
+  return T.reasonTimeout;
 }
 
 /** Start the gateway detached on native Windows, where the managed Scheduled Task start can
@@ -663,7 +632,12 @@ const verifyStep = ui.step(T.stepVerify);
 // then burned the whole verify window on a port nobody owned). Probe briefly; if nobody
 // answers, start the gateway detached ourselves and let the full verify below decide.
 if (process.platform === "win32") {
-  const quick = await verifyGateway(verifyUrl, gatewayToken, 3);
+  const quick = await verifyGateway({
+    url: verifyUrl,
+    token: gatewayToken,
+    expectedVersion: resolvedVersion,
+    retries: 3,
+  });
   if (!quick.ok) {
     selfStartGatewayWindows();
     restartStep.detail(T.detailRestartSelfStart);
@@ -671,13 +645,19 @@ if (process.platform === "win32") {
 }
 // No managed service → nobody is going to start the gateway for us; a running foreground
 // gateway answers on the first few probes, so don't sit through the full 30s timeout.
-const verified = await verifyGateway(verifyUrl, gatewayToken, gatewayServiceUnavailable ? 5 : 30);
+const verified = await verifyGateway({
+  url: verifyUrl,
+  token: gatewayToken,
+  expectedVersion: resolvedVersion,
+  retries: gatewayServiceUnavailable ? 5 : 30,
+  onRetry: (i, retries) => verifyStep.detail(T.detailRetry(i, retries)),
+});
 
 // Hard gate: if the gateway didn't verify, the install did NOT succeed — stop here
 // with a non-zero exit and never print the QR block, so a failure can't look like
 // a success.
 if (!verified.ok) {
-  verifyStep.fail(verified.reason);
+  verifyStep.fail(verifyFailureText(verified));
   // Containers / hosts without systemd: the plugin IS installed and configured; only the
   // gateway process isn't running (and can't be, as a service). Saying "Installation FAILED"
   // here sends the user chasing a phantom install problem — tell them the one real next step.
@@ -686,7 +666,7 @@ if (!verified.ok) {
   }
   die(T.failGateway, "openclaw gateway status", "openclaw gateway restart", RERUN_CMD);
 }
-verifyStep.ok(verified.version ? `friday-next ${verified.version}` : "");
+verifyStep.ok(`friday-next ${verified.pluginVersion}`);
 
 // --------------- QR code ---------------
 
@@ -735,7 +715,6 @@ async function fetchPairingSuperset(url, token) {
 // Five minutes covers a full slow certificate-signing attempt, the manager's 30s retry delay,
 // and another attempt, while still returning immediately as soon as pairing coordinates exist.
 const PAIRING_WAIT_TIMEOUT_MS = 5 * 60_000;
-const PAIRING_POLL_INTERVAL_MS = 3_000;
 
 // Default QR: legacy `{url, token}` — what stable installs emit. The beta channel
 // upgrades it to the public-access superset so a scan also arms remote access.
@@ -772,20 +751,12 @@ if (DIST_TAG === "beta") {
 async function pollPairingSuperset(url, token) {
   const step = ui.step(T.stepTunnel);
   step.detail(T.detailTunnelWait);
-  const deadline = Date.now() + PAIRING_WAIT_TIMEOUT_MS;
-  while (Date.now() < deadline) {
-    const pairing = await fetchPairingSuperset(url, token);
-    if (pairing?.publicUrl && pairing?.pairingTicket) {
-      step.ok();
-      return pairing;
-    }
-    const remaining = deadline - Date.now();
-    if (remaining > 0) {
-      await new Promise((r) => setTimeout(r, Math.min(PAIRING_POLL_INTERVAL_MS, remaining)));
-    }
-  }
-  step.fail();
-  return null;
+  const pairing = await pollForPairingSuperset(() => fetchPairingSuperset(url, token), {
+    timeoutMs: PAIRING_WAIT_TIMEOUT_MS,
+  });
+  if (pairing) step.ok(T.detailTunnelReady);
+  else step.fail();
+  return pairing;
 }
 
 // Encrypt the QR payload into the `FNQR1:` envelope so a generic QR reader shows

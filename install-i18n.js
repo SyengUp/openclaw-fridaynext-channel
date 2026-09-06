@@ -35,7 +35,7 @@ const STRINGS = {
     stepConfigure: "配置 OpenClaw",
     stepRestart: "重启网关",
     stepVerify: "校验网关",
-    stepTunnel: "等待隧道就绪",
+    stepTunnel: "准备配对",
 
     detailUpdated: "已更新",
     detailUnchanged: "无需改动",
@@ -45,7 +45,8 @@ const STRINGS = {
     detailRestartNoService: "无网关服务（需手动启动）",
     detailRestartSelfStart: "服务未拉起，已直接启动网关",
     detailRetry: (i, n) => `重试 ${i}/${n}`,
-    detailTunnelWait: "最长等待 5 分钟",
+    detailTunnelWait: "等待身份与证书，最长 5 分钟",
+    detailTunnelReady: "已就绪",
 
     scanToPair: "扫描下方二维码完成配对",
     scanFallback: "二维码无法显示，请在 Friday Next 中手动填写",
@@ -61,6 +62,7 @@ const STRINGS = {
     failNoOpenclaw: "未找到 openclaw",
     failTooOld: (v) => `OpenClaw ${v} 版本过低，需 2026.5.12 以上`,
     failInstall: "插件安装失败",
+    failResolveVersion: "无法确认要安装的插件版本",
     failReadConfig: (p) => `无法读取 ${p}`,
     failReadConfigHint: "确认 OpenClaw 已安装并至少运行过一次",
     failWriteConfig: (p) => `无法写入 ${p}`,
@@ -72,13 +74,15 @@ const STRINGS = {
     reasonAuth: "令牌不匹配（gateway.auth.token）",
     reasonNotLoaded: "插件未加载（路由 404）",
     reasonTimeout: "校验超时",
+    reasonVersionMismatch: (expected, actual) =>
+      `版本未切换（需要 ${expected}，当前 ${actual || "未知"}）`,
   },
   en: {
     stepInstall: "Install plugin",
     stepConfigure: "Configure OpenClaw",
     stepRestart: "Restart gateway",
     stepVerify: "Verify gateway",
-    stepTunnel: "Waiting for tunnel",
+    stepTunnel: "Prepare pairing",
 
     detailUpdated: "updated",
     detailUnchanged: "no changes",
@@ -88,7 +92,8 @@ const STRINGS = {
     detailRestartNoService: "no gateway service (manual start required)",
     detailRestartSelfStart: "service start failed — gateway launched directly",
     detailRetry: (i, n) => `retry ${i}/${n}`,
-    detailTunnelWait: "waiting up to 5 min",
+    detailTunnelWait: "identity and certificate, up to 5 min",
+    detailTunnelReady: "ready",
 
     scanToPair: "Scan the code below to pair",
     scanFallback: "QR unavailable — enter these in Friday Next manually",
@@ -105,6 +110,7 @@ const STRINGS = {
     failNoOpenclaw: "openclaw not found",
     failTooOld: (v) => `OpenClaw ${v} is too old — 2026.5.12 or newer required`,
     failInstall: "plugin install failed",
+    failResolveVersion: "cannot resolve the plugin version to install",
     failReadConfig: (p) => `cannot read ${p}`,
     failReadConfigHint: "make sure OpenClaw is installed and has run at least once",
     failWriteConfig: (p) => `cannot write ${p}`,
@@ -116,6 +122,8 @@ const STRINGS = {
     reasonAuth: "token mismatch (gateway.auth.token)",
     reasonNotLoaded: "plugin not loaded (route 404)",
     reasonTimeout: "verification timed out",
+    reasonVersionMismatch: (expected, actual) =>
+      `version did not switch (expected ${expected}, running ${actual || "unknown"})`,
   },
 };
 

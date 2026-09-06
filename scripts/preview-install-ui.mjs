@@ -81,7 +81,14 @@ async function run(name) {
   }
   verify.ok("friday-next 1.0.15-beta.16");
 
-  if (name === "lan-only") ui.note(T.noteLanOnly);
+  if (name === "lan-only") {
+    ui.note(T.noteLanOnly);
+  } else {
+    const pairing = ui.step(T.stepTunnel);
+    pairing.detail(T.detailTunnelWait);
+    await sleep(500);
+    pairing.ok(T.detailTunnelReady);
+  }
 
   ui.result(
     name === "no-qr"
