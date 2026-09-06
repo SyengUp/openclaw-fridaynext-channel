@@ -3,6 +3,7 @@ import os from "node:os";
 import { readFileSync, writeFileSync } from "node:fs";
 import { getFridayAgentForwardRuntime } from "../agent-forward-runtime.js";
 import { findAgentRosterConfig } from "../agent-roster.js";
+import { resolveOpenClawVersion } from "../skills-discovery.js";
 import { createFridayNextLogger } from "../logging.js";
 
 const log = createFridayNextLogger("session");
@@ -137,6 +138,22 @@ const EXEC_MODE_TO_PERMISSION: Record<string, SessionPermissionMode> = {
   full: "full",
 };
 
+/** Session-permission consumption (`sessionEntry.permissionMode` + the `tools.exec` policy
+ * family) shipped in openclaw 2026.8.1; older hosts predate the system entirely. */
+const SESSION_PERMISSION_MIN_HOST_VERSION = [2026, 8, 1] as const;
+
+function hostSupportsSessionPermissions(): boolean {
+  const version = resolveOpenClawVersion();
+  if (!version) return false;
+  const segments = version.split(".").map((s) => Number.parseInt(s, 10));
+  for (let i = 0; i < SESSION_PERMISSION_MIN_HOST_VERSION.length; i++) {
+    const seg = Number.isFinite(segments[i]) ? segments[i] : 0;
+    const target = SESSION_PERMISSION_MIN_HOST_VERSION[i];
+    if (seg !== target) return seg > target;
+  }
+  return true;
+}
+
 function readNestedString(obj: unknown, path: string[]): string | undefined {
   let cur: unknown = obj;
   for (const key of path) {
@@ -165,7 +182,15 @@ export function resolveDefaultPermissionMode(
     readNestedString(agentConfig, ["tools", "exec", "mode"]) ??
     readNestedString(cfg, ["agents", "defaults", "tools", "exec", "mode"]) ??
     readNestedString(cfg, ["tools", "exec", "mode"]);
-  if (!execMode || execMode === "allowlist") return undefined;
+  if (!execMode) {
+    // Zero-config host: core's runtime default is full-access exec — `resolveExecDefaults`
+    // seeds `{security:"full", ask:"off"}` when `tools.exec` is unset and sandboxing is off
+    // (verified in the 2026.8.1 and 2026.9.1 dists). Gated on host version because hosts
+    // before 2026.8.1 predate the session-permission system and would ignore what the
+    // app writes; they keep reporting no catalog.
+    return hostSupportsSessionPermissions() ? "full" : undefined;
+  }
+  if (execMode === "allowlist") return undefined;
   return EXEC_MODE_TO_PERMISSION[execMode];
 }
 

@@ -142,6 +142,41 @@ export function resolveOpenClawRoot(): string | null {
   return cachedOpenClawRoot;
 }
 
+let cachedOpenClawVersion: string | null | undefined;
+let openClawVersionOverrideForTest: string | null | undefined;
+
+/**
+ * Host gateway's `openclaw` package version (e.g. "2026.8.1"), or undefined when the
+ * install root can't be located / has no readable version (standalone unit tests).
+ * Used to gate capabilities that have no cleaner runtime probe.
+ */
+export function resolveOpenClawVersion(): string | undefined {
+  if (openClawVersionOverrideForTest !== undefined) {
+    return openClawVersionOverrideForTest ?? undefined;
+  }
+  if (cachedOpenClawVersion !== undefined) return cachedOpenClawVersion ?? undefined;
+  const root = resolveOpenClawRoot();
+  if (!root) {
+    cachedOpenClawVersion = null;
+    return undefined;
+  }
+  try {
+    const pkg = JSON.parse(fs.readFileSync(path.join(root, "package.json"), "utf-8")) as {
+      version?: unknown;
+    };
+    cachedOpenClawVersion =
+      typeof pkg?.version === "string" && pkg.version.trim() ? pkg.version.trim() : null;
+  } catch {
+    cachedOpenClawVersion = null;
+  }
+  return cachedOpenClawVersion ?? undefined;
+}
+
+/** Vitest-only: pin the host version (`null` simulates "cannot resolve"). */
+export function setOpenClawVersionOverrideForTest(version: string | null | undefined): void {
+  openClawVersionOverrideForTest = version === undefined ? undefined : version;
+}
+
 function computeOpenClawRoot(): string | null {
   const starts: string[] = [];
   // Primary: resolve a subpath this plugin already imports (works inside the gateway

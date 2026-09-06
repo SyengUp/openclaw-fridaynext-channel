@@ -10,6 +10,7 @@ import {
   resetFridayAgentForwardRuntimeForTest,
 } from "../../agent-forward-runtime.js";
 import { setAgentGreetingsBaseDirForTest } from "../../agent-greetings/greetings-store.js";
+import { setOpenClawVersionOverrideForTest } from "../../skills-discovery.js";
 
 class MockRes extends EventEmitter {
   statusCode = 0;
@@ -53,6 +54,7 @@ describe("handleAgentsList", () => {
 
   afterEach(() => {
     setAgentGreetingsBaseDirForTest(null);
+    setOpenClawVersionOverrideForTest(undefined);
     fs.rmSync(greetingsDir, { recursive: true, force: true });
     resetFridayAgentForwardRuntimeForTest();
   });
@@ -95,6 +97,46 @@ describe("handleAgentsList", () => {
 
   it("omits the permission catalog when the gateway policy cannot be resolved", async () => {
     setConfig({ tools: { exec: { mode: "allowlist" } } });
+    const res = new MockRes();
+    await handleAgentsList(makeReq(AUTH), res as any);
+
+    expect(res.statusCode).toBe(200);
+    expect(JSON.parse(res.body).permissionModes).toBeUndefined();
+  });
+
+  it("falls back to the host runtime default (full) on a zero-config ≥2026.8.1 gateway", async () => {
+    // Fresh installs never set tools.exec; core's resolveExecDefaults runs full-access
+    // exec there, so the app's permission picker must still surface.
+    setOpenClawVersionOverrideForTest("2026.9.1");
+    setConfig({ agents: { defaults: {} } });
+    const res = new MockRes();
+    await handleAgentsList(makeReq(AUTH), res as any);
+
+    expect(res.statusCode).toBe(200);
+    const body = JSON.parse(res.body);
+    expect(body.defaultPermissionMode).toBe("full");
+    expect(body.permissionModes).toEqual(["read-only", "guarded", "workspace", "full"]);
+    expect(body.agents[0].defaultPermissionMode).toBe("full");
+  });
+
+  it("keeps the catalog omitted on a zero-config pre-2026.8.1 host", async () => {
+    // Older hosts predate the session-permission system: surfacing a picker there
+    // would let the app write a permissionMode nothing consumes.
+    setOpenClawVersionOverrideForTest("2026.6.11");
+    setConfig({ agents: { defaults: {} } });
+    const res = new MockRes();
+    await handleAgentsList(makeReq(AUTH), res as any);
+
+    expect(res.statusCode).toBe(200);
+    const body = JSON.parse(res.body);
+    expect(body.defaultPermissionMode).toBeUndefined();
+    expect(body.permissionModes).toBeUndefined();
+    expect(body.agents[0].defaultPermissionMode).toBeUndefined();
+  });
+
+  it("keeps the catalog omitted when the host version cannot be resolved", async () => {
+    setOpenClawVersionOverrideForTest(null);
+    setConfig({ agents: { defaults: {} } });
     const res = new MockRes();
     await handleAgentsList(makeReq(AUTH), res as any);
 
