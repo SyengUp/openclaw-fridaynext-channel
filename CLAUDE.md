@@ -79,7 +79,7 @@ iOS App ←--HTTP/SSE--→ Friday Plugin ←--OpenClaw Plugin API--→ Gateway +
    - `GET /friday-next/health` — node-pairing health + optional self-heal (`handleHealth`; query: `deviceId`, `nodeDeviceId`, `selfHeal`)
    - `GET /friday-next/history/sessions` · `GET /friday-next/history/messages` · `PUT|POST /friday-next/sessions/title` — history sync (list sessions across agents, read a session's messages, sync app title → server `displayName`).
    - `GET /friday-next/link-preview?url=...` — Open Graph metadata for link-preview cards.
-   - `GET /friday-next/plugin/info` · `POST /friday-next/plugin/upgrade` — self-version report + in-process npm upgrade & safe restart (npm installs only; dev/`--link` installs return 409).
+   - `GET /friday-next/plugin/info` · `POST /friday-next/plugin/upgrade` — self-version report + in-process npm upgrade & managed-service restart (npm installs only; dev/`--link` installs return 409).
    - `POST /friday-next/device-approve` · `POST /friday-next/nodes-approve` — device/node pairing approval.
 
    The single registered route (`path: "/friday-next"`, `match: "prefix"`, `auth: "plugin"`) is dispatched by `handleFridayNextRoute` via method+pathname checks; the plugin does its own bearer auth. The `/friday-next/agents/{id}/...` subpaths are parsed segment-wise in `server.ts`.

@@ -307,7 +307,7 @@ async function handleFridayNextRoute(req: IncomingMessage, res: ServerResponse):
     return await handlePluginInfo(req, res);
   }
 
-  // Route: POST /friday-next/plugin/upgrade (async npm install @latest + safe gateway restart)
+  // Route: POST /friday-next/plugin/upgrade (async npm install @latest + gateway restart)
   if (req.method === "POST" && pathname === "/friday-next/plugin/upgrade") {
     return await handlePluginUpgrade(req, res);
   }

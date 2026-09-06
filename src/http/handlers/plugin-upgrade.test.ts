@@ -202,7 +202,7 @@ describe("upgrade status machine", () => {
     await vi.advanceTimersByTimeAsync(2_000); // restart delay elapses
     expect(runtime.runCommandWithTimeout).toHaveBeenNthCalledWith(
       2,
-      ["openclaw", "gateway", "restart", "--safe", "--skip-deferral"],
+      ["openclaw", "gateway", "restart"],
       expect.any(Number),
       undefined,
     );
@@ -218,32 +218,11 @@ describe("upgrade status machine", () => {
 
     expect(runtime.runCommandWithTimeout).toHaveBeenNthCalledWith(
       2,
-      ["openclaw", "gateway", "restart", "--safe", "--skip-deferral"],
-      expect.any(Number),
-      undefined,
-    );
-    expect(runtime.mutateConfigFile).not.toHaveBeenCalled();
-  });
-
-  it("COMPAT: falls back to a plain restart when safe restart flags are unsupported", async () => {
-    runtime.runCommandWithTimeout
-      .mockResolvedValueOnce({ code: 0, stdout: "", stderr: "" })
-      .mockResolvedValueOnce({
-        code: 1,
-        stdout: "",
-        stderr: "error: unknown option '--safe'",
-      })
-      .mockResolvedValueOnce({ code: 0, stdout: "", stderr: "" });
-
-    await postUpgrade();
-    await vi.advanceTimersByTimeAsync(3_000);
-
-    expect(runtime.runCommandWithTimeout).toHaveBeenNthCalledWith(
-      3,
       ["openclaw", "gateway", "restart"],
       expect.any(Number),
       undefined,
     );
+    expect(runtime.mutateConfigFile).not.toHaveBeenCalled();
   });
 
   it("reports restart failure instead of waiting forever", async () => {
