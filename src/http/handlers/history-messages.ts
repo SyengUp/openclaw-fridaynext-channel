@@ -19,6 +19,7 @@ import { normalizeHistoryMessages } from "../../history/normalize-message.js";
 import {
   readSessionTranscriptRawMessages,
   resolveSessionId,
+  resolveSessionTitle,
 } from "../../history/read-transcript.js";
 import { resolveMediaAttachment } from "./files.js";
 import { readSessionUsageSnapshotFromStore } from "../../session-usage-store.js";
@@ -155,6 +156,11 @@ export async function handleHistoryMessages(
 
   const sessionId = resolveSessionId(sessionKey);
 
+  // The session's current displayName/label (AI title or user rename). The app
+  // applies it to heal sessions still stuck in the pending-AI-title window — the
+  // `session-title` push is a live nicety, this read is the deterministic catch-up.
+  const sessionTitle = resolveSessionTitle(sessionKey);
+
   // Cumulative session-usage snapshot (model + context window/used) read from the
   // session store — the SAME source the live `lifecycle.end` frame uses. The
   // transcript carries per-message model/tokens but NOT the context-window figures,
@@ -170,6 +176,7 @@ export async function handleHistoryMessages(
       sessionKey,
       ...(agentId ? { agentId } : {}),
       ...(sessionId ? { sessionId } : {}),
+      ...(sessionTitle ? { title: sessionTitle } : {}),
       totalMessages: messages.length,
       messages,
       ...(sessionUsage ? { sessionUsage } : {}),

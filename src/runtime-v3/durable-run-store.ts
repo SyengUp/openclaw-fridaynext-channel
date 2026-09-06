@@ -130,6 +130,16 @@ const busyPhases = new Set<DurableRunPhase>([
   "reconciling",
 ]);
 
+/**
+ * Meta events that describe a run's outcome rather than drive its lifecycle. The AI
+ * session title is generated asynchronously and can land after the run that produced
+ * the first message already completed (fast reply + slow utility model); it must still
+ * reach runtime-v3 clients live and on replay — the legacy SSE broadcast is invisible
+ * to them. `phaseAfterEvent` leaves the terminal phase untouched, and `appendRunEvent`
+ * rewrites the run snapshot afterwards so the event survives journal compaction.
+ */
+const postTerminalMetaEvents = new Set(["session-title"]);
+
 function normalizedDeviceId(deviceId: string): string {
   return deviceId.trim().toUpperCase();
 }
@@ -481,7 +491,7 @@ export class DurableRunStore {
     const current = this.runsById.get(runId.trim());
     if (!current) throw new Error(`unknown runId: ${runId}`);
     const requestedTerminalPhase = terminalPhaseForEvent(eventType);
-    if (terminalPhases.has(current.phase)) {
+    if (terminalPhases.has(current.phase) && !postTerminalMetaEvents.has(eventType)) {
       const existingEvents = this.eventsForRun(current.runId);
       const existingTerminal = existingEvents
         .filter((event) => terminalPhaseForEvent(event.eventType) !== undefined)

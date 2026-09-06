@@ -439,4 +439,44 @@ describe("DurableRunStore", () => {
     reconstructed.completeDeviceRequest("health", "health-1");
     expect(new DurableRunStore(root).pendingDeviceRequests("PHONE-1")).toEqual([]);
   });
+
+  it("appends a post-terminal session-title meta event without resurrecting the run", () => {
+    const { root, store } = makeStore();
+    const run = store.acceptCommand(command()).run!;
+    store.appendRunEvent(run.runId, "run.started", {});
+    store.appendRunEvent(run.runId, "run.completed", {});
+
+    // The AI title is generated asynchronously and can land AFTER the run that
+    // produced the first message already completed (fast reply + slow utility
+    // model). The meta event must still be journaled so runtime-v3 clients
+    // receive it live and on replay — the legacy SSE broadcast is invisible to
+    // them.
+    const title = store.appendRunEvent(run.runId, "session-title", {
+      _sourceEventType: "session-title",
+      _sourceEventData: {
+        sessionKey: run.sessionKey,
+        title: "长诗创作请求",
+        deviceId: "PHONE-1",
+        runId: run.runId,
+        ts: 123,
+      },
+    });
+
+    expect(title.eventType).toBe("session-title");
+    expect(title.runId).toBe(run.runId);
+    expect(store.run(run.runId)?.phase).toBe("completed");
+    expect(store.eventsAfter("PHONE-1", 0).map((event) => event.eventType)).toEqual([
+      "run.started",
+      "run.completed",
+      "session-title",
+    ]);
+
+    // Archive invariant: the snapshot rewritten for the terminal run must carry
+    // the meta event, so acknowledged-journal compaction cannot silently lose it.
+    const reconstructed = new DurableRunStore(root);
+    expect(reconstructed.run(run.runId)?.phase).toBe("completed");
+    expect(reconstructed.eventsForRun(run.runId).map((event) => event.eventType)).toContain(
+      "session-title",
+    );
+  });
 });

@@ -170,6 +170,36 @@ describe("session-title-generator", () => {
       );
     });
 
+    it("carries the originating runId so runtime-v3 mirroring can journal the event", async () => {
+      const store: Store = { [KEY]: { sessionId: "sess-1" } };
+      makeRuntime(store);
+      makeFakeSdk();
+      const broadcast = vi.spyOn(sseEmitter, "broadcast");
+
+      const result = await maybeGenerateSessionTitle({
+        sessionKey: KEY,
+        firstUserMessage: "你会写诗吗?",
+        deviceId: "DEVICE-1",
+        runId: "run-title-1",
+      });
+
+      // v3 clients never see the legacy broadcast; the mirror only journals the
+      // event when the payload names its run.
+      expect(result).toBe(true);
+      expect(broadcast).toHaveBeenCalledWith(
+        {
+          type: "session-title",
+          data: expect.objectContaining({
+            sessionKey: KEY,
+            title: "询问写诗能力",
+            runId: "run-title-1",
+          }),
+        },
+        "DEVICE-1",
+        true,
+      );
+    });
+
     it("skips sessions that already carry an explicit name", async () => {
       const store: Store = { [KEY]: { sessionId: "sess-1", displayName: "已命名" } };
       makeRuntime(store);

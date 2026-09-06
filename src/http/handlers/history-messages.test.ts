@@ -354,6 +354,39 @@ describe("handleHistoryMessages", () => {
       ["assistant", "ok"],
     ]);
   });
+
+  it("returns the session displayName as title so the app can heal a missed AI title", async () => {
+    const file = writeTranscript("titled.jsonl", [
+      { type: "message", id: "u1", message: { role: "user", content: "hi" } },
+    ]);
+    setForward({
+      "agent:main:main": { sessionId: "s", sessionFile: file, displayName: "长诗创作请求" },
+    });
+
+    const res = new MockRes();
+    await handleHistoryMessages(
+      makeReq("/friday-next/history/messages?sessionKey=agent:main:main", AUTH),
+      res as any,
+    );
+    expect(res.statusCode).toBe(200);
+    const body = JSON.parse(res.body);
+    expect(body.title).toBe("长诗创作请求");
+  });
+
+  it("omits title for unnamed sessions", async () => {
+    const file = writeTranscript("untitled.jsonl", [
+      { type: "message", id: "u1", message: { role: "user", content: "hi" } },
+    ]);
+    setForward({ "agent:main:main": { sessionId: "s", sessionFile: file } });
+
+    const res = new MockRes();
+    await handleHistoryMessages(
+      makeReq("/friday-next/history/messages?sessionKey=agent:main:main", AUTH),
+      res as any,
+    );
+    expect(res.statusCode).toBe(200);
+    expect(JSON.parse(res.body).title).toBeUndefined();
+  });
 });
 
 describe("serverLocalPathForImageUrl", () => {

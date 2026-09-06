@@ -1052,6 +1052,7 @@ export async function handleMessages(req: IncomingMessage, res: ServerResponse):
       sessionKey: baseSessionKey,
       firstUserMessage: trimmedText,
       deviceId: normalizedDeviceId,
+      runId,
     }).catch((err: unknown) => {
       log("TITLE_GENERATION_ERROR", normalizedDeviceId, runId, String(err), "warn");
     });

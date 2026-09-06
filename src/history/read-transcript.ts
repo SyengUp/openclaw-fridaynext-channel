@@ -145,6 +145,17 @@ export function resolveSessionId(sessionKey: string): string | undefined {
   return entryString(findSessionStoreRow(sessionKey)?.entry, "sessionId");
 }
 
+/**
+ * Resolves the session's current display title (`displayName`, then `label`), or
+ * undefined. This is the same source `/history/sessions` uses; exposing it on the
+ * per-session endpoint lets the app heal a pending AI-title window on every sync,
+ * even when the `session-title` push was lost.
+ */
+export function resolveSessionTitle(sessionKey: string): string | undefined {
+  const entry = findSessionStoreRow(sessionKey)?.entry;
+  return entryString(entry, "displayName") ?? entryString(entry, "label");
+}
+
 export function transcriptRecordsToRawMessages(records: unknown[], limit: number): unknown[] {
   const raw: unknown[] = [];
   let seq = 0;

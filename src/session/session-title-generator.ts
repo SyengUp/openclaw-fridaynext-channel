@@ -146,6 +146,13 @@ export async function maybeGenerateSessionTitle(params: {
   sessionKey: string;
   firstUserMessage: string;
   deviceId: string;
+  /**
+   * The run that carried the first message. Naming it lets `sseEmitter.broadcast`
+   * mirror the event into the runtime-v3 journal (live + replay); v3 clients never
+   * see the legacy per-device broadcast. Optional: older call sites without a run
+   * context simply skip the mirror.
+   */
+  runId?: string;
 }): Promise<boolean> {
   const sourceText = params.firstUserMessage.trim();
   // Slash commands are system invocations, not conversation material.
@@ -205,6 +212,7 @@ export async function maybeGenerateSessionTitle(params: {
             title,
             deviceId: params.deviceId,
             ts: Date.now(),
+            ...(params.runId?.trim() ? { runId: params.runId.trim() } : {}),
           },
         },
         params.deviceId,
