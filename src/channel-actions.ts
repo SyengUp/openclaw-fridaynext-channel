@@ -13,6 +13,7 @@ import {
 } from "./friday-session.js";
 import { fridayNotificationsStore } from "./notifications/notifications-store.js";
 import { resolveBackgroundPushKind } from "./notifications/background-push-kind.js";
+import { runtimeV3StoreIfInitialized } from "./runtime-v3/runtime-store.js";
 
 type MessageActionCtx = {
   action: string;
@@ -127,15 +128,21 @@ async function handleSend(ctx: MessageActionCtx): Promise<unknown> {
     return jsonToolResult({ ok: false, error: "Missing required param: to" });
   }
 
-  const runId = crypto.randomUUID();
-  // The `message` tool's send runs as a fresh action; `ctx.sessionKey` is the agent's base/main
-  // session, not the app session that started the active run on this device. Recover the latter via
-  // the device's last tracked run-route so attachments land in the user's current session.
-  const activeRunId = sseEmitter.getLastRunIdForDevice(to) ?? undefined;
+  // Reuse the protocol-v3 run when this send belongs to the active FridayNext conversation. The
+  // v3 stream only mirrors outbound events whose runId already exists in its durable store; a new
+  // random id is valid for the legacy stream but makes the attachment invisible to current apps.
+  const contextSessionKey = ctx.sessionKey?.trim() || undefined;
+  const historySessionKey = resolveHistorySessionKeyForFridayDevice(to);
+  const activeV3Run = contextSessionKey
+    ? runtimeV3StoreIfInitialized()?.activeRunForSession(contextSessionKey, to)
+    : undefined;
+  const legacyActiveRunId = sseEmitter.getLastRunIdForDevice(to) ?? undefined;
+  const runId = activeV3Run?.runId ?? legacyActiveRunId ?? crypto.randomUUID();
   const sessionKey =
-    (activeRunId ? getRunRoute(activeRunId)?.sessionKey : undefined) ??
+    activeV3Run?.sessionKey ??
+    (legacyActiveRunId ? getRunRoute(legacyActiveRunId)?.sessionKey : undefined) ??
     ctx.sessionKey ??
-    resolveHistorySessionKeyForFridayDevice(to);
+    historySessionKey;
 
   // Durable notification capture for the `message`-tool path (mirrors outbound.sendText).
   // Classify by the ORIGIN session key (`ctx.sessionKey`, which for a cron/heartbeat run MAY be
@@ -225,7 +232,10 @@ async function handleSend(ctx: MessageActionCtx): Promise<unknown> {
       // the public relay; LAN devices, public-access-off, and upload failure keep the tunnel URL.
       const fnoss = await encryptOutboundBufferToFnoss(
         source.buffer,
-        { name: filename || path.basename(source.originalMediaUrl) || "attachment", mime: source.mimeType },
+        {
+          name: filename || path.basename(source.originalMediaUrl) || "attachment",
+          mime: source.mimeType,
+        },
         to,
       );
       const publicUrl = fnoss ?? tunnelUrl;

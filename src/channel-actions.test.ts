@@ -21,6 +21,7 @@ import {
 } from "./notifications/cron-notification-tracker.js";
 import { resetHeartbeatNotificationTrackerForTest } from "./notifications/heartbeat-notification-tracker.js";
 import { encryptOutboundBufferToFnoss } from "./public-access/outbound-media-oss.js";
+import { getRuntimeV3Store } from "./runtime-v3/runtime-store.js";
 
 // The OSS rewrite hits the control plane + Aliyun; stub it. Default null = public access off /
 // LAN device, so the existing `/friday-next/files/…` tunnel-URL assertions hold; one test opts in
@@ -130,6 +131,46 @@ describe("channel-actions handleSend sessionKey routing", () => {
     expect(media?.data.sessionKey).toBe(appSession);
     expect(text?.data.sessionKey).toBe(appSession);
     expect(media?.data.deviceId).toBe(deviceId);
+  });
+
+  it("message-tool media is mirrored into the active protocol-v3 run", async () => {
+    const deviceId = "DEV-ACT-V3";
+    const appSession = "agent:main:fridaynext:v3-message-tool";
+    const mediaFile = path.join(historyDir, "v3-shot.png");
+    fs.writeFileSync(mediaFile, "png-bytes");
+
+    const store = getRuntimeV3Store();
+    const accepted = store.acceptCommand({
+      clientRequestId: "cr-message-tool-v3",
+      deviceId,
+      sessionKey: appSession,
+      agentId: "main",
+      text: "send this png",
+      attachments: [],
+    });
+    expect(accepted.outcome).toBe("accepted");
+    store.transition(accepted.run!.runId, "running");
+
+    const received: Array<{ eventType: string; payload: Record<string, unknown> }> = [];
+    const unsubscribe = store.subscribe(deviceId, (event) => {
+      received.push({ eventType: event.eventType, payload: event.payload });
+    });
+
+    const result = await handleMessageAction({
+      action: "send",
+      params: { to: deviceId, media: mediaFile },
+      sessionKey: appSession,
+    });
+
+    expect(sendDetails(result).ok).toBe(true);
+    const outbound = received.find((event) => event.eventType === "outbound.media");
+    expect(outbound).toBeDefined();
+    expect(outbound?.payload._sourceEventData).toMatchObject({
+      runId: accepted.run!.runId,
+      sessionKey: appSession,
+      deviceId,
+    });
+    unsubscribe();
   });
 
   it("send media via an https `url` direct link downloads it and emits op:media", async () => {

@@ -3,9 +3,9 @@
  *
  * Two outbound-media surfaces exist and both must divert to OSS when public access is on:
  *   1. the deliver dispatcher (agent's final reply media) — `messages.ts`
- *   2. the `message` tool sends (`channel.ts` sendMedia + `channel-actions.ts` handleSend) — which
- *      broadcast `outbound` op:"media" events. This module is what those two call so the message-tool
- *      path stops leaking large attachments over the relay tunnel.
+ *   2. explicit attachment tools (`channel.ts` / `channel-actions.ts` and
+ *      `tools/send-file-tool.ts`) — which broadcast `outbound` op:"media" events. This module is
+ *      what those paths call so large attachments do not leak over the relay tunnel.
  *
  * When public access is off, or on any upload failure, callers keep their tunnel
  * `/friday-next/files/…` URL — the app downloads either kind through the same choke point

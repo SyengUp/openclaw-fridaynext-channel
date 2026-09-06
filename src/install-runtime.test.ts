@@ -45,6 +45,7 @@ describe("installer runtime", () => {
           "fridaynext_location_query",
           "fridaynext_calendar_query",
           "fridaynext_calendar_log",
+          "fridaynext_send_file",
           "web_search",
         ],
       },
@@ -57,6 +58,7 @@ describe("installer runtime", () => {
       "fridaynext_location_query",
       "fridaynext_calendar_query",
       "fridaynext_calendar_log",
+      "fridaynext_send_file",
     ]);
     expect(mainAgent.tools.deny).toEqual(["web_search"]);
     expect(ensureFridayNextAgentTools(mainAgent)).toBe(false);

@@ -7,6 +7,7 @@ export const FRIDAY_NEXT_DEVICE_TOOL_IDS = Object.freeze([
   "fridaynext_location_query",
   "fridaynext_calendar_query",
   "fridaynext_calendar_log",
+  "fridaynext_send_file",
 ]);
 
 /**
@@ -15,7 +16,7 @@ export const FRIDAY_NEXT_DEVICE_TOOL_IDS = Object.freeze([
  * Upgrades must also remove stale deny entries left by older installs.
  *
  * CLEANUP: remove this config mutation only after `minHostVersion` is newer than 2026.7.1 AND a
- * fresh-install live test proves all five plugin tools reach the model without `alsoAllow`.
+ * fresh-install live test proves all plugin tools reach the model without `alsoAllow`.
  */
 export function ensureFridayNextAgentTools(mainAgent) {
   let changed = false;

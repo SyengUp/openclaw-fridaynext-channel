@@ -54,7 +54,7 @@ iOS App ←--HTTP/SSE--→ Friday Plugin ←--OpenClaw Plugin API--→ Gateway +
 ```
 
 1. **`index.ts`** — Plugin entry. Registers HTTP routes, `fridaynext_health_query` / `fridaynext_health_log` via `api.registerTool`, `onAgentEvent` → `forwardAgentEventRaw`, an `llm_output` hook → `accumulateRunUsage` (per-run token usage), tool hooks (`before_tool_call`/`after_tool_call` → `tool-hook` SSE), and a `subagent_delivery_target` hook (routes sub-agent completion responses back to the Friday device that initiated the run). Routes are re-registered when `registerFull` receives a **new** `api` (compared via a `WeakRef`) so the plugin survives a health-monitor restart; the `onAgentEvent` listener is disposed+re-added each call, while tool hooks register at most once per process (boolean guard).
-2. **`src/channel.ts`** — Plugin channel definition; `sendText` / `sendMedia` → `sseEmitter.broadcast(..., type: "outbound")` (plus media URL handling via `saveMediaBuffer` / `resolveMediaAttachment`).
+2. **`src/channel.ts`** — Plugin channel definition; `sendText` / `sendMedia` → `sseEmitter.broadcast(..., type: "outbound")` (plus media URL handling via `saveMediaBuffer` / `resolveMediaAttachment`). Agent-requested local attachments use the plugin-owned `fridaynext_send_file` tool so the send stays inside the gateway process and is appended to the active protocol-v3 run; agents must not shell out to the standalone `openclaw message send` CLI for this path.
 3. **`src/http/server.ts`** + **`src/http/handlers/*`** — `/friday-next/*` routes. Full route table:
    - `GET /friday-next/events` — SSE stream (`handleSseStream`)
    - `POST /friday-next/messages` — message dispatch (`handleMessages`)
@@ -106,6 +106,7 @@ iOS App ←--HTTP/SSE--→ Friday Plugin ←--OpenClaw Plugin API--→ Gateway +
 ### Supporting modules
 
 - **`src/channel-actions.ts`** — `describeMessageActions` / `handleMessageAction` for the channel's message-tool integration (`send`, `channel-info`, `channel-list`).
+- **`src/tools/send-file-tool.ts`** — `fridaynext_send_file`, the agent-facing local-file attachment path for the current FridayNext run. It resolves the device/session from the tool context and broadcasts `outbound.media` with the active v3 `runId`.
 - **`src/friday-inbound-stats.ts`** — Tracks last `POST /messages` timestamp for Control UI channel health display.
 - **`src/logging.ts`** — Scoped logger factory (`[friday-next:<scope>]` prefix, level-gated).
 - **`src/vendor/runtime-store.ts`** — Vendored from OpenClaw SDK; `Symbol.for("openclaw.plugin-sdk.runtime-store-registry")`-based runtime singleton. Kept here to avoid importing the full gateway graph in tests.

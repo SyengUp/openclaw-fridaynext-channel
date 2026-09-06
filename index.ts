@@ -40,6 +40,7 @@ import { createHealthLogTool } from "./src/tools/health-log-tool.js";
 import { createCalendarQueryTool } from "./src/tools/calendar-query-tool.js";
 import { createCalendarLogTool } from "./src/tools/calendar-log-tool.js";
 import { createLocationQueryTool } from "./src/tools/location-query-tool.js";
+import { createSendFileTool } from "./src/tools/send-file-tool.js";
 import { restoreDurableRuntimeV3 } from "./src/runtime-v3/runtime-recovery.js";
 
 const hookLogger = createFridayNextLogger("hook");
@@ -110,6 +111,9 @@ function registerFridayNextPluginTools(api: OpenClawPluginApi): void {
   });
   api.registerTool((ctx: { sessionKey?: string }) => createLocationQueryTool(ctx), {
     names: ["fridaynext_location_query"],
+  });
+  api.registerTool((ctx: { sessionKey?: string }) => createSendFileTool(ctx), {
+    names: ["fridaynext_send_file"],
   });
 }
 
