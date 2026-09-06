@@ -28,6 +28,7 @@
     "install.sh",
     "install.ps1",
     "openclaw.plugin.json",
+    "assets/icon.png",
     "skills/"
   ],
   "scripts": {

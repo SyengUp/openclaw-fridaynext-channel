@@ -4,9 +4,11 @@ import { join, relative } from "node:path";
 const root = join(import.meta.dirname, "..");
 const dist = join(root, "dist");
 const pkg = JSON.parse(readFileSync(join(root, "package.json"), "utf8"));
+const manifest = JSON.parse(readFileSync(join(root, "openclaw.plugin.json"), "utf8"));
 const failures = [];
 
 if (!existsSync(join(dist, "index.js"))) failures.push("dist/index.js is missing");
+if (!existsSync(join(root, "assets", "icon.png"))) failures.push("assets/icon.png is missing");
 
 let distBytes = 0;
 function inspect(dir) {
@@ -27,6 +29,12 @@ if (existsSync(dist)) inspect(dist);
 const forbiddenFiles = ["index.ts", "src/**", "assets/", "tsconfig.json"];
 for (const entry of forbiddenFiles) {
   if (pkg.files?.includes(entry)) failures.push(`package files includes ${entry}`);
+}
+if (!pkg.files?.includes("assets/icon.png")) {
+  failures.push("package files must include assets/icon.png");
+}
+if (Object.prototype.hasOwnProperty.call(manifest, "icon")) {
+  failures.push("openclaw.plugin.json must not use unsupported top-level icon");
 }
 if (JSON.stringify(pkg.openclaw?.extensions) !== JSON.stringify(["./dist/index.js"])) {
   failures.push("openclaw.extensions must load ./dist/index.js");
