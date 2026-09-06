@@ -440,14 +440,19 @@ export function registerFridayNextHttpRoutes(api: {
   });
 
   // Native Talk (catalog / config / speak / mode) plus realtime session
-  // (create / audio / cancel / close). Default operator surface is enough:
-  // talk.catalog/config need operator.read, talk.speak/mode/session.* need
-  // operator.write. Never request includeSecrets — credentials stay on Gateway.
+  // (create / audio / cancel / close). Never request includeSecrets — credentials stay on Gateway.
   api.registerHttpRoute({
     path: "/friday-next-admin/talk",
     handler: handleTalk,
     auth: "gateway",
     match: "prefix",
+    // COMPAT(openclaw<=2026.7.1 talk-managed-room-scope): that host requires operator.admin when
+    // `talk.session.create` joins a managed room by sessionKey. Current hosts only document
+    // operator.write, but the handler's strict method/field allowlist keeps this broader legacy
+    // surface bounded to Talk operations.
+    // CLEANUP: remove trusted-operator after minHostVersion > 2026.7.1 and a live managed-room
+    // create/close test passes with the default operator.write surface.
+    gatewayRuntimeScopeSurface: "trusted-operator",
   });
 
   api.logger.info("Friday Next channel HTTP routes registered at /friday-next/*");

@@ -1,6 +1,49 @@
 import { exec } from "node:child_process";
 import { request as httpRequest } from "node:http";
 
+export const FRIDAY_NEXT_DEVICE_TOOL_IDS = Object.freeze([
+  "fridaynext_health_query",
+  "fridaynext_health_log",
+  "fridaynext_location_query",
+  "fridaynext_calendar_query",
+  "fridaynext_calendar_log",
+]);
+
+/**
+ * COMPAT(openclaw<=2026.7.1 tool-profile-filter): plugin tools are removed by the host's
+ * `coding` profile unless the installer explicitly adds every one to `tools.alsoAllow`.
+ * Upgrades must also remove stale deny entries left by older installs.
+ *
+ * CLEANUP: remove this config mutation only after `minHostVersion` is newer than 2026.7.1 AND a
+ * fresh-install live test proves all five plugin tools reach the model without `alsoAllow`.
+ */
+export function ensureFridayNextAgentTools(mainAgent) {
+  let changed = false;
+  if (!mainAgent.tools || typeof mainAgent.tools !== "object" || Array.isArray(mainAgent.tools)) {
+    mainAgent.tools = {};
+    changed = true;
+  }
+  if (!Array.isArray(mainAgent.tools.alsoAllow)) {
+    mainAgent.tools.alsoAllow = [];
+    changed = true;
+  }
+  for (const tool of FRIDAY_NEXT_DEVICE_TOOL_IDS) {
+    if (!mainAgent.tools.alsoAllow.includes(tool)) {
+      mainAgent.tools.alsoAllow.push(tool);
+      changed = true;
+    }
+  }
+  if (Array.isArray(mainAgent.tools.deny)) {
+    const removable = new Set(["canvas", "nodes", ...FRIDAY_NEXT_DEVICE_TOOL_IDS]);
+    const filtered = mainAgent.tools.deny.filter((tool) => !removable.has(tool));
+    if (filtered.length !== mainAgent.tools.deny.length) {
+      mainAgent.tools.deny = filtered;
+      changed = true;
+    }
+  }
+  return changed;
+}
+
 /**
  * Async shell execution for installer commands. `openclawCmd` may include a sudo prefix and
  * Windows relies on shell command resolution, so this intentionally accepts a command string.

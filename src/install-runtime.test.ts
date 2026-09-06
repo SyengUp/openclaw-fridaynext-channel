@@ -2,6 +2,7 @@ import { createServer } from "node:http";
 import { once } from "node:events";
 import { describe, expect, it, vi } from "vitest";
 import {
+  ensureFridayNextAgentTools,
   pairingPollDelayMs,
   pollPairingSuperset,
   runShellCommand,
@@ -32,6 +33,35 @@ async function withStatusServer(
 }
 
 describe("installer runtime", () => {
+  it("installs every FridayNext device tool into alsoAllow and removes stale denies", () => {
+    const mainAgent = {
+      tools: {
+        alsoAllow: ["fridaynext_health_query"],
+        deny: [
+          "canvas",
+          "nodes",
+          "fridaynext_health_query",
+          "fridaynext_health_log",
+          "fridaynext_location_query",
+          "fridaynext_calendar_query",
+          "fridaynext_calendar_log",
+          "web_search",
+        ],
+      },
+    };
+
+    expect(ensureFridayNextAgentTools(mainAgent)).toBe(true);
+    expect(mainAgent.tools.alsoAllow).toEqual([
+      "fridaynext_health_query",
+      "fridaynext_health_log",
+      "fridaynext_location_query",
+      "fridaynext_calendar_query",
+      "fridaynext_calendar_log",
+    ]);
+    expect(mainAgent.tools.deny).toEqual(["web_search"]);
+    expect(ensureFridayNextAgentTools(mainAgent)).toBe(false);
+  });
+
   it("does not accept an old gateway process, then succeeds only on the expected plugin version", async () => {
     await withStatusServer(
       [

@@ -19,10 +19,10 @@
  *
  * SCOPES (src/gateway/methods/core-descriptors.ts):
  *   `talk.catalog` / `talk.config`  → operator.read
- *   `talk.speak` / `talk.mode` / `talk.session.*` → operator.write
- * None of these need `operator.admin`, so this prefix does NOT set
- * `gatewayRuntimeScopeSurface: "trusted-operator"`. The default surface's
- * `operator.write` already satisfies both.
+ *   `talk.speak` / `talk.mode` / `talk.session.*` → operator.write on current hosts
+ * COMPAT(openclaw<=2026.7.1 talk-managed-room-scope): managed-room session creation with a
+ * sessionKey additionally requires `operator.admin`, so server.ts temporarily registers the
+ * prefix as `trusted-operator`. See that registration's CLEANUP marker.
  *
  * `talk.config` with `includeSecrets: true` requires `operator.talk.secrets`.
  * This route never forwards that flag — credentials stay on the Gateway.

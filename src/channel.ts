@@ -260,7 +260,16 @@ export const fridayNextChannelPlugin = createChatChannelPlugin({
           return { to: ctx.normalized };
         },
       },
-      parseExplicitTarget: () => ({ to: "friday-next" }),
+      // COMPAT(openclaw<=2026.7.1 legacy-target-parser): old cron delivery resolves an explicit
+      // `delivery.to` through this deprecated hook instead of `targetResolver`. Returning the
+      // channel placeholder here discarded the pinned device and made core fall back to the most
+      // recently seen phone. Preserve the raw target for that legacy path.
+      // CLEANUP: remove this hook only after minHostVersion > 2026.7.1 and the live two-device
+      // cron test confirms the host exclusively uses targetResolver.
+      parseExplicitTarget: (params: { raw?: string } | string) => {
+        const raw = typeof params === "string" ? params : params?.raw;
+        return { to: raw?.trim() || "friday-next" };
+      },
       formatTargetDisplay: ({ display }: any) => display || "Friday Next",
       // friday-next is a transparent proxy: outbound text/media already reach the app live
       // via SSE (sendText/sendMedia/handleSend). The OpenClaw core additionally mirrors

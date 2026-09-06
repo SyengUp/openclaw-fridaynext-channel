@@ -7,6 +7,7 @@ import { join } from "node:path";
 import { createInstallerUI } from "./install-ui.js";
 import { strings } from "./install-i18n.js";
 import {
+  ensureFridayNextAgentTools,
   pollPairingSuperset as pollForPairingSuperset,
   runShellCommand,
   verifyGateway,
@@ -447,30 +448,9 @@ if (
     configChanged = true;
   }
 }
-if (!mainAgent.tools) mainAgent.tools = {};
-if (!Array.isArray(mainAgent.tools.alsoAllow)) mainAgent.tools.alsoAllow = [];
-for (const tool of [
-  "fridaynext_health_query",
-  "fridaynext_health_log",
-  "fridaynext_location_query",
-]) {
-  ensureArrayContains(mainAgent.tools.alsoAllow, tool);
-}
-if (Array.isArray(mainAgent.tools.deny)) {
-  for (const tool of [
-    "canvas",
-    "nodes",
-    "fridaynext_health_query",
-    "fridaynext_health_log",
-    "fridaynext_location_query",
-  ]) {
-    const idx = mainAgent.tools.deny.indexOf(tool);
-    if (idx !== -1) {
-      mainAgent.tools.deny.splice(idx, 1);
-      configChanged = true;
-    }
-  }
-}
+// COMPAT(openclaw<=2026.7.1 tool-profile-filter): centralized marker and removal gate live in
+// ensureFridayNextAgentTools so fresh installs and upgrades cannot drift apart.
+if (ensureFridayNextAgentTools(mainAgent)) configChanged = true;
 
 // —— FridayTunnel standby ——
 //
