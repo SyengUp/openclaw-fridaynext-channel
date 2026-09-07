@@ -11,6 +11,13 @@ export type SessionTranscriptEventLoader = (params: {
 }) => unknown[];
 
 export type FridayAgentForwardRuntime = {
+  /** Control UI-equivalent session projection (`sessions.list`). */
+  gatewayIsAvailable?: () => Promise<boolean>;
+  gatewayRequest?: <T = unknown>(
+    method: string,
+    params?: Record<string, unknown>,
+    options?: { timeoutMs?: number; scopes?: string[] },
+  ) => Promise<T>;
   resolveStorePath: (store?: string, opts?: { agentId?: string }) => string;
   /**
    * COMPAT(openclaw<2026.8.1): whole-store JSON map. 2026.8.1+ may omit this
@@ -110,7 +117,27 @@ function resolveLoadTranscriptEventsSync(
 /** Called from `registerFull` so terminal lifecycle forwards can read the session store after persist. */
 export function setFridayAgentForwardRuntime(api: OpenClawPluginApi): void {
   const session = api.runtime.agent.session as Record<string, unknown>;
+  const gateway = (
+    api.runtime as unknown as {
+      gateway?: {
+        isAvailable?: () => Promise<boolean>;
+        request?: FridayAgentForwardRuntime["gatewayRequest"];
+      };
+    }
+  ).gateway;
   forwardRuntime = {
+    ...(typeof gateway?.isAvailable === "function"
+      ? { gatewayIsAvailable: () => gateway.isAvailable!() }
+      : {}),
+    ...(typeof gateway?.request === "function"
+      ? {
+          gatewayRequest: <T = unknown>(
+            method: string,
+            params?: Record<string, unknown>,
+            options?: { timeoutMs?: number; scopes?: string[] },
+          ) => gateway.request!<T>(method, params, options),
+        }
+      : {}),
     resolveStorePath: api.runtime.agent.session.resolveStorePath,
     loadSessionStore: api.runtime.agent.session.loadSessionStore,
     updateSessionStoreEntry:

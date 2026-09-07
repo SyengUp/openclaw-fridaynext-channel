@@ -10,7 +10,7 @@ import { PLUGIN_VERSION } from "../../version.js";
 import { normalizeHistoryMessages } from "../../history/normalize-message.js";
 import { readSessionTranscriptRawMessages } from "../../history/read-transcript.js";
 import { resolveHistoryMessageMedia } from "./history-messages.js";
-import { readSessionUsageSnapshotFromStore } from "../../session-usage-store.js";
+import { readSessionUsageSnapshot } from "../../session-usage-store.js";
 import { sseEmitter } from "../../sse/emitter.js";
 
 function json(res: ServerResponse, status: number, body: Record<string, unknown>): boolean {
@@ -212,7 +212,7 @@ export async function handleRuntimeV3SessionSnapshot(
     readSessionTranscriptRawMessages(key, Number.MAX_SAFE_INTEGER),
   );
   resolveHistoryMessageMedia(transcript);
-  const sessionUsage = readSessionUsageSnapshotFromStore(key);
+  const sessionUsage = await readSessionUsageSnapshot(key);
   const revision = crypto
     .createHash("sha256")
     .update(

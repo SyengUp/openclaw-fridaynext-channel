@@ -1,6 +1,6 @@
 /**
  * Stable DTO for Friday SSE `lifecycle` terminal frames (`data.sessionUsage`).
- * Populated from OpenClaw `SessionEntry` after `persistSessionUsageUpdate`.
+ * Populated from the Gateway session-row projection used by Control UI.
  */
 
 export type FridaySessionUsagePayload = {
@@ -32,7 +32,7 @@ function finiteCost(n: unknown): number | undefined {
   return n;
 }
 
-/** Build a compact snapshot from a loaded session store entry (unknown shape). */
+/** Build a compact snapshot from a projected session row (or legacy store entry). */
 export function buildSessionUsageSnapshot(
   entry: Record<string, unknown>,
 ): FridaySessionUsagePayload | undefined {

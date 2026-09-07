@@ -10,7 +10,7 @@ import { observeAgentEventForActiveRuns } from "./agent/active-runs.js";
 import { getRunMetadata, ingestAgentEventMetadata } from "./run-metadata.js";
 import { consumeRunUsage } from "./agent/run-usage-accumulator.js";
 import type { FridaySessionUsagePayload } from "./session-usage-snapshot.js";
-import { readSessionUsageSnapshotFromStore } from "./session-usage-store.js";
+import { readSessionUsageSnapshot } from "./session-usage-store.js";
 import {
   lookupByRunId,
   lookupByChildSessionKey,
@@ -465,20 +465,6 @@ function mergeRunMetadataIntoLifecycleEnd(
   ) {
     extra.totalTokens = Math.floor(meta.totalTokens);
   }
-  if (
-    typeof meta.contextTokensUsed === "number" &&
-    Number.isFinite(meta.contextTokensUsed) &&
-    meta.contextTokensUsed > 0
-  ) {
-    extra.contextTokensUsed = Math.floor(meta.contextTokensUsed);
-  }
-  if (
-    typeof meta.contextWindowMax === "number" &&
-    Number.isFinite(meta.contextWindowMax) &&
-    meta.contextWindowMax > 0
-  ) {
-    extra.contextWindowMax = Math.floor(meta.contextWindowMax);
-  }
   if (Object.keys(extra).length === 0) return base;
   return { ...base, ...extra };
 }
@@ -500,11 +486,7 @@ function buildSessionUsageFromRunMetadata(runId: string): FridaySessionUsagePayl
   if (typeof meta.cacheWriteTokens === "number") tokens.cacheWrite = meta.cacheWriteTokens;
   if (typeof meta.totalTokens === "number") tokens.total = meta.totalTokens;
   if (Object.keys(tokens).length > 0) payload.tokens = tokens;
-  const context: NonNullable<typeof payload.context> = {};
-  if (typeof meta.contextWindowMax === "number") context.windowMax = meta.contextWindowMax;
-  if (typeof meta.totalTokens === "number") context.used = meta.totalTokens;
-  if (Object.keys(context).length > 0) payload.context = context;
-  if (!payload.modelId && !payload.modelProvider && !payload.tokens && !payload.context) {
+  if (!payload.modelId && !payload.modelProvider && !payload.tokens) {
     return undefined;
   }
   return payload;
@@ -949,38 +931,37 @@ export function forwardAgentEventRaw(evt: ForwardAgentEventArgs): void {
     }
   }
 
-  // Build sessionUsage: store (cumulative session totals) → llm_output (per-run fallback).
+  // Build sessionUsage from the same projected sessions.list row as Control UI.
   if (isTerminalLifecycle && getFridayAgentForwardRuntime()) {
-    // Defer to let store write complete, then read cumulative totals.
-    // llm_output data is per-run; store is cumulative across rounds.
+    // Defer until core persists the terminal run, then ask Gateway for its canonical projection.
     setTimeout(() => {
-      let data = outgoingData;
-      const storeUsage = readSessionUsageSnapshotFromStore(sk);
-      const llmUsage = consumeRunUsage(evt.runId);
-      const memUsage = buildSessionUsageFromRunMetadata(evt.runId);
-      let usage: FridaySessionUsagePayload | undefined;
-      if (storeUsage) {
-        // Store provides cumulative session totals. Supplement with
-        // fresher model/provider from llm_output when available.
-        usage = storeUsage;
-        if (llmUsage?.modelId) usage.modelId = llmUsage.modelId;
-        if (llmUsage?.modelProvider) usage.modelProvider = llmUsage.modelProvider;
-      } else {
-        // First message in session — store not yet written, fall back
-        // to per-run llm_output + RunMetadata.
-        usage = mergeUsage(llmUsage, memUsage);
-      }
-      if (usage) {
-        data = { ...outgoingData, sessionUsage: usage };
-      }
-      completeAgentEventForward({
-        evt,
-        sk,
-        deviceIdRaw,
-        outgoingData: data,
-        isTerminalLifecycle: true,
-        subagentMeta,
-      });
+      void (async () => {
+        let data = outgoingData;
+        const sessionUsage = await readSessionUsageSnapshot(sk);
+        const llmUsage = consumeRunUsage(evt.runId);
+        const memUsage = buildSessionUsageFromRunMetadata(evt.runId);
+        let usage: FridaySessionUsagePayload | undefined;
+        if (sessionUsage) {
+          usage = sessionUsage;
+          if (llmUsage?.modelId) usage.modelId = llmUsage.modelId;
+          if (llmUsage?.modelProvider) usage.modelProvider = llmUsage.modelProvider;
+        } else {
+          // Preserve per-run model/token metadata, but it carries no canonical
+          // current-context snapshot when sessions.list has no row yet.
+          usage = mergeUsage(llmUsage, memUsage);
+        }
+        if (usage) {
+          data = { ...outgoingData, sessionUsage: usage };
+        }
+        completeAgentEventForward({
+          evt,
+          sk,
+          deviceIdRaw,
+          outgoingData: data,
+          isTerminalLifecycle: true,
+          subagentMeta,
+        });
+      })();
     }, 100);
     return;
   }

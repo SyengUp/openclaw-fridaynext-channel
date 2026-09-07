@@ -22,7 +22,7 @@ import {
   resolveSessionTitle,
 } from "../../history/read-transcript.js";
 import { resolveMediaAttachment } from "./files.js";
-import { readSessionUsageSnapshotFromStore } from "../../session-usage-store.js";
+import { readSessionUsageSnapshot } from "../../session-usage-store.js";
 import type { FridayHistoryMessage } from "../../history/normalize-message.js";
 
 const DEFAULT_LIMIT = 200;
@@ -161,12 +161,9 @@ export async function handleHistoryMessages(
   // `session-title` push is a live nicety, this read is the deterministic catch-up.
   const sessionTitle = resolveSessionTitle(sessionKey);
 
-  // Cumulative session-usage snapshot (model + context window/used) read from the
-  // session store — the SAME source the live `lifecycle.end` frame uses. The
-  // transcript carries per-message model/tokens but NOT the context-window figures,
-  // so the app stamps this snapshot onto the latest assistant turn on rebuild to
-  // keep the nav-bar context ring correct (and surviving app restarts).
-  const sessionUsage = readSessionUsageSnapshotFromStore(sessionKey);
+  // Current prompt/context snapshot from the same projected `sessions.list` row
+  // Control UI consumes. The transcript has no effective context-window figures.
+  const sessionUsage = await readSessionUsageSnapshot(sessionKey);
 
   res.statusCode = 200;
   res.setHeader("Content-Type", "application/json");

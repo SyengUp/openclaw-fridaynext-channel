@@ -70,7 +70,6 @@ import {
   resolveOssOutboundConfig,
 } from "../../public-access/outbound-media-oss.js";
 import {
-  contextTokensFromUsageRecord,
   getRunMetadata,
   getRunRoute,
   hasRunFinalDelivered,
@@ -82,6 +81,7 @@ import { createFridayNextLogger, setFridayNextLogLevel } from "../../logging.js"
 import { maybeGenerateSessionTitle } from "../../session/session-title-generator.js";
 import { getRuntimeV3Store } from "../../runtime-v3/runtime-store.js";
 import type { DurableRunStore } from "../../runtime-v3/durable-run-store.js";
+import { readSessionUsageSnapshot } from "../../session-usage-store.js";
 
 const logger = createFridayNextLogger("messages");
 
@@ -188,8 +188,6 @@ export function translateDeliverPayload(
   meta?: {
     modelName?: string;
     totalTokens?: number;
-    contextTokensUsed?: number;
-    contextWindowMax?: number;
   },
 ): Record<string, unknown> {
   // Strip canvas-snapshot tool-result images before any media resolution (paths here are still the
@@ -248,20 +246,6 @@ export function translateDeliverPayload(
   ) {
     nextFridayNext.totalTokens = Math.floor(meta.totalTokens);
   }
-  if (
-    typeof meta?.contextTokensUsed === "number" &&
-    Number.isFinite(meta.contextTokensUsed) &&
-    meta.contextTokensUsed > 0
-  ) {
-    nextFridayNext.contextTokensUsed = Math.floor(meta.contextTokensUsed);
-  }
-  if (
-    typeof meta?.contextWindowMax === "number" &&
-    Number.isFinite(meta.contextWindowMax) &&
-    meta.contextWindowMax > 0
-  ) {
-    nextFridayNext.contextWindowMax = Math.floor(meta.contextWindowMax);
-  }
   if (Object.keys(nextFridayNext).length > 0) {
     raw.channelData = {
       ...baseChannelData,
@@ -271,17 +255,18 @@ export function translateDeliverPayload(
   return raw;
 }
 
-function scheduleLateFinalMetaPatch(runId: string, attempts = 6): void {
+export function scheduleLateFinalMetaPatch(runId: string, attempts = 6): void {
   const route = getRunRoute(runId);
   if (!route) return;
   const intervalMs = 300;
-  const tryOnce = (remaining: number) => {
+  const tryOnce = async (remaining: number) => {
     const meta = getRunMetadata(runId);
+    const sessionUsage = await readSessionUsageSnapshot(route.sessionKey);
     if (
       meta?.modelName ||
       typeof meta?.totalTokens === "number" ||
-      typeof meta?.contextTokensUsed === "number" ||
-      typeof meta?.contextWindowMax === "number"
+      sessionUsage?.context?.used !== undefined ||
+      sessionUsage?.context?.windowMax !== undefined
     ) {
       if (!hasRunFinalDelivered(runId)) return;
       sseEmitter.broadcastToRun(
@@ -293,12 +278,10 @@ function scheduleLateFinalMetaPatch(runId: string, attempts = 6): void {
             runId,
             deviceId: route.deviceId,
             sessionKey: route.sessionKey,
-            modelName: meta.modelName ?? null,
-            totalTokens: typeof meta.totalTokens === "number" ? meta.totalTokens : null,
-            contextTokensUsed:
-              typeof meta.contextTokensUsed === "number" ? meta.contextTokensUsed : null,
-            contextWindowMax:
-              typeof meta.contextWindowMax === "number" ? meta.contextWindowMax : null,
+            modelName: meta?.modelName ?? null,
+            totalTokens: typeof meta?.totalTokens === "number" ? meta.totalTokens : null,
+            contextTokensUsed: sessionUsage?.context?.used ?? null,
+            contextWindowMax: sessionUsage?.context?.windowMax ?? null,
             ts: Date.now(),
           },
         },
@@ -307,16 +290,14 @@ function scheduleLateFinalMetaPatch(runId: string, attempts = 6): void {
       return;
     }
     if (remaining <= 0) return;
-    setTimeout(() => tryOnce(remaining - 1), intervalMs);
+    setTimeout(() => void tryOnce(remaining - 1), intervalMs);
   };
-  setTimeout(() => tryOnce(attempts), intervalMs);
+  setTimeout(() => void tryOnce(attempts), intervalMs);
 }
 
 function pickMetadataFromMessageLike(message: unknown): {
   modelName?: string;
   totalTokens?: number;
-  contextTokensUsed?: number;
-  contextWindowMax?: number;
 } | null {
   if (!message || typeof message !== "object" || Array.isArray(message)) return null;
   const m = message as Record<string, unknown>;
@@ -347,30 +328,10 @@ function pickMetadataFromMessageLike(message: unknown): {
       : undefined);
   const totalTokens = Math.floor(totalFromUsage ?? totalFromMessage ?? 0);
 
-  let contextTokensUsed: number | undefined;
-  if (usage) {
-    const ctx = contextTokensFromUsageRecord(usage);
-    if (typeof ctx === "number" && ctx > 0) {
-      contextTokensUsed = ctx;
-    }
-  }
-
-  const ctxMaxRaw =
-    (typeof m.contextWindow === "number" && Number.isFinite(m.contextWindow)
-      ? m.contextWindow
-      : undefined) ??
-    (typeof m.maxContextTokens === "number" && Number.isFinite(m.maxContextTokens)
-      ? m.maxContextTokens
-      : undefined);
-  const contextWindowMax =
-    typeof ctxMaxRaw === "number" && ctxMaxRaw > 0 ? Math.floor(ctxMaxRaw) : undefined;
-
-  if (!modelName && !(totalTokens > 0) && !contextTokensUsed && !contextWindowMax) return null;
+  if (!modelName && !(totalTokens > 0)) return null;
   return {
     modelName,
     totalTokens: totalTokens > 0 ? totalTokens : undefined,
-    contextTokensUsed,
-    contextWindowMax,
   };
 }
 
@@ -380,8 +341,6 @@ async function resolveRunMetadataFromRuntimeSession(
 ): Promise<{
   modelName?: string;
   totalTokens?: number;
-  contextTokensUsed?: number;
-  contextWindowMax?: number;
 } | null> {
   const sessionApi = (
     runtime as unknown as {
@@ -922,9 +881,10 @@ export async function handleMessages(req: IncomingMessage, res: ServerResponse):
             );
             if (info.kind.toLowerCase() === "final") {
               markRunFinalDelivered(runId);
-              if (!(meta?.modelName || typeof meta?.totalTokens === "number")) {
-                scheduleLateFinalMetaPatch(runId);
-              }
+              // The context ring comes only from the projected sessions.list row.
+              // Always emit a post-settle patch even when per-run model metadata
+              // was already available in the final deliver payload.
+              scheduleLateFinalMetaPatch(runId);
             }
           },
           onError: (err: unknown) => {

@@ -8,10 +8,6 @@ export type RunMetadata = {
   modelName?: string;
   modelProvider?: string;
   totalTokens?: number;
-  /** Tokens counted toward the model context window (prompt-side: input + cache read + cache write when present). */
-  contextTokensUsed?: number;
-  /** Resolved model context window limit when the runtime exposes it. */
-  contextWindowMax?: number;
   /** Detailed token breakdown captured from agent event usage (current run, not stale store read). */
   inputTokens?: number;
   outputTokens?: number;
@@ -112,33 +108,6 @@ function pickCacheWrite(u: Record<string, unknown>): number | undefined {
   );
 }
 
-/** Best-effort prompt-side context footprint from a provider usage object. */
-export function contextTokensFromUsageRecord(u: Record<string, unknown>): number | undefined {
-  const inp = pickInputTokens(u);
-  const cr = pickCacheRead(u);
-  const cw = pickCacheWrite(u);
-  const total =
-    finiteNumber(u.total) ?? finiteNumber(u.total_tokens) ?? finiteNumber(u.totalTokens);
-  const out = pickOutputTokens(u);
-  if (inp !== undefined || cr !== undefined || cw !== undefined) {
-    return Math.max(0, Math.floor((inp ?? 0) + (cr ?? 0) + (cw ?? 0)));
-  }
-  if (total !== undefined && out !== undefined && total >= out) {
-    return Math.max(0, Math.floor(total - out));
-  }
-  return undefined;
-}
-
-function pickContextWindowMaxFromData(data: Record<string, unknown>): number | undefined {
-  const v =
-    finiteNumber(data.contextWindow) ??
-    finiteNumber(data.context_window) ??
-    finiteNumber(data.maxContextTokens) ??
-    finiteNumber(data.max_context_tokens);
-  if (typeof v === "number" && v > 0) return Math.floor(v);
-  return undefined;
-}
-
 export function ingestAgentEventMetadata(runId: string, data: Record<string, unknown>): void {
   if (!runId.trim()) return;
   const next: RunMetadata = {};
@@ -176,28 +145,10 @@ export function ingestAgentEventMetadata(runId: string, data: Record<string, unk
   if (typeof cacheWrite === "number" && cacheWrite >= 0)
     next.cacheWriteTokens = Math.floor(cacheWrite);
 
-  const usageForContext = usage ?? data;
-  const ctxUsed = contextTokensFromUsageRecord(usageForContext);
-  if (typeof ctxUsed === "number" && ctxUsed > 0) {
-    next.contextTokensUsed = ctxUsed;
-  }
-  const ctxMax = pickContextWindowMaxFromData(data);
-  if (typeof ctxMax === "number") {
-    next.contextWindowMax = ctxMax;
-  }
-  if (!next.contextWindowMax && usage) {
-    const fromUsage = pickContextWindowMaxFromData(usage);
-    if (typeof fromUsage === "number") {
-      next.contextWindowMax = fromUsage;
-    }
-  }
-
   if (
     next.modelName ||
     next.modelProvider ||
     typeof next.totalTokens === "number" ||
-    typeof next.contextTokensUsed === "number" ||
-    typeof next.contextWindowMax === "number" ||
     typeof next.inputTokens === "number" ||
     typeof next.outputTokens === "number" ||
     typeof next.cacheReadTokens === "number" ||

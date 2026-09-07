@@ -111,7 +111,7 @@ OpenClaw agent event payload, e.g. `{ runId, seq, ts, stream, data, sessionKey? 
 
 ### `outbound` data
 
-Cron / sub-agent style pushes: `op`: `"text"` \| `"media"` (and context), `op`: `"dispatch_error"` with `error`, plus late metadata patch `op: "final_meta"` with `runId`, `modelName`, and `totalTokens`.
+Cron / sub-agent style pushes: `op`: `"text"` \| `"media"` (and context), `op`: `"dispatch_error"` with `error`, plus metadata patch `op: "final_meta"`. Its message-level `modelName` / `totalTokens` come from the run; `contextTokensUsed` / `contextWindowMax` come from the same projected `sessions.list` row as Control UI.
 
 ### `subagent` data
 

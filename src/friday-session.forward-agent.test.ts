@@ -243,7 +243,7 @@ describe("forwardAgentEventRaw (thinking delta rewrite)", () => {
     expect(thinking).toHaveLength(0);
   });
 
-  it("merges run metadata into lifecycle.end (model, tokens, context usage)", () => {
+  it("merges message metadata into lifecycle.end without deriving context usage", () => {
     forwardAgentEventRaw({
       runId,
       seq: 1,
@@ -270,8 +270,8 @@ describe("forwardAgentEventRaw (thinking delta rewrite)", () => {
     expect(data.phase).toBe("end");
     expect(data.modelName).toBe("gpt-test");
     expect(data.totalTokens).toBe(150);
-    expect(data.contextTokensUsed).toBe(100);
-    expect(data.contextWindowMax).toBe(128000);
+    expect(data.contextTokensUsed).toBeUndefined();
+    expect(data.contextWindowMax).toBeUndefined();
   });
 
   it("forwards lifecycle.end when sessionKey and run context are missing but run was mapped earlier", () => {
@@ -316,8 +316,7 @@ describe("forwardAgentEventRaw (thinking delta rewrite)", () => {
     expect("reasoningPrefixChars" in (payload.data as object)).toBe(false);
   });
 
-  it("builds sessionUsage from store (cumulative) with llm_output fallback", async () => {
-    // No store entry — falls back to llm_output per-run data.
+  it("keeps per-run metadata without inventing context usage when no session row exists", async () => {
     setFridayAgentForwardRuntime({
       runtime: {
         config: { current: () => ({ session: {} }) },
@@ -371,12 +370,34 @@ describe("forwardAgentEventRaw (thinking delta rewrite)", () => {
     expect((sessionUsage.tokens as Record<string, unknown>).cacheRead).toBe(10);
     expect((sessionUsage.tokens as Record<string, unknown>).total).toBe(190);
     expect((sessionUsage.tokens as Record<string, unknown>).totalFresh).toBe(true);
+    expect(sessionUsage.context).toBeUndefined();
   });
 
-  it("prefers store cumulative totals over llm_output per-run data", async () => {
+  it("prefers the Control UI sessions.list context snapshot over raw store and per-run data", async () => {
     const storeKey = toSessionStoreKey(sessionKey);
+    const gatewayRequest = vi.fn(async () => ({
+      sessions: [
+        {
+          key: storeKey,
+          model: "projected-model",
+          modelProvider: "projected-provider",
+          inputTokens: 1_092,
+          outputTokens: 453,
+          cacheRead: 18_688,
+          cacheWrite: 0,
+          totalTokens: 19_780,
+          totalTokensFresh: true,
+          contextTokens: 262_144,
+          estimatedCostUsd: 0.08,
+        },
+      ],
+    }));
     setFridayAgentForwardRuntime({
       runtime: {
+        gateway: {
+          isAvailable: async () => true,
+          request: gatewayRequest,
+        },
         config: { current: () => ({ session: {} }) },
         agent: {
           session: {
@@ -400,7 +421,7 @@ describe("forwardAgentEventRaw (thinking delta rewrite)", () => {
       },
     } as never);
 
-    // llm_output has fresher model/provider but per-run (smaller) tokens.
+    // Per-run metadata still owns the model that actually answered this turn.
     accumulateRunUsage(
       runId,
       { input: 500, output: 100, cacheRead: 200, total: 800 },
@@ -426,18 +447,21 @@ describe("forwardAgentEventRaw (thinking delta rewrite)", () => {
       unknown
     >;
     expect(sessionUsage).toBeDefined();
-    // Store cumulative totals win.
-    expect((sessionUsage.tokens as Record<string, unknown>).input).toBe(5000);
-    expect((sessionUsage.tokens as Record<string, unknown>).output).toBe(2000);
-    expect((sessionUsage.tokens as Record<string, unknown>).total).toBe(99999);
-    // Model/provider from llm_output (fresher) override store.
+    expect((sessionUsage.tokens as Record<string, unknown>).input).toBe(1092);
+    expect((sessionUsage.tokens as Record<string, unknown>).output).toBe(453);
+    expect((sessionUsage.tokens as Record<string, unknown>).total).toBe(19780);
     expect(sessionUsage.modelId).toBe("llm-model");
     expect(sessionUsage.modelProvider).toBe("llm-provider");
-    expect(sessionUsage.estimatedCostUsd).toBe(0.05);
-    expect((sessionUsage.context as Record<string, unknown>).windowMax).toBe(128000);
+    expect(sessionUsage.estimatedCostUsd).toBe(0.08);
+    expect(sessionUsage.context).toEqual({ windowMax: 262144, used: 19780 });
+    expect(gatewayRequest).toHaveBeenCalledWith(
+      "sessions.list",
+      expect.objectContaining({ agentId: "main", search: storeKey }),
+      expect.objectContaining({ scopes: ["operator.read"] }),
+    );
   });
 
-  it("uses store cumulative totals when llm_output has no data", async () => {
+  it("falls back to the raw session entry when the Gateway request surface is unavailable", async () => {
     const storeKey = toSessionStoreKey(sessionKey);
     const store: Record<string, Record<string, unknown>> = {
       [storeKey]: {
@@ -465,7 +489,7 @@ describe("forwardAgentEventRaw (thinking delta rewrite)", () => {
       },
     } as never);
 
-    // No llm_output data accumulated — store is the only token source.
+    // Older hosts have no in-process Gateway request surface.
     forwardAgentEventRaw({
       runId,
       seq: 1,

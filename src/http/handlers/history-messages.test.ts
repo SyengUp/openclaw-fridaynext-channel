@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { EventEmitter } from "node:events";
 import fs from "node:fs";
 import os from "node:os";
@@ -55,10 +55,19 @@ function setForward(
   extra?: {
     getSessionEntry?: boolean;
     loadTranscriptEventsSync?: (params: { sessionId: string; sessionKey?: string }) => unknown[];
+    gatewayRequest?: ReturnType<typeof vi.fn>;
   },
 ): void {
   setFridayAgentForwardRuntime({
     runtime: {
+      ...(extra?.gatewayRequest
+        ? {
+            gateway: {
+              isAvailable: async () => true,
+              request: extra.gatewayRequest,
+            },
+          }
+        : {}),
       agent: {
         session: {
           resolveStorePath: (_s?: string, opts?: { agentId?: string }) =>
@@ -152,7 +161,7 @@ describe("handleHistoryMessages", () => {
     expect(body.messages[1].text).toBe("hello");
   });
 
-  it("returns the cumulative sessionUsage snapshot from the store", async () => {
+  it("falls back to a current-context snapshot from the store on older hosts", async () => {
     const file = writeTranscript("usage.jsonl", [
       { type: "message", id: "u1", message: { role: "user", content: "hi" } },
       {
@@ -188,6 +197,90 @@ describe("handleHistoryMessages", () => {
     expect(body.sessionUsage.modelId).toBe("openai/gpt-4");
     expect(body.sessionUsage.context).toEqual({ windowMax: 128_000, used: 12_480 });
     expect(body.sessionUsage.tokens.total).toBe(12_480);
+  });
+
+  it("uses the Control UI sessions.list row for the current context snapshot", async () => {
+    const file = writeTranscript("control-ui-usage.jsonl", [
+      { type: "message", id: "u1", message: { role: "user", content: "hi" } },
+      {
+        type: "message",
+        id: "a1",
+        message: { role: "assistant", content: [{ type: "text", text: "yo" }] },
+      },
+    ]);
+    const gatewayRequest = vi.fn(async () => ({
+      sessions: [
+        {
+          key: "agent:main:main",
+          model: "kimi-for-coding",
+          modelProvider: "kimi",
+          inputTokens: 1_092,
+          outputTokens: 453,
+          cacheRead: 18_688,
+          totalTokens: 19_780,
+          totalTokensFresh: true,
+          contextTokens: 262_144,
+        },
+      ],
+    }));
+    setForward(
+      {
+        "agent:main:main": {
+          sessionId: "s",
+          sessionFile: file,
+          totalTokens: 99_999,
+          totalTokensFresh: true,
+          contextTokens: 128_000,
+        },
+      },
+      { gatewayRequest },
+    );
+
+    const res = new MockRes();
+    await handleHistoryMessages(
+      makeReq("/friday-next/history/messages?sessionKey=agent:main:main", AUTH),
+      res as any,
+    );
+
+    const body = JSON.parse(res.body);
+    expect(body.sessionUsage.context).toEqual({ windowMax: 262_144, used: 19_780 });
+    expect(body.sessionUsage.tokens.total).toBe(19_780);
+    expect(body.sessionUsage.tokens.totalFresh).toBe(true);
+    expect(gatewayRequest).toHaveBeenCalledWith(
+      "sessions.list",
+      expect.objectContaining({
+        agentId: "main",
+        search: "agent:main:main",
+      }),
+      expect.objectContaining({ scopes: ["operator.read"] }),
+    );
+  });
+
+  it("does not resurrect a raw-store token value omitted by sessions.list", async () => {
+    const file = writeTranscript("projected-usage-missing.jsonl", [
+      { type: "message", id: "u1", message: { role: "user", content: "hi" } },
+    ]);
+    const gatewayRequest = vi.fn(async () => ({ sessions: [] }));
+    setForward(
+      {
+        "agent:main:main": {
+          sessionId: "s",
+          sessionFile: file,
+          totalTokens: 99_999,
+          totalTokensFresh: false,
+          contextTokens: 128_000,
+        },
+      },
+      { gatewayRequest },
+    );
+
+    const res = new MockRes();
+    await handleHistoryMessages(
+      makeReq("/friday-next/history/messages?sessionKey=agent:main:main", AUTH),
+      res as any,
+    );
+
+    expect(JSON.parse(res.body).sessionUsage).toBeUndefined();
   });
 
   it("omits sessionUsage when the store has no entry", async () => {
