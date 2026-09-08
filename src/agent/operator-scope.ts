@@ -35,13 +35,25 @@ type ScopeLike =
  * Returns the scopes that were actually added (empty if none / no array present).
  */
 export function elevateScopeForSubagentSpawn(scope: ScopeLike): string[] {
+  return elevateGatewayRequestScopes(scope, REQUIRED_OPERATOR_SCOPES);
+}
+
+/**
+ * Generic form of elevateScopeForSubagentSpawn: in-place, idempotent scope elevation for the
+ * live request scope. question.* gateway methods need `operator.questions`, which plugin
+ * routes (auth:"plugin") do not carry by default.
+ */
+export function elevateGatewayRequestScopes(
+  scope: ScopeLike,
+  required: readonly string[],
+): string[] {
   const connect = scope?.client?.connect;
   if (!connect || !Array.isArray(connect.scopes)) {
     return [];
   }
   const scopes = connect.scopes as string[];
   const added: string[] = [];
-  for (const scopeName of REQUIRED_OPERATOR_SCOPES) {
+  for (const scopeName of required) {
     if (!scopes.includes(scopeName)) {
       scopes.push(scopeName);
       added.push(scopeName);
@@ -55,8 +67,16 @@ export function elevateScopeForSubagentSpawn(scope: ScopeLike): string[] {
  * agent can spawn subagents. Never throws — returns the scopes added (or []).
  */
 export function ensureSubagentSpawnScope(): string[] {
+  return ensureGatewayRequestScopes(REQUIRED_OPERATOR_SCOPES);
+}
+
+/**
+ * Fetches the live plugin gateway-request-scope and adds the given scopes in place.
+ * Never throws — returns the scopes added (or []).
+ */
+export function ensureGatewayRequestScopes(required: readonly string[]): string[] {
   try {
-    return elevateScopeForSubagentSpawn(getPluginRuntimeGatewayRequestScope());
+    return elevateGatewayRequestScopes(getPluginRuntimeGatewayRequestScope(), required);
   } catch {
     return [];
   }

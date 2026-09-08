@@ -15,6 +15,7 @@ import { handleCancel } from "./handlers/cancel.js";
 import { handleDeviceApprove } from "./handlers/device-approve.js";
 import { handleNodesApprove } from "./handlers/nodes-approve.js";
 import { handleApprovalDecision } from "./handlers/approvals.js";
+import { handleQuestionAnswer, handleQuestionLookup } from "./handlers/questions.js";
 import { handleSessionsSettings } from "./handlers/sessions-settings.js";
 import { handlePromptCapsules } from "./handlers/prompt-capsules.js";
 import { handleServerName } from "./handlers/server-name.js";
@@ -187,6 +188,18 @@ async function handleFridayNextRoute(req: IncomingMessage, res: ServerResponse):
   if (req.method === "POST" && pathname.startsWith("/friday-next/approvals/")) {
     const approvalId = decodeURIComponent(pathname.slice("/friday-next/approvals/".length));
     return await handleApprovalDecision(req, res, approvalId);
+  }
+
+  // Route: POST /friday-next/questions/{questionId} (submit ask_user question answer)
+  if (req.method === "POST" && pathname.startsWith("/friday-next/questions/")) {
+    const questionId = decodeURIComponent(pathname.slice("/friday-next/questions/".length));
+    return await handleQuestionAnswer(req, res, questionId);
+  }
+
+  // Route: GET /friday-next/questions/{questionId} (re-check ask_user question state)
+  if (req.method === "GET" && pathname.startsWith("/friday-next/questions/")) {
+    const questionId = decodeURIComponent(pathname.slice("/friday-next/questions/".length));
+    return await handleQuestionLookup(req, res, questionId);
   }
 
   if (req.method === "POST" && pathname === "/friday-next/health-query/result") {

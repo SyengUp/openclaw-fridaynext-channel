@@ -98,6 +98,31 @@ describe("DurableRunStore", () => {
     expect(conflict.run?.runId).toBe(accepted.run?.runId);
   });
 
+  it("persists observed core runs without making them eligible for command dispatch", () => {
+    const { root, store } = makeStore();
+    const observed = store.observeRun({
+      runId: "core-owned-run",
+      sessionKey: "agent:research:external-session",
+      agentId: "research",
+      deviceIds: ["phone-1"],
+    });
+
+    expect(observed).toMatchObject({
+      origin: "observed",
+      phase: "running",
+      deliveryDeviceIds: ["PHONE-1"],
+    });
+    expect(store.claimRunnable()).toEqual([]);
+
+    const reconstructed = new DurableRunStore(root);
+    expect(reconstructed.run("core-owned-run")).toMatchObject({
+      origin: "observed",
+      phase: "running",
+      deliveryDeviceIds: ["PHONE-1"],
+    });
+    expect(reconstructed.claimRunnable()).toEqual([]);
+  });
+
   it("treats absent and empty session options as the same request", () => {
     const { store } = makeStore();
     const accepted = store.acceptCommand(command());
@@ -139,6 +164,25 @@ describe("DurableRunStore", () => {
 
     expect(store.claimRun(run.runId)?.phase).toBe("dispatching");
     expect(store.claimRun(run.runId)).toBeUndefined();
+  });
+
+  it("claimQueuedAnswerRun claims past a busy session run and queued FIFO order", () => {
+    const { store } = makeStore();
+    const blocked = store.acceptCommand(command()).run!;
+    const chatter = store.acceptCommand(command({ clientRequestId: "request-2" })).run!;
+    const answer = store.acceptCommand(command({ clientRequestId: "request-3" })).run!;
+
+    // The blocked run owns the session; both queued commands lose the ordinary claim.
+    expect(store.claimRun(blocked.runId)?.phase).toBe("dispatching");
+    expect(store.claimRun(answer.runId)).toBeUndefined();
+
+    // The question answer jumps both gates: session-busy and not-first-in-queue.
+    expect(store.claimQueuedAnswerRun(answer.runId)?.phase).toBe("dispatching");
+    expect(store.run(chatter.runId)?.phase).toBe("queued");
+
+    // Only queued runs are claimable — a claimed answer never re-claims.
+    expect(store.claimQueuedAnswerRun(answer.runId)).toBeUndefined();
+    expect(store.claimQueuedAnswerRun(chatter.runId)?.phase).toBe("dispatching");
   });
 
   it("persists ordered events and the committed device acknowledgement", () => {

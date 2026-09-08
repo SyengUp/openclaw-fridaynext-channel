@@ -15,6 +15,13 @@ import {
 import { sseEmitter } from "../../sse/emitter.js";
 import { runDetachedWebhookWork } from "openclaw/plugin-sdk/webhook-request-guards";
 import { __setDetachedWebhookWorkImporterForTests } from "../../agent/detached-webhook-work.js";
+import { setMockRuntime } from "../../test-support/mock-runtime.js";
+import { observeAgentEventForActiveRuns, resetActiveRunsForTest } from "../../agent/active-runs.js";
+import { getRuntimeV3Store } from "../../runtime-v3/runtime-store.js";
+import {
+  __resetFridayQuestionsForTest,
+  noteFridayQuestionPrompt,
+} from "../../question/friday-question.js";
 
 const saveMediaBufferMock = vi.hoisted(() => vi.fn());
 vi.mock("openclaw/plugin-sdk/media-store", () => ({
@@ -425,5 +432,106 @@ describe("handleMessages dispatch error path", () => {
 
     expect(calls).toBe(1);
     expect(broadcasts.errors[0]).toContain("boom");
+  });
+});
+
+describe("handleMessages serial-queue question bypass", () => {
+  const SESSION_KEY = "default"; // canonicalizes to agent:main:default
+
+  afterEach(() => {
+    clearFridayNextRuntime();
+    __resetMockFridayDispatchForTests();
+    __resetFridayQuestionsForTest();
+    resetActiveRunsForTest();
+    vi.restoreAllMocks();
+  });
+
+  function markSessionActive(): void {
+    observeAgentEventForActiveRuns({
+      stream: "lifecycle",
+      runId: "blocked-run-1",
+      data: { phase: "start" },
+      sessionKey: SESSION_KEY,
+    });
+  }
+
+  async function postV3StyleMessage(text: string): Promise<void> {
+    const req = new PassThrough() as unknown as IncomingMessage;
+    req.method = "POST";
+    req.headers = { authorization: "Bearer test-token" };
+    const res = new MockRes() as unknown as ServerResponse;
+    const p = handleMessages(req, res);
+    req.end(
+      JSON.stringify({
+        deviceId: "AA11",
+        text,
+        sessionKey: SESSION_KEY,
+        clientRequestId: `q-bypass-${Math.random().toString(36).slice(2)}`,
+      }),
+    );
+    await p;
+  }
+
+  it("lets a message through immediately when the active session has a pending question", async () => {
+    setMockRuntime();
+    markSessionActive();
+    // The blocked ask_user run occupies BOTH serial gates: the core-observed active session
+    // (hasActiveSession) and the durable ledger's busy run (claimRun's busy-session refusal).
+    const blocked = getRuntimeV3Store().acceptCommand({
+      clientRequestId: "q-bypass-blocked",
+      deviceId: "AA11",
+      sessionKey: "agent:main:default",
+      agentId: "main",
+      text: "ask",
+      attachments: [],
+      sessionOptions: {},
+    }).run!;
+    getRuntimeV3Store().claimRun(blocked.runId);
+    noteFridayQuestionPrompt({
+      questionId: "ask_0123456789abcdef0123456789abcdef",
+      sessionKey: SESSION_KEY,
+      deviceId: "AA11",
+      runId: blocked.runId,
+    });
+
+    let dispatchResolve: () => void = () => {};
+    const dispatched = new Promise<void>((resolve) => {
+      dispatchResolve = resolve;
+    });
+    __setMockFridayDispatchForTests(() => {
+      dispatchResolve();
+      return Promise.resolve();
+    });
+
+    await postV3StyleMessage("2");
+    // Without the bypass this never fires: the serial queue would hold the answer behind the
+    // run that is blocked waiting for it.
+    await Promise.race([
+      dispatched,
+      new Promise<void>((_, reject) =>
+        setTimeout(() => reject(new Error("dispatch was held behind the blocked run")), 1500),
+      ),
+    ]);
+  });
+
+  it("still holds a message when the active session has no pending question", async () => {
+    setMockRuntime();
+    markSessionActive();
+
+    let calls = 0;
+    __setMockFridayDispatchForTests(() => {
+      calls += 1;
+      return Promise.resolve();
+    });
+
+    await postV3StyleMessage("hello");
+    await new Promise((resolve) => setTimeout(resolve, 400));
+    expect(calls).toBe(0);
+
+    // Cleanup: releasing the active session lets the held message drain.
+    resetActiveRunsForTest();
+    await vi.waitFor(() => {
+      expect(calls).toBe(1);
+    });
   });
 });

@@ -156,6 +156,18 @@ declare module "openclaw/plugin-sdk/approval-gateway-runtime" {
   }) => Promise<unknown>;
 }
 
+declare module "openclaw/plugin-sdk/question-gateway-runtime" {
+  export const questionGatewayRuntime: {
+    /** Registers this channel's delivered question prompt so the gateway invokes `finalize`
+     *  with a terminal status line ("Answered: X" | "Expired" | "Cancelled") exactly once. */
+    registerChannelDelivery: (params: {
+      questionId: string;
+      deliveryId: string;
+      finalize: (statusLine: string) => void | Promise<void>;
+    }) => void;
+  };
+}
+
 declare module "openclaw/plugin-sdk/gateway-method-runtime" {
   export const dispatchGatewayMethod: (
     method: string,

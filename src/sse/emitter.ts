@@ -15,6 +15,7 @@ export type SseEventType =
   | "ping"
   | "subagent"
   | "approval"
+  | "question"
   | "session-status"
   | "session-title"
   | "talk"
@@ -254,12 +255,39 @@ class SseEmitterRegistry {
     });
   }
 
-  private mirrorIntoRuntimeV3(event: SseEvent, hintedRunId?: string): void {
+  private mirrorIntoRuntimeV3(
+    event: SseEvent,
+    hintedRunId?: string,
+    hintedDeviceId?: string,
+  ): void {
     const store = runtimeV3StoreIfInitialized();
     if (!store) return;
     const rawRunId = hintedRunId ?? event.data.runId;
     const runId = typeof rawRunId === "string" ? rawRunId.trim() : "";
-    if (!runId || !store.run(runId)) return;
+    if (!runId) return;
+    const rawDeviceId = hintedDeviceId ?? event.data.deviceId;
+    const deviceId = typeof rawDeviceId === "string" ? rawDeviceId.trim().toUpperCase() : "";
+    let run = store.run(runId);
+    if (!run && deviceId) {
+      const sessionKey =
+        typeof event.data.sessionKey === "string" ? event.data.sessionKey.trim() : "";
+      const agentId = sessionKey.match(/^agent:([^:]+):/i)?.[1] ?? "main";
+      if (sessionKey) {
+        run = store.observeRun({
+          runId,
+          sessionKey,
+          agentId,
+          deviceIds: [deviceId],
+          occurredAt: typeof event.data.ts === "number" ? event.data.ts : undefined,
+          rootRunId: typeof event.data.rootRunId === "string" ? event.data.rootRunId : undefined,
+          parentRunId:
+            typeof event.data.parentRunId === "string" ? event.data.parentRunId : undefined,
+        });
+      }
+    } else if (run && deviceId) {
+      run = store.attachDeviceToRun(runId, deviceId);
+    }
+    if (!run) return;
     const sourceKey = this.runtimeSourceKey(event);
     if (sourceKey) {
       const seen = this.persistedRuntimeSourceKeys(store, runId);
@@ -293,6 +321,9 @@ class SseEmitterRegistry {
     } else if (event.type === "approval") {
       const op = typeof event.data.op === "string" ? event.data.op.toLowerCase() : "update";
       eventType = `approval.${op}`;
+    } else if (event.type === "question") {
+      const op = typeof event.data.op === "string" ? event.data.op.toLowerCase() : "update";
+      eventType = `question.${op}`;
     } else if (event.type === "fridaynext-health-query") {
       eventType = "device.health.request";
     } else if (event.type === "fridaynext-health-log") {
@@ -422,7 +453,7 @@ class SseEmitterRegistry {
     flushNow?: boolean,
     skipRuntimeMirror = false,
   ): void {
-    if (!skipRuntimeMirror) this.mirrorIntoRuntimeV3(event);
+    if (!skipRuntimeMirror) this.mirrorIntoRuntimeV3(event, undefined, deviceId);
     if (deviceId) {
       const key = deviceId.trim().toUpperCase();
       const entry = this.nextEntry(key, event);
@@ -486,8 +517,8 @@ class SseEmitterRegistry {
   }
 
   broadcastToRun(runId: string, event: SseEvent, flushNow?: boolean): void {
-    this.mirrorIntoRuntimeV3(event, runId);
     const direct = typeof event.data.deviceId === "string" ? event.data.deviceId : "";
+    this.mirrorIntoRuntimeV3(event, runId, direct);
     if (direct.trim()) {
       this.broadcast(event, direct, flushNow, true);
       return;

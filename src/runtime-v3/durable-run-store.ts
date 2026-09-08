@@ -28,11 +28,23 @@ export type DurableRunCommand = {
 export type DurableRunRecord = DurableRunCommand & {
   runId: string;
   payloadHash: string;
+  origin?: "command" | "observed";
+  deliveryDeviceIds?: string[];
   phase: DurableRunPhase;
   createdAt: number;
   updatedAt: number;
   lastRunSeq: number;
   terminalReason?: string;
+  rootRunId?: string;
+  parentRunId?: string;
+};
+
+export type ObserveRunInput = {
+  runId: string;
+  sessionKey: string;
+  agentId: string;
+  deviceIds: string[];
+  occurredAt?: number;
   rootRunId?: string;
   parentRunId?: string;
 };
@@ -161,6 +173,12 @@ function normalizedCommand(command: DurableRunCommand): DurableRunCommand {
   };
 }
 
+function normalizedDeliveryDeviceIds(run: DurableRunRecord): string[] {
+  return [
+    ...new Set([run.deviceId, ...(run.deliveryDeviceIds ?? [])].map(normalizedDeviceId)),
+  ].filter(Boolean);
+}
+
 function canonicalValue(value: unknown): unknown {
   if (Array.isArray(value)) return value.map(canonicalValue);
   if (!value || typeof value !== "object") return value;
@@ -194,7 +212,11 @@ function isRunRecord(value: unknown): value is DurableRunRecord {
     typeof record.deviceId === "string" &&
     typeof record.sessionKey === "string" &&
     typeof record.phase === "string" &&
-    typeof record.updatedAt === "number"
+    typeof record.updatedAt === "number" &&
+    (record.origin === undefined || record.origin === "command" || record.origin === "observed") &&
+    (record.deliveryDeviceIds === undefined ||
+      (Array.isArray(record.deliveryDeviceIds) &&
+        record.deliveryDeviceIds.every((deviceId) => typeof deviceId === "string")))
   );
 }
 
@@ -356,6 +378,8 @@ export class DurableRunStore {
       ...command,
       runId: crypto.randomUUID(),
       payloadHash: hash,
+      origin: "command",
+      deliveryDeviceIds: [command.deviceId],
       phase: "queued",
       createdAt: now,
       updatedAt: now,
@@ -366,6 +390,92 @@ export class DurableRunStore {
     this.runIdByRequest.set(requestKey, record.runId);
     this.indexRunSession(record);
     return { outcome: "accepted", run: record };
+  }
+
+  /**
+   * Adopts a core-owned run that did not originate from POST /v3/messages. The run is still
+   * durable and replayable, but it is never eligible for command claiming/re-dispatch.
+   */
+  observeRun(input: ObserveRunInput): DurableRunRecord | undefined {
+    const runId = input.runId.trim();
+    const sessionKey = input.sessionKey.trim();
+    const agentId = input.agentId.trim() || "main";
+    const deviceIds = [...new Set(input.deviceIds.map(normalizedDeviceId))].filter(Boolean);
+    if (!runId || !sessionKey || deviceIds.length === 0) return undefined;
+
+    const existing = this.runsById.get(runId);
+    if (existing) {
+      if (canonicalSessionKey(existing.sessionKey) !== canonicalSessionKey(sessionKey)) {
+        return undefined;
+      }
+      for (const deviceId of deviceIds) this.attachDeviceToRun(runId, deviceId);
+      return this.runsById.get(runId);
+    }
+
+    const occurredAt = input.occurredAt;
+    const createdAt =
+      typeof occurredAt === "number" && Number.isFinite(occurredAt)
+        ? Math.max(0, Math.floor(occurredAt))
+        : Date.now();
+    const command: DurableRunCommand = {
+      clientRequestId: `observed:${runId}`,
+      deviceId: deviceIds[0],
+      sessionKey,
+      agentId,
+      text: "",
+      attachments: [],
+    };
+    const record: DurableRunRecord = {
+      ...command,
+      runId,
+      payloadHash: payloadHash(command),
+      origin: "observed",
+      deliveryDeviceIds: deviceIds,
+      phase: "running",
+      createdAt,
+      updatedAt: createdAt,
+      lastRunSeq: 0,
+      ...(input.rootRunId?.trim() ? { rootRunId: input.rootRunId.trim() } : {}),
+      ...(input.parentRunId?.trim() ? { parentRunId: input.parentRunId.trim() } : {}),
+    };
+    this.persistRun(record);
+    this.runsById.set(record.runId, record);
+    this.indexRunSession(record);
+    return record;
+  }
+
+  /** Adds a delivery audience and idempotently backfills every already-durable semantic event. */
+  attachDeviceToRun(runId: string, rawDeviceId: string): DurableRunRecord | undefined {
+    const current = this.runsById.get(runId.trim());
+    const deviceId = normalizedDeviceId(rawDeviceId);
+    if (!current || !deviceId) return undefined;
+
+    const sourceEvents = this.eventsForRun(current.runId);
+    const audiences = normalizedDeliveryDeviceIds(current);
+    let updated = current;
+    if (!audiences.includes(deviceId)) {
+      updated = { ...current, deliveryDeviceIds: [...audiences, deviceId] };
+      this.persistRun(updated);
+      this.runsById.set(updated.runId, updated);
+    }
+
+    const existingRunSeqs = new Set(
+      this.readDeliveryEvents(deviceId)
+        .filter((event) => event.runId === current.runId)
+        .map((event) => event.runSeq),
+    );
+    for (const source of sourceEvents) {
+      if (existingRunSeqs.has(source.runSeq)) continue;
+      const event: DurableRuntimeEvent = {
+        ...source,
+        serverInstanceId: this.serverInstanceId,
+        eventId: this.nextEventId(deviceId),
+      };
+      this.appendLineDurable(this.deliveryFile(deviceId), event);
+      this.eventHeadByDevice.set(deviceId, event.eventId);
+      for (const listener of this.listenersByDevice.get(deviceId) ?? []) listener(event);
+    }
+    return updated;
   }
 
   run(runId: string): DurableRunRecord | undefined {
@@ -417,7 +527,7 @@ export class DurableRunStore {
   runs(deviceId?: string): DurableRunRecord[] {
     const normalized = deviceId ? normalizedDeviceId(deviceId) : null;
     return [...this.runsById.values()]
-      .filter((run) => normalized === null || run.deviceId === normalized)
+      .filter((run) => normalized === null || normalizedDeliveryDeviceIds(run).includes(normalized))
       .sort((a, b) => a.createdAt - b.createdAt || a.runId.localeCompare(b.runId));
   }
 
@@ -428,7 +538,7 @@ export class DurableRunStore {
   activeRunForSession(sessionKey: string, deviceId?: string): DurableRunRecord | undefined {
     const normalized = deviceId ? normalizedDeviceId(deviceId) : null;
     return this.runsForSession(sessionKey)
-      .filter((run) => normalized === null || run.deviceId === normalized)
+      .filter((run) => normalized === null || normalizedDeliveryDeviceIds(run).includes(normalized))
       .filter((run) => busyPhases.has(run.phase))
       .sort((a, b) => b.updatedAt - a.updatedAt || b.createdAt - a.createdAt)[0];
   }
@@ -461,6 +571,21 @@ export class DurableRunStore {
     }
     const firstQueued = sessionRuns.find((run) => run.phase === "queued");
     if (firstQueued?.runId !== current.runId) return undefined;
+    return this.transition(current.runId, "dispatching");
+  }
+
+  /**
+   * Claim a queued command that answers the session's pending ask_user question, past the
+   * busy-session gate: the session's busy run is BLOCKED waiting for exactly this message, and
+   * the core claims it as the answer (runReplyQuestionInput) before any run concurrency happens.
+   * FIFO ordering is intentionally skipped too — the answer must not wait behind older queued
+   * chatter that the blocked run cannot outlive. Only call this while a pending question is
+   * known for the session (question/friday-question.ts).
+   */
+  claimQueuedAnswerRun(runId: string): DurableRunRecord | undefined {
+    const current = this.runsById.get(runId.trim());
+    if (!current) return undefined;
+    if (current.phase !== "queued") return undefined;
     return this.transition(current.runId, "dispatching");
   }
 
@@ -505,25 +630,28 @@ export class DurableRunStore {
         );
       }
     }
-    const deviceId = current.deviceId;
     const runSeq = current.lastRunSeq + 1;
-    const eventId = this.nextEventId(deviceId);
-    const event: DurableRuntimeEvent = {
-      protocolVersion: 3,
-      serverInstanceId: this.serverInstanceId,
-      eventId,
-      sessionKey: current.sessionKey,
-      agentId: current.agentId,
-      runId: current.runId,
-      ...(current.rootRunId ? { rootRunId: current.rootRunId } : {}),
-      ...(current.parentRunId ? { parentRunId: current.parentRunId } : {}),
-      runSeq,
-      eventType: eventType.trim(),
-      occurredAt: Date.now(),
-      payload,
-    };
-    this.appendLineDurable(this.deliveryFile(deviceId), event);
-    this.eventHeadByDevice.set(deviceId, eventId);
+    const occurredAt = Date.now();
+    const events = normalizedDeliveryDeviceIds(current).map((deviceId) => {
+      const event: DurableRuntimeEvent = {
+        protocolVersion: 3,
+        serverInstanceId: this.serverInstanceId,
+        eventId: this.nextEventId(deviceId),
+        sessionKey: current.sessionKey,
+        agentId: current.agentId,
+        runId: current.runId,
+        ...(current.rootRunId ? { rootRunId: current.rootRunId } : {}),
+        ...(current.parentRunId ? { parentRunId: current.parentRunId } : {}),
+        runSeq,
+        eventType: eventType.trim(),
+        occurredAt,
+        payload,
+      };
+      this.appendLineDurable(this.deliveryFile(deviceId), event);
+      this.eventHeadByDevice.set(deviceId, event.eventId);
+      return { deviceId, event };
+    });
+    const event = events[0].event;
 
     const updated: DurableRunRecord = {
       ...current,
@@ -536,7 +664,11 @@ export class DurableRunStore {
     if (terminalPhases.has(updated.phase)) this.persistRun(updated);
     this.runsById.set(updated.runId, updated);
     if (terminalPhases.has(updated.phase)) this.persistRunSnapshot(updated);
-    for (const listener of this.listenersByDevice.get(deviceId) ?? []) listener(event);
+    for (const delivered of events) {
+      for (const listener of this.listenersByDevice.get(delivered.deviceId) ?? []) {
+        listener(delivered.event);
+      }
+    }
     return event;
   }
 
@@ -589,7 +721,7 @@ export class DurableRunStore {
     const runs = this.runsForSession(sessionKey);
     const runIds = new Set(runs.map((run) => run.runId));
     const deliveryByRun = new Map<string, DurableRuntimeEvent[]>();
-    for (const deviceId of new Set(runs.map((run) => run.deviceId))) {
+    for (const deviceId of new Set(runs.flatMap(normalizedDeliveryDeviceIds))) {
       for (const event of this.readDeliveryEvents(deviceId)) {
         if (!runIds.has(event.runId)) continue;
         const values = deliveryByRun.get(event.runId) ?? [];
@@ -613,8 +745,8 @@ export class DurableRunStore {
     const run = this.runsById.get(runId.trim());
     if (!run) return [];
     const archived = this.readRunSnapshot(run.runId)?.events ?? [];
-    const delivery = this.readDeliveryEvents(run.deviceId).filter(
-      (event) => event.runId === run.runId,
+    const delivery = normalizedDeliveryDeviceIds(run).flatMap((deviceId) =>
+      this.readDeliveryEvents(deviceId).filter((event) => event.runId === run.runId),
     );
     return [
       ...new Map([...archived, ...delivery].map((event) => [event.runSeq, event])).values(),
@@ -926,7 +1058,7 @@ export class DurableRunStore {
 
   private repairEventHeadsFromDeliveryJournals(): void {
     let changed = false;
-    const deviceIds = new Set([...this.runsById.values()].map((run) => run.deviceId));
+    const deviceIds = new Set([...this.runsById.values()].flatMap(normalizedDeliveryDeviceIds));
     for (const deviceId of deviceIds) {
       const journalHead = this.readDeliveryEvents(deviceId).at(-1)?.eventId ?? 0;
       const persistedHead = this.eventHeadByDevice.get(deviceId) ?? 0;

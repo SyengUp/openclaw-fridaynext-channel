@@ -55,6 +55,11 @@ import {
 } from "./files.js";
 import { runFridayDispatch } from "../../agent/dispatch-bridge.js";
 import { hasActiveSession } from "../../agent/active-runs.js";
+import {
+  hasPendingFridayQuestion,
+  noteFridayQuestionPrompt,
+  readFridayAskUserBinding,
+} from "../../question/friday-question.js";
 import { loadDetachedWebhookWork } from "../../agent/detached-webhook-work.js";
 import { ensureSubagentSpawnScope } from "../../agent/operator-scope.js";
 import { saveInboundMediaBuffer } from "../../agent/media-bridge.js";
@@ -799,11 +804,26 @@ export async function handleMessages(req: IncomingMessage, res: ServerResponse):
       // same session from WebChat, Telegram, or another channel; lifecycle observation records those
       // runs before Friday routing. Keep our command durably queued until the shared core session is
       // idle so every producer obeys the same per-session serial execution contract.
-      if (hasActiveSession(baseSessionKey)) {
+      //
+      // Exception: a pending ask_user question means the active run is BLOCKED waiting for this
+      // user's answer, and the core claims the next inbound plain-text message as that answer
+      // (runReplyQuestionInput, before any queue/steer decision). Holding the answer behind the
+      // blocked run deadlocks until the question times out — let the dispatch through so the core
+      // can claim it. If the question terminalized in the meantime the claim simply misses and the
+      // core queues the message as an ordinary followup, which is exactly the pre-bypass behavior.
+      if (hasActiveSession(baseSessionKey) && !hasPendingFridayQuestion(baseSessionKey)) {
         await new Promise<void>((resolve) => setTimeout(resolve, 100));
         continue;
       }
       if (durableStore.claimRun(runId)) return true;
+      // claimRun's busy-session gate refuses while the session has an active run — but a
+      // pending ask_user question means that run is BLOCKED waiting for exactly this message
+      // (the core claims it as the answer before any queue/steer decision), so no real
+      // concurrency happens. Claim past the gate for that one case; without it the answer
+      // deadlocks behind the blocked run until the question times out.
+      if (hasPendingFridayQuestion(baseSessionKey) && durableStore.claimQueuedAnswerRun(runId)) {
+        return true;
+      }
       await new Promise<void>((resolve) => setTimeout(resolve, 100));
     }
   };
@@ -849,6 +869,18 @@ export async function handleMessages(req: IncomingMessage, res: ServerResponse):
               }
             }
             const payload = translateDeliverPayload(pl, info.kind, meta);
+            // ask_user prompt: track the pending question (serial-queue answer bypass) and
+            // bridge its terminal state back over SSE. The prompt payload itself still flows
+            // to the app unchanged (presentation + channelData.askUser ride along).
+            const askUser = readFridayAskUserBinding(payload);
+            if (askUser) {
+              noteFridayQuestionPrompt({
+                questionId: askUser.questionId,
+                sessionKey: baseSessionKey,
+                deviceId: normalizedDeviceId,
+                runId,
+              });
+            }
             // Phase E: when public access is on AND this device is connected via the public relay,
             // move outbound media off the tunnel — read the just-resolved `/friday-next/files/…`
             // bytes, encrypt + upload to OSS, and rewrite the URL to a `fnoss:v1:…` reference the
