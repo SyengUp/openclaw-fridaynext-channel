@@ -28,6 +28,7 @@ import { handleAgentToolsCatalog } from "./handlers/agent-tools-catalog.js";
 import { handleHistorySessions } from "./handlers/history-sessions.js";
 import { handleNotifications, handleNotificationDelete } from "./handlers/notifications.js";
 import { handleHistoryMessages } from "./handlers/history-messages.js";
+import { handleProgressCardGet } from "./handlers/progress-card.js";
 import { handleHistorySetTitle } from "./handlers/history-set-title.js";
 import { handleSessionsBind } from "./handlers/sessions-bind.js";
 import { handleStatus } from "./handlers/status.js";
@@ -289,6 +290,11 @@ async function handleFridayNextRoute(req: IncomingMessage, res: ServerResponse):
   // Route: GET /friday-next/history/messages?sessionKey=&agentId=&limit=
   if (req.method === "GET" && pathname === "/friday-next/history/messages") {
     return await handleHistoryMessages(req, res);
+  }
+
+  // Route: GET /friday-next/progress-card?sessionKey= (authoritative session progress card)
+  if (req.method === "GET" && pathname === "/friday-next/progress-card") {
+    return await handleProgressCardGet(req, res);
   }
 
   // Route: PUT /friday-next/sessions/title (sync app session name → server displayName)
