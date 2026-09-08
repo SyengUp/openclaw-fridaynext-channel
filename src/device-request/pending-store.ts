@@ -41,6 +41,22 @@ export interface DeviceRequestPendingStore {
   resetForTest(): void;
 }
 
+const PROCESS_PENDING_STORES_KEY = Symbol.for(
+  "@syengup/friday-channel-next/device-request-pending-stores",
+);
+
+type ProcessPendingStoreRegistry = Map<string, DeviceRequestPendingStore>;
+
+function processPendingStoreRegistry(): ProcessPendingStoreRegistry {
+  const existing = Reflect.get(globalThis, PROCESS_PENDING_STORES_KEY) as unknown;
+  if (existing instanceof Map) {
+    return existing as ProcessPendingStoreRegistry;
+  }
+  const created: ProcessPendingStoreRegistry = new Map();
+  Reflect.set(globalThis, PROCESS_PENDING_STORES_KEY, created);
+  return created;
+}
+
 function normalizeDeviceId(deviceId: string): string {
   return deviceId.trim().toUpperCase();
 }
@@ -109,4 +125,23 @@ export function createDeviceRequestPendingStore(
       requestIdByDevice.clear();
     },
   };
+}
+
+/**
+ * Plugin tool discovery and full gateway registration can load separate module instances in the
+ * same process. Device-result HTTP handlers must still resolve the exact waiter created by a tool
+ * instance, otherwise the old instance keeps its per-device busy lock until the long timeout.
+ */
+export function getProcessDeviceRequestPendingStore(
+  key: string,
+  options: DeviceRequestPendingStoreOptions,
+): DeviceRequestPendingStore {
+  const normalizedKey = key.trim();
+  if (!normalizedKey) throw new Error("pending store key is required");
+  const registry = processPendingStoreRegistry();
+  const existing = registry.get(normalizedKey);
+  if (existing) return existing;
+  const created = createDeviceRequestPendingStore(options);
+  registry.set(normalizedKey, created);
+  return created;
 }

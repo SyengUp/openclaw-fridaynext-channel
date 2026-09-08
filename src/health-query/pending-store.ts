@@ -5,7 +5,7 @@
  */
 
 import {
-  createDeviceRequestPendingStore,
+  getProcessDeviceRequestPendingStore,
   type DeviceRequestError,
   type DeviceRequestOutcome,
 } from "../device-request/pending-store.js";
@@ -15,7 +15,7 @@ export const HEALTH_QUERY_TIMEOUT_MS = 86_400_000;
 export type HealthQueryError = DeviceRequestError;
 export type HealthQueryOutcome = DeviceRequestOutcome;
 
-const store = createDeviceRequestPendingStore({
+const store = getProcessDeviceRequestPendingStore("health", {
   timeoutMs: HEALTH_QUERY_TIMEOUT_MS,
   timeoutCode: "HEALTH_TIMEOUT",
   timeoutMessage: "Timed out waiting for the iPhone to return HealthKit data",

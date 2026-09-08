@@ -6,7 +6,7 @@
  */
 
 import {
-  createDeviceRequestPendingStore,
+  getProcessDeviceRequestPendingStore,
   type DeviceRequestError,
   type DeviceRequestOutcome,
 } from "../device-request/pending-store.js";
@@ -16,7 +16,7 @@ export const LOCATION_QUERY_TIMEOUT_MS = 86_400_000;
 export type LocationQueryError = DeviceRequestError;
 export type LocationQueryOutcome = DeviceRequestOutcome;
 
-const store = createDeviceRequestPendingStore({
+const store = getProcessDeviceRequestPendingStore("location", {
   timeoutMs: LOCATION_QUERY_TIMEOUT_MS,
   timeoutCode: "LOCATION_TIMEOUT",
   timeoutMessage: "Timed out waiting for the iPhone to return the current location",

@@ -6,7 +6,7 @@
  */
 
 import {
-  createDeviceRequestPendingStore,
+  getProcessDeviceRequestPendingStore,
   type DeviceRequestError,
   type DeviceRequestOutcome,
 } from "../device-request/pending-store.js";
@@ -16,7 +16,7 @@ export const CALENDAR_REQUEST_TIMEOUT_MS = 86_400_000;
 export type CalendarRequestError = DeviceRequestError;
 export type CalendarRequestOutcome = DeviceRequestOutcome;
 
-const store = createDeviceRequestPendingStore({
+const store = getProcessDeviceRequestPendingStore("calendar", {
   timeoutMs: CALENDAR_REQUEST_TIMEOUT_MS,
   timeoutCode: "CALENDAR_TIMEOUT",
   timeoutMessage: "Timed out waiting for the iPhone to return calendar data",
