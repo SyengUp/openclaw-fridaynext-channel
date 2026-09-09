@@ -304,4 +304,104 @@ describe("sseEmitter", () => {
     expect(store.eventsForRun(run.runId)).toHaveLength(1);
     expect(store.run(run.runId)?.lastRunSeq).toBe(1);
   });
+
+  it("adopts a directed external run into runtime v3 before mirroring it", () => {
+    setRuntimeV3RootForTest(path.join(tmp, "runtime-v3-external"));
+    const store = getRuntimeV3Store();
+    const deviceId = "DEVICE-EXTERNAL";
+    const sessionKey = "agent:research:control-ui-session";
+    const runId = "external-core-run";
+    const source = (seq: number, stream: string, data: Record<string, unknown>) => ({
+      type: "agent" as const,
+      data: { runId, seq, sessionKey, stream, data },
+    });
+
+    // This run did not pass through POST /v3/messages. It represents a Control UI,
+    // WebChat or core-recovery run delivered to a device that previously bound the session.
+    sseEmitter.broadcast(source(1, "lifecycle", { phase: "start" }), deviceId);
+    sseEmitter.broadcast(
+      source(2, "assistant", { phase: "delta", text: "live external answer" }),
+      deviceId,
+    );
+    sseEmitter.broadcast(source(3, "lifecycle", { phase: "end" }), deviceId);
+
+    expect(store.run(runId)).toMatchObject({
+      runId,
+      sessionKey,
+      agentId: "research",
+      phase: "completed",
+      origin: "observed",
+    });
+    expect(store.eventsAfter(deviceId, 0).map((event) => event.eventType)).toEqual([
+      "run.started",
+      "agent.assistant.delta",
+      "run.completed",
+    ]);
+
+    // A reconstructed store keeps both the observed origin and its replayable delivery ledger.
+    setRuntimeV3RootForTest(path.join(tmp, "runtime-v3-external"));
+    const reconstructed = getRuntimeV3Store();
+    expect(reconstructed.run(runId)?.origin).toBe("observed");
+    expect(reconstructed.eventsAfter(deviceId, 0)).toHaveLength(3);
+  });
+
+  it("backfills an existing run when a second bound device starts watching", () => {
+    setRuntimeV3RootForTest(path.join(tmp, "runtime-v3-second-watcher"));
+    const store = getRuntimeV3Store();
+    const owner = "DEVICE-OWNER";
+    const watcher = "DEVICE-WATCHER";
+    const run = store.acceptCommand({
+      clientRequestId: "request-with-watcher",
+      deviceId: owner,
+      sessionKey: "agent:main:shared-session",
+      agentId: "main",
+      text: "hello",
+      attachments: [],
+    }).run!;
+    const start = {
+      type: "agent" as const,
+      data: {
+        runId: run.runId,
+        seq: 1,
+        sessionKey: run.sessionKey,
+        stream: "lifecycle",
+        data: { phase: "start" },
+      },
+    };
+    const delta = {
+      type: "agent" as const,
+      data: {
+        runId: run.runId,
+        seq: 2,
+        sessionKey: run.sessionKey,
+        stream: "assistant",
+        data: { phase: "delta", text: "shared answer" },
+      },
+    };
+    const end = {
+      type: "agent" as const,
+      data: {
+        runId: run.runId,
+        seq: 3,
+        sessionKey: run.sessionKey,
+        stream: "lifecycle",
+        data: { phase: "end" },
+      },
+    };
+
+    sseEmitter.broadcast(start, owner);
+    sseEmitter.broadcast(delta, owner);
+    sseEmitter.flushRuntimeV3Run(run.runId);
+    sseEmitter.broadcast(end, owner);
+    // Re-delivering the latest source frame to a newly bound watcher must attach the
+    // audience and backfill the whole run without minting a duplicate semantic event.
+    sseEmitter.broadcast(end, watcher);
+
+    expect(store.eventsAfter(owner, 0).map((event) => event.runSeq)).toEqual([1, 2, 3]);
+    expect(store.eventsAfter(watcher, 0).map((event) => event.runSeq)).toEqual([1, 2, 3]);
+    expect(store.run(run.runId)?.deliveryDeviceIds).toEqual([owner, watcher]);
+    store.acknowledge(owner, 3);
+    expect(store.eventsAfter(owner, 0)).toEqual([]);
+    expect(store.eventsAfter(watcher, 0).map((event) => event.runSeq)).toEqual([1, 2, 3]);
+  });
 });

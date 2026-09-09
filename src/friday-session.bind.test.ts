@@ -17,6 +17,8 @@ import { sseEmitter } from "./sse/emitter.js";
 import { resetActiveRunsForTest } from "./agent/active-runs.js";
 import { resetRunMetadataForTest } from "./run-metadata.js";
 import { resetFridayAgentForwardRuntimeForTest } from "./agent-forward-runtime.js";
+import { setOfflineQueueBaseDirForTest } from "./sse/offline-queue.js";
+import { getRuntimeV3Store, setRuntimeV3RootForTest } from "./runtime-v3/runtime-store.js";
 
 describe("session bind (watch a conversation started elsewhere)", () => {
   const sessionKey = "agent:main:control-ui-session";
@@ -265,7 +267,57 @@ describe("session bind (watch a conversation started elsewhere)", () => {
     expect(calls).toHaveLength(3);
     for (const call of calls) {
       expect(call[1]).toBe(otherDevice);
-      expect(call[3]).toBe(true);
+      expect(call[3]).toBeUndefined();
     }
+  });
+});
+
+describe("session bind runtime-v3 integration", () => {
+  const sessionKey = "agent:main:external-runtime-session";
+  const watcherDevice = "BBBBBBBB-CCCC-DDDD-EEEE-FFFFFFFFFFFF";
+  let tmp = "";
+
+  beforeEach(() => {
+    tmp = fs.mkdtempSync(path.join(os.tmpdir(), "friday-bind-runtime-v3-"));
+    sseEmitter.resetForTest();
+    sessionReplayBuffer.resetForTest();
+    resetSessionBindingsForTest();
+    resetOpenClawRunDeviceMappingForTest();
+    resetFridayAgentForwardRuntimeForTest();
+    resetRunMetadataForTest();
+    resetActiveRunsForTest();
+    setLastDeviceStateFileForTest(null);
+    setSessionBindStateFileForTest(null);
+    setOfflineQueueBaseDirForTest(path.join(tmp, "legacy-sse"));
+    setRuntimeV3RootForTest(path.join(tmp, "runtime-v3"));
+  });
+
+  afterEach(() => {
+    sseEmitter.resetForTest();
+    resetSessionBindingsForTest();
+    resetFridayAgentForwardRuntimeForTest();
+    setOfflineQueueBaseDirForTest(null);
+    setRuntimeV3RootForTest(null);
+    fs.rmSync(tmp, { recursive: true, force: true });
+  });
+
+  it("adopts buffered core frames into the durable v3 stream when the app binds", () => {
+    const runId = "external-runtime-run";
+    const emit = (seq: number, stream: string, data: Record<string, unknown>) =>
+      forwardAgentEventRaw({ runId, seq, ts: 1_000 + seq, stream, sessionKey, data });
+
+    emit(1, "lifecycle", { phase: "start" });
+    emit(2, "assistant", { phase: "delta", delta: "external reply" });
+    emit(3, "lifecycle", { phase: "end" });
+
+    const store = getRuntimeV3Store();
+    expect(store.run(runId)).toBeUndefined();
+    expect(bindFridayDeviceToSession(sessionKey, watcherDevice)).toBe(3);
+    expect(store.run(runId)).toMatchObject({ origin: "observed", phase: "completed" });
+    expect(store.eventsAfter(watcherDevice, 0).map((event) => event.eventType)).toEqual([
+      "run.started",
+      "agent.assistant.delta",
+      "run.completed",
+    ]);
   });
 });

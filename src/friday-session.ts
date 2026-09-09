@@ -229,10 +229,10 @@ export function bindFridayDeviceToSession(rawSessionKey: string, deviceId: strin
     if (watermark !== undefined && (seq === undefined || seq <= watermark)) {
       continue;
     }
-    // These frames were already mirrored when they first entered the session
-    // replay buffer. Re-binding is delivery-only: mirroring them again would
-    // append an old run's whole history to the protocol-v3 ledger a second time.
-    sseEmitter.broadcast(frame, did, undefined, true);
+    // A frame buffered before any Friday device watched the session has no v3 run yet.
+    // Re-enter the normal mirror path here: source-key dedup keeps already-journaled
+    // frames idempotent, while an external run is adopted before delivery.
+    sseEmitter.broadcast(frame, did);
     replayed += 1;
     if (runId && seq !== undefined) {
       noteReplayWatermark(did, runId, seq);
