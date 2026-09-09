@@ -7,7 +7,12 @@ import { getFridayAgentForwardRuntime } from "./agent-forward-runtime.js";
 import { toSessionStoreKey } from "./session/session-manager.js";
 import { getOpenClawAgentRunContext } from "./agent-run-context-bridge.js";
 import { observeAgentEventForActiveRuns } from "./agent/active-runs.js";
-import { getRunMetadata, ingestAgentEventMetadata } from "./run-metadata.js";
+import {
+  getRunMetadata,
+  getRunRoute,
+  ingestAgentEventMetadata,
+  registerRunRoute,
+} from "./run-metadata.js";
 import { consumeRunUsage } from "./agent/run-usage-accumulator.js";
 import type { FridaySessionUsagePayload } from "./session-usage-snapshot.js";
 import { readSessionUsageSnapshot } from "./session-usage-store.js";
@@ -654,6 +659,18 @@ export function forwardAgentEventRaw(evt: ForwardAgentEventArgs): void {
     const fromCtx = typeof ctx?.sessionKey === "string" ? ctx.sessionKey.trim() : "";
     if (fromCtx) sk = fromCtx;
   }
+  // Run-level deterministic attribution BEFORE the device's latest-session fallback.
+  // The dispatch path (`registerRunRoute`, before the 202 is observable) and
+  // lifecycle.start (backfill below) both pin runId → sessionKey for the run's whole
+  // lifetime. `deviceIdToLatestHistorySessionKey` drifts whenever the user opens
+  // another session (bind) or POSTs elsewhere — routing a stripped frame by it
+  // mislabels the still-running run's output into the just-opened session (seen
+  // live: progress_card + assistant deltas of session A landing in session B).
+  if (!sk) {
+    const route = getRunRoute(evt.runId);
+    const fromRoute = typeof route?.sessionKey === "string" ? route.sessionKey.trim() : "";
+    if (fromRoute) sk = fromRoute;
+  }
 
   // Track live runs before Friday device routing so cross-channel sessions
   // (WebChat / Telegram) still surface as processing on the home list.
@@ -742,6 +759,14 @@ export function forwardAgentEventRaw(evt: ForwardAgentEventArgs): void {
   // Register sessionKey → runId so we can resolve parentRunId
   if (sk && evt.stream === "lifecycle" && evt.data.phase === "start") {
     registerSessionKeyForRun(sk, evt.runId);
+    // Externally started runs (Control UI / WebChat) never POST through this plugin,
+    // so their only deterministic route record is the lifecycle.start frame — usually
+    // the last frame that still carries a sessionKey before core strips later ones.
+    // Backfill it (never overwrites: a POST-dispatched run keeps its dispatch route,
+    // whose sessionKey form came verbatim from the app's POST).
+    if (deviceIdRaw && !getRunRoute(evt.runId)) {
+      registerRunRoute({ runId: evt.runId, deviceId: deviceIdRaw, sessionKey: sk });
+    }
   }
 
   // ── sessions_spawn tool → subagent lifecycle (replaces hooks) ──
