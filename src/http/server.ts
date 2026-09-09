@@ -30,6 +30,7 @@ import { handleNotifications, handleNotificationDelete } from "./handlers/notifi
 import { handleHistoryMessages } from "./handlers/history-messages.js";
 import { handleProgressCardGet } from "./handlers/progress-card.js";
 import { handleHistorySetTitle } from "./handlers/history-set-title.js";
+import { handleSessionsPin } from "./handlers/sessions-pin.js";
 import { handleSessionsBind } from "./handlers/sessions-bind.js";
 import { handleStatus } from "./handlers/status.js";
 import { handleLinkPreview } from "./handlers/link-preview.js";
@@ -303,6 +304,11 @@ async function handleFridayNextRoute(req: IncomingMessage, res: ServerResponse):
     pathname === "/friday-next/sessions/title"
   ) {
     return await handleHistorySetTitle(req, res);
+  }
+
+  // 路由：PUT /friday-next/sessions/pin（方法校验由处理器完成，以便非 PUT 返回 405）
+  if (pathname === "/friday-next/sessions/pin") {
+    return await handleSessionsPin(req, res);
   }
 
   // Route: POST /friday-next/sessions/bind (attach a device to a session's live

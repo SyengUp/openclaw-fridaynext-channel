@@ -71,6 +71,8 @@ export interface FridayHistorySessionSummary {
   updatedAt?: number;
   model?: string;
   title?: string;
+  pinned?: true;
+  pinnedAt?: number;
   /** True when the gateway currently has a live run on this session. */
   hasActiveRun?: boolean;
 }
@@ -280,6 +282,7 @@ function readAgentSessions(agentId: string): FridayHistorySessionSummary[] {
 
     const isCron = isCronSessionKey(canonicalKey);
     const updatedAt = readNumber(entry.updatedAt);
+    const pinnedAt = readNumber(entry.pinnedAt);
     // Cron sessions are surfaced only when they ran recently — there can be
     // hundreds otherwise. A cron session with no `updatedAt` is treated as stale.
     if (isCron && (updatedAt === undefined || Date.now() - updatedAt > CRON_RECENT_WINDOW_MS)) {
@@ -309,6 +312,7 @@ function readAgentSessions(agentId: string): FridayHistorySessionSummary[] {
         ? { model: readString(entry.model) ?? readString(entry.modelOverride) }
         : {}),
       ...(title ? { title } : {}),
+      ...(pinnedAt !== undefined ? { pinned: true as const, pinnedAt } : {}),
       ...(sessionHasActiveRun(canonicalKey) ? { hasActiveRun: true } : {}),
     });
   }

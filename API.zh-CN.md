@@ -102,6 +102,14 @@ data: {"runId":"...","seq":1,"ts":...,"stream":"lifecycle","data":{"phase":"star
 
 `GET /friday-next/status`：在英文版基础上增加 `activeRuns`、`activeRunCount`（由 lifecycle 跟踪）。
 
+## 会话置顶
+
+`PUT /friday-next/sessions/pin`，请求体：`{ "sessionKey": "agent:main:main", "pinned": true }`。
+
+首次置顶由网关写入当前时间；重复置顶保留原 `pinnedAt`，不会刷新排序时间。取消置顶会移除 `pinnedAt`。成功响应为 `{ "ok": true, "sessionKey": "…", "pinned": true, "pinnedAt": 1710000000000 }`；取消置顶后的响应不包含 `pinnedAt`。
+
+`GET /friday-next/history/sessions` 的会话行仅在已置顶时包含 `pinned: true` 和 `pinnedAt`。
+
 ## Agent 管理
 
 像 OpenClaw ControlUI 一样读取/编辑单个 agent 的配置，但全部经插件自己的配置通道（`api.runtime.config.mutateConfigFile`）落地——**不改 OpenClaw 核心**。配置类改动写入宿主配置文件的 `agents.list[]`；核心 `.md` 文件直接写入 agent 的 workspace 目录。`{id}` 按 OpenClaw 会话键 agent id 规范化（去空白/小写/slug，空 → `main`）。
