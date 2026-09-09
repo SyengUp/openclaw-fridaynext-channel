@@ -375,6 +375,14 @@ plugin-emitted `run-error` for cancel; observe `agent` / `lifecycle` on the clie
 
 `activeRuns` is derived from `agent` lifecycle `start` / `end` / `error` tracking inside the plugin.
 
+## Session pinning
+
+`PUT /friday-next/sessions/pin`, body: `{ "sessionKey": "agent:main:main", "pinned": true }`.
+
+Pinning writes the gateway timestamp only once; pinning an already pinned session preserves its original `pinnedAt`. Unpinning removes `pinnedAt`. A successful response is `{ "ok": true, "sessionKey": "…", "pinned": true, "pinnedAt": 1710000000000 }`; `pinnedAt` is omitted after unpinning.
+
+Rows returned by `GET /friday-next/history/sessions` include `pinned: true` and `pinnedAt` only when the session is pinned.
+
 ## Agent management
 
 Read and edit a single agent's configuration the same way OpenClaw's ControlUI does, but written through the plugin's own config channel (`api.runtime.config.mutateConfigFile`) — **no OpenClaw core changes**. Config edits land in `agents.list[]` of the host config file; core `.md` files are written directly into the agent's workspace dir. `{id}` is normalized like OpenClaw's session-key agent id (trim/lowercase/slug; empty → `main`).

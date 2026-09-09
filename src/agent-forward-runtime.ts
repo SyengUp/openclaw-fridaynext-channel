@@ -27,7 +27,7 @@ export type FridayAgentForwardRuntime = {
     path: string,
     options?: { skipCache?: boolean; maintenanceConfig?: unknown; clone?: boolean },
   ) => Record<string, unknown>;
-  /** Cache-owning entry write (syncs the app session name → server `displayName`). */
+  /** 旧宿主的会话条目写入器；仅在按身份写入能力不可用时回退。 */
   updateSessionStoreEntry?: (params: {
     storePath: string;
     sessionKey: string;
@@ -56,10 +56,7 @@ export type FridayAgentForwardRuntime = {
    * and this export does not exist.
    */
   loadTranscriptEventsSync?: SessionTranscriptEventLoader;
-  /**
-   * Identity-based session patch. Preferred over `updateSessionStoreEntry` for
-   * `permissionMode` so the write lands in the canonical store, not legacy JSON.
-   */
+  /** 按会话身份写入规范存储；权限、置顶等会话属性都应优先走此路径。 */
   patchSessionEntry?: (params: {
     sessionKey: string;
     agentId?: string;

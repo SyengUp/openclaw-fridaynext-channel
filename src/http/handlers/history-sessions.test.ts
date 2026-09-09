@@ -483,6 +483,39 @@ describe("handleHistorySessions", () => {
     expect(sessions[0]).toMatchObject({ title: "运营会话", agentId: "operator" });
   });
 
+  it("forwards pinned and pinnedAt only for pinned session rows", async () => {
+    setForward(
+      { agents: { entries: { main: {} } } },
+      {
+        main: {
+          "agent:main:pinned": {
+            sessionId: "pinned",
+            updatedAt: 2,
+            pinnedAt: 1_700_000_000_000,
+          },
+          "agent:main:normal": {
+            sessionId: "normal",
+            updatedAt: 1,
+            pinned: false,
+          },
+        },
+      },
+      { useListEntries: true },
+    );
+    const res = new MockRes();
+
+    await handleHistorySessions(makeReq(AUTH), res as any);
+
+    const sessions = JSON.parse(res.body).sessions;
+    expect(sessions[0]).toMatchObject({
+      sessionKey: "agent:main:pinned",
+      pinned: true,
+      pinnedAt: 1_700_000_000_000,
+    });
+    expect(sessions[1]).not.toHaveProperty("pinned");
+    expect(sessions[1]).not.toHaveProperty("pinnedAt");
+  });
+
   it("treats loadSessionStore sqlite: markers as live transcripts", async () => {
     setForward(
       { agents: { list: [{ id: "main" }] } },
