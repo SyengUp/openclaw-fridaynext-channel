@@ -282,6 +282,36 @@ describe("fetchPublicUrl", () => {
     expect(await fetchPublicUrl("https://nope.example.com/", opts)).toBeNull();
   });
 
+  it("returns the status (empty body) for non-2xx when captureHttpErrorStatus is set", async () => {
+    mockPublicDns();
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response("blocked", { status: 403 })),
+    );
+    const result = await fetchPublicUrl("https://example.com/gated", {
+      ...opts,
+      captureHttpErrorStatus: true,
+    });
+    expect(result?.httpStatus).toBe(403);
+    expect(result?.finalUrl).toBe("https://example.com/gated");
+    expect(result?.body.length).toBe(0);
+  });
+
+  it("reports httpStatus 200 on a successful fetch", async () => {
+    mockPublicDns();
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(
+        async () =>
+          new Response("<html></html>", {
+            status: 200,
+            headers: { "content-type": "text/html" },
+          }),
+      ),
+    );
+    expect((await fetchPublicUrl("https://example.com/ok", opts))?.httpStatus).toBe(200);
+  });
+
   it("gives up after too many redirects", async () => {
     mockPublicDns();
     vi.stubGlobal(

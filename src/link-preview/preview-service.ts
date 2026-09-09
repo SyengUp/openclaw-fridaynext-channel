@@ -22,6 +22,14 @@ const SUCCESS_TTL_MS = 24 * 60 * 60 * 1000;
 const FAILURE_TTL_MS = 10 * 60 * 1000;
 const MAX_CACHE_ENTRIES = 1000;
 
+/**
+ * Page statuses where the host answered but refused to hand us the document: bot walls (Cloudflare
+ * 403/503), auth walls, rate limits, legal blocks, content-negotiation refusals. Treated as
+ * "reachable" so the link still gets a minimal hostname card. 404/410 are deliberately absent —
+ * a missing page stays collapsed (typo'd links shouldn't render cards).
+ */
+const GATED_PAGE_STATUSES = new Set([401, 403, 405, 406, 429, 451, 503]);
+
 const logger = createFridayNextLogger("link-preview");
 
 export interface LinkPreviewPayload {
@@ -106,6 +114,8 @@ async function buildPreview(pageUrl: string): Promise<LinkPreviewResult> {
       timeoutMs: HTML_TIMEOUT_MS,
       accept: "text/html,application/xhtml+xml",
       requireContentTypePrefixes: ["text/html", "application/xhtml+xml"],
+      // 反爬墙也是「主机答了话」，别当成网络失败——否则下面拿不到状态码。
+      captureHttpErrorStatus: true,
     });
   } catch (err) {
     if (err instanceof BlockedUrlError) {
@@ -116,7 +126,13 @@ async function buildPreview(pageUrl: string): Promise<LinkPreviewResult> {
   }
 
   const finalUrl = page?.finalUrl ?? pageUrl;
-  const og = page ? parseOpenGraph(page.body.toString("utf8"), finalUrl) : null;
+  const served = page !== null && page.httpStatus < 400;
+  // 被反爬/限流拦下（Cloudflare 403/503、429…）：主机真实存在、页面拿不到，OG 自然为空。
+  // 这类链接仍要出最小卡（标题回退 hostname），否则真机上「一段两个链接只出一张卡」——
+  // openai.com 页面 403 且 favicon 也 403，两个兜底同时失效，卡片被 app 静默折叠。
+  const gated = page !== null && GATED_PAGE_STATUSES.has(page.httpStatus);
+  const og =
+    page && page.httpStatus < 400 ? parseOpenGraph(page.body.toString("utf8"), finalUrl) : null;
   const hostname = (() => {
     try {
       return new URL(finalUrl).hostname;
@@ -131,10 +147,10 @@ async function buildPreview(pageUrl: string): Promise<LinkPreviewResult> {
 
   // A failed page fetch only yields a (minimal) card when the favicon resolved — that proves the
   // domain is real/reachable (e.g. bot-blocked zhihu). A dead domain (favicon also fails) collapses.
-  const reachable = page !== null || iconUrl !== null;
+  const reachable = served || gated || iconUrl !== null;
   const title = og?.title ?? hostname;
   if (!reachable || !title) {
-    return { ok: false, error: page ? "no_metadata" : "fetch_failed" };
+    return { ok: false, error: served ? "no_metadata" : "fetch_failed" };
   }
 
   const imageUrl = og?.imageUrl ? await rehostCoverImage(og.imageUrl) : null;

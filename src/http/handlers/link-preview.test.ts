@@ -204,6 +204,27 @@ describe("handleLinkPreview", () => {
     expect(fs.existsSync(path.join(tmpDir, token))).toBe(true);
   });
 
+  it("200 minimal card for a bot-blocked page whose favicon is also blocked (openai.com-style)", async () => {
+    // 真机现场（GPT-6 会话）：openai.com 页面 403、favicon.ico 也 403 → 「页面兜底」与
+    // 「favicon 兜底」同时失效，旧实现回 502，app 折叠那张卡，一段里的两个链接只剩一张卡。
+    // 主机答了话就证明域名真实存在，应退到 hostname 最小卡。
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(
+        async () =>
+          new Response("blocked", { status: 403, headers: { "content-type": "text/html" } }),
+      ),
+    );
+    const res = await invoke(makeReq("https://openai.com/index/gpt-6-astra/"));
+    expect(res.statusCode).toBe(200);
+    const preview = JSON.parse(res.body).preview as LinkPreviewPayload;
+    expect(preview.title).toBe("openai.com");
+    expect(preview.siteName).toBe("openai.com");
+    expect(preview.url).toBe("https://openai.com/index/gpt-6-astra/");
+    expect(preview.iconUrl).toBeNull();
+    expect(preview.imageUrl).toBeNull();
+  });
+
   it("200 minimal card for a bot-blocked page whose favicon.ico is reachable (zhihu-style)", async () => {
     const ICO_BYTES = new Uint8Array([0x00, 0x00, 0x01, 0x00, 0x01, 0, 0, 0, 0, 0, 0, 0]);
     vi.stubGlobal(

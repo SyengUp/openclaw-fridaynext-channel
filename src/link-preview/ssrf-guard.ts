@@ -128,12 +128,20 @@ export interface FetchPublicUrlOptions {
   accept?: string;
   /** When set, the response Content-Type must start with one of these prefixes. */
   requireContentTypePrefixes?: string[];
+  /**
+   * When true, a non-2xx response resolves (empty body + `httpStatus`) instead of null, so callers
+   * can tell "the host answered but refused" (bot block / rate limit) from "we never reached it".
+   * Content-Type is not checked in that case — the body is discarded either way.
+   */
+  captureHttpErrorStatus?: boolean;
 }
 
 export interface FetchPublicUrlResult {
   finalUrl: string;
   contentType: string;
   body: Buffer;
+  /** Status of the final response. Only ≥400 when `captureHttpErrorStatus` was set. */
+  httpStatus: number;
 }
 
 const PREVIEW_USER_AGENT = "Mozilla/5.0 (compatible; OpenClawLinkPreview/1.0)";
@@ -142,6 +150,7 @@ const PREVIEW_USER_AGENT = "Mozilla/5.0 (compatible; OpenClawLinkPreview/1.0)";
  * Fetch a public http/https URL with manual redirects (≤5 hops, each hop re-validated) and a
  * streamed size cap (Content-Length is not trusted). Returns null on ordinary failures (non-2xx,
  * oversize, timeout, bad content type, DNS error); throws BlockedUrlError on SSRF rejection.
+ * With `captureHttpErrorStatus` a non-2xx response is returned instead of null (see its docs).
  */
 export async function fetchPublicUrl(
   rawUrl: string,
@@ -177,12 +186,19 @@ export async function fetchPublicUrl(
         }
         continue;
       }
+      const contentType = res.headers.get("content-type")?.trim().toLowerCase() ?? "";
       if (!res.ok) {
         await res.body?.cancel().catch(() => {});
+        if (opts.captureHttpErrorStatus) {
+          return {
+            finalUrl: url.toString(),
+            contentType,
+            body: Buffer.alloc(0),
+            httpStatus: res.status,
+          };
+        }
         return null;
       }
-
-      const contentType = res.headers.get("content-type")?.trim().toLowerCase() ?? "";
       if (
         opts.requireContentTypePrefixes &&
         !opts.requireContentTypePrefixes.some((p) => contentType.startsWith(p))
@@ -193,7 +209,7 @@ export async function fetchPublicUrl(
 
       const body = await readBodyCapped(res, opts.maxBytes);
       if (body === null) return null;
-      return { finalUrl: url.toString(), contentType, body };
+      return { finalUrl: url.toString(), contentType, body, httpStatus: res.status };
     }
     return null; // too many redirects
   } catch (err) {
