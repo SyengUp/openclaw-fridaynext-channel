@@ -136,7 +136,10 @@ describe("handleQuestionAnswer", () => {
     mockGet(PENDING_RECORD);
     dispatchGatewayMethod.mockResolvedValueOnce({
       ok: true,
-      payload: { status: "answered", answers: { answers: { deployment_environment: ["Staging"] } } },
+      payload: {
+        status: "answered",
+        answers: { answers: { deployment_environment: ["Staging"] } },
+      },
     });
 
     const result = await invoke("POST", QUESTION_ID, { optionValue: "Staging", deviceId: "dev1" });
@@ -309,7 +312,10 @@ describe("handleQuestionAnswer structured shapes", () => {
   });
 
   it("resolves a multi-select single question via values", async () => {
-    mockGet({ ...PENDING_RECORD, questions: [{ ...PENDING_RECORD.questions[0], multiSelect: true }] });
+    mockGet({
+      ...PENDING_RECORD,
+      questions: [{ ...PENDING_RECORD.questions[0], multiSelect: true }],
+    });
     dispatchGatewayMethod.mockResolvedValueOnce({ ok: true, payload: { status: "answered" } });
 
     const result = await invoke("POST", QUESTION_ID, { values: ["Staging", "Production"] });

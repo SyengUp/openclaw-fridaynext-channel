@@ -134,7 +134,9 @@ describe("friday-question", () => {
       readFridayAskUserBinding({ channelData: { askUser: { questionId: QUESTION_ID } } }),
     ).toEqual({ questionId: QUESTION_ID });
     expect(readFridayAskUserBinding({ channelData: { fridayNext: {} } })).toBeUndefined();
-    expect(readFridayAskUserBinding({ channelData: { askUser: { questionId: " " } } })).toBeUndefined();
+    expect(
+      readFridayAskUserBinding({ channelData: { askUser: { questionId: " " } } }),
+    ).toBeUndefined();
     expect(readFridayAskUserBinding(null)).toBeUndefined();
     expect(readFridayAskUserBinding("text")).toBeUndefined();
   });

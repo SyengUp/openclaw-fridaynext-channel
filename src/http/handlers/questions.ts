@@ -137,8 +137,9 @@ export async function handleQuestionAnswer(
     body.answers && typeof body.answers === "object" && !Array.isArray(body.answers)
       ? (body.answers as Record<string, unknown>)
       : undefined;
-  const shaped = [optionValue, freeText, values.length > 0 ? true : false, answersMap]
-    .filter((v) => v !== undefined && v !== false && v !== "").length;
+  const shaped = [optionValue, freeText, values.length > 0 ? true : false, answersMap].filter(
+    (v) => v !== undefined && v !== false && v !== "",
+  ).length;
   if (shaped === 0) {
     return json(400, { error: "Missing answer: optionValue, text, values, or answers" });
   }
@@ -172,8 +173,16 @@ export async function handleQuestionAnswer(
   ensureGatewayRequestScopes(QUESTION_SCOPES);
 
   const fail = (status: number, error: string, detail?: unknown) => {
-    log.warn(`question ${questionId} resolve failed: ${error}${detail ? ` (${String(detail)})` : ""}`);
-    return json(status, detail !== undefined ? { error, detail: String(detail) } : { error });
+    const detailText =
+      detail === undefined
+        ? undefined
+        : typeof detail === "string"
+          ? detail
+          : JSON.stringify(detail);
+    log.warn(
+      `question ${questionId} resolve failed: ${error}${detailText ? ` (${detailText})` : ""}`,
+    );
+    return json(status, detailText !== undefined ? { error, detail: detailText } : { error });
   };
 
   // Fetch the record first: the wire questionId (ask_*) is the RECORD id; answers key on the
@@ -200,10 +209,9 @@ export async function handleQuestionAnswer(
   }
   if (questions.length === 0) return fail(502, "Question record carries no questions");
 
-  const innerIds = questions.map((q) =>
-    typeof q.questionId === "string" ? q.questionId : "",
-  );
-  if (innerIds.some((id) => !id)) return fail(502, "Question record is missing an inner question id");
+  const innerIds = questions.map((q) => (typeof q.questionId === "string" ? q.questionId : ""));
+  if (innerIds.some((id) => !id))
+    return fail(502, "Question record is missing an inner question id");
 
   let answers: Record<string, string[]>;
   if (answersMap) {
