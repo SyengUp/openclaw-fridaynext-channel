@@ -61,9 +61,7 @@ export async function handleProgressCardGet(
   } catch (err) {
     res.statusCode = 500;
     res.setHeader("Content-Type", "application/json");
-    res.end(
-      JSON.stringify({ ok: false, error: err instanceof Error ? err.message : String(err) }),
-    );
+    res.end(JSON.stringify({ ok: false, error: err instanceof Error ? err.message : String(err) }));
   }
   return true;
 }
