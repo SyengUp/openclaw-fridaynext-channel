@@ -6,7 +6,7 @@
  * `defaultProfiles`) is produced by core's `buildToolsCatalogResult({cfg, agentId})`.
  * That builder lives only in a hash-named dist chunk (no stable plugin-sdk export) and
  * the catalog is CODE, not scannable data — so unlike skill discovery we can't avoid
- * importing it. We locate the chunk RESILIENTLY (scan `<openclaw>/dist/*.js` for the one
+ * importing it. We locate the chunk RESILIENTLY (scan `<openclaw>/dist/*.{mjs,js}` for the one
  * defining `buildToolsCatalogResult`, then dynamic-import it — Node returns the gateway's
  * already-loaded module instance, so no side effects), cache it, and degrade gracefully
  * (null) if the layout changes. Per-tool `enabled`/`inProfile` are then resolved here from
@@ -46,6 +46,33 @@ type BuildFn = (params: {
 
 let cachedBuildFn: BuildFn | null | undefined;
 
+/**
+ * OpenClaw 2026.9.3 moved its bundled chunks from `.js` to `.mjs`. Prefer the
+ * current `.mjs` format and likely semantic chunk names so the common path does
+ * not synchronously read the entire dist directory, while retaining a broad
+ * fallback for future hash/name changes.
+ */
+export function orderOpenClawDistModuleCandidates(
+  files: string[],
+  preferredPrefix: string,
+): string[] {
+  return files
+    .filter((file) => {
+      if (file.endsWith(".mjs")) return true;
+      // OPENCLAW_COMPAT_REMOVE(min-host>=2026.9.3): legacy OpenClaw chunks used `.js`.
+      return file.endsWith(".js");
+    })
+    .map((file, index) => ({ file, index }))
+    .sort((a, b) => {
+      const preferredDelta =
+        Number(!a.file.startsWith(preferredPrefix)) - Number(!b.file.startsWith(preferredPrefix));
+      if (preferredDelta !== 0) return preferredDelta;
+      const extensionDelta = Number(a.file.endsWith(".js")) - Number(b.file.endsWith(".js"));
+      return extensionDelta !== 0 ? extensionDelta : a.index - b.index;
+    })
+    .map(({ file }) => file);
+}
+
 async function loadBuildFn(): Promise<BuildFn | null> {
   if (cachedBuildFn !== undefined) return cachedBuildFn;
   cachedBuildFn = await locateBuildFn();
@@ -81,6 +108,9 @@ async function locateChannelRegistryFns(): Promise<ChannelRegistryFns | null> {
   const distDir = path.join(root, "dist");
   let files: string[];
   try {
+    // OPENCLAW_COMPAT_REMOVE(min-host>=2026.9.3): this registry repair belongs to the
+    // legacy `.js` catalog path. The 2026.9.3 `.mjs` builder uses a standalone tool
+    // registry and no longer exposes or needs these channel-registry helpers.
     files = fs.readdirSync(distDir).filter((f) => f.endsWith(".js"));
   } catch {
     return null;
@@ -152,7 +182,7 @@ async function locateBuildFn(): Promise<BuildFn | null> {
   const distDir = path.join(root, "dist");
   let files: string[];
   try {
-    files = fs.readdirSync(distDir).filter((f) => f.endsWith(".js"));
+    files = orderOpenClawDistModuleCandidates(fs.readdirSync(distDir), "tools-catalog-");
   } catch {
     return null;
   }

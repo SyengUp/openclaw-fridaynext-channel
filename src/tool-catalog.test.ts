@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { adaptToolsCatalogHandler } from "./tool-catalog.js";
+import { adaptToolsCatalogHandler, orderOpenClawDistModuleCandidates } from "./tool-catalog.js";
 
 const CATALOG = {
   agentId: "main",
@@ -60,5 +60,28 @@ describe("adaptToolsCatalogHandler (OpenClaw ≥2026.7.1 gateway-method handler 
     expect(() => build!({ cfg: {}, agentId: "main", includePlugins: true })).toThrow(
       /tools\.catalog handler failed/,
     );
+  });
+});
+
+describe("orderOpenClawDistModuleCandidates", () => {
+  it("discovers 2026.9.3 .mjs chunks while retaining legacy .js compatibility", () => {
+    expect(
+      orderOpenClawDistModuleCandidates(
+        [
+          "unrelated.txt",
+          "runtime-old.js",
+          "tools-catalog-new.mjs",
+          "tools-catalog-old.js",
+          "runtime-new.mjs",
+          "types.d.ts",
+        ],
+        "tools-catalog-",
+      ),
+    ).toEqual([
+      "tools-catalog-new.mjs",
+      "tools-catalog-old.js",
+      "runtime-new.mjs",
+      "runtime-old.js",
+    ]);
   });
 });
