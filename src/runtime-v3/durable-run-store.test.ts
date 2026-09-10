@@ -76,6 +76,34 @@ describe("DurableRunStore", () => {
     ).toMatchObject({ outcome: "accepted" });
   });
 
+  it("does not re-adopt a deleted run id from a late agent event", () => {
+    const { store } = makeStore();
+    const deleted = store.acceptCommand(command()).run!;
+    store.appendRunEvent(deleted.runId, "run.started", {});
+    store.deleteSession(deleted.sessionKey);
+
+    const observed = store.observeRun({
+      runId: deleted.runId,
+      sessionKey: deleted.sessionKey,
+      agentId: deleted.agentId,
+      deviceIds: [deleted.deviceId],
+      occurredAt: Date.now() + 1_000,
+    });
+
+    expect(observed).toBeUndefined();
+    expect(store.run(deleted.runId)).toBeUndefined();
+    expect(store.eventsForSession(deleted.sessionKey)).toEqual([]);
+
+    const replacement = store.observeRun({
+      runId: "replacement-run",
+      sessionKey: deleted.sessionKey,
+      agentId: deleted.agentId,
+      deviceIds: [deleted.deviceId],
+      occurredAt: Date.now() + 2_000,
+    });
+    expect(replacement?.runId).toBe("replacement-run");
+  });
+
   it("idempotently replays the same accepted request after store reconstruction", () => {
     const { root, store } = makeStore();
 

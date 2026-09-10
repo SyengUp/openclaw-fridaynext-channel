@@ -243,6 +243,36 @@ describe("sseEmitter", () => {
     ]);
   });
 
+  it("drops a delayed runtime batch when its run was deleted before the timer flush", async () => {
+    vi.useFakeTimers();
+    setRuntimeV3RootForTest(path.join(tmp, "runtime-v3-deleted-batch"));
+    const store = getRuntimeV3Store();
+    const run = store.acceptCommand({
+      clientRequestId: "deleted-batch",
+      deviceId: "DEVICE-DELETED-BATCH",
+      sessionKey: "agent:main:deleted-batch",
+      agentId: "main",
+      text: "test",
+      attachments: [],
+    }).run!;
+    sseEmitter.broadcastToRun(run.runId, {
+      type: "agent",
+      data: {
+        runId: run.runId,
+        seq: 1,
+        sessionKey: run.sessionKey,
+        stream: "assistant",
+        data: { phase: "delta", delta: "late" },
+      },
+    });
+
+    store.deleteSession(run.sessionKey);
+
+    await vi.advanceTimersByTimeAsync(16);
+    expect(store.run(run.runId)).toBeUndefined();
+    expect(store.eventsForSession(run.sessionKey)).toEqual([]);
+  });
+
   it("bounds cumulative-text batches by bytes as well as event count", () => {
     setRuntimeV3RootForTest(path.join(tmp, "runtime-v3-bytes"));
     const store = getRuntimeV3Store();

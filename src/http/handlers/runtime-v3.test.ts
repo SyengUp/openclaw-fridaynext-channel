@@ -395,6 +395,52 @@ describe("runtime protocol v3", () => {
     });
   });
 
+  it("settles detached dispatch when its session is deleted before the run unwinds", async () => {
+    configure();
+    let detachedCompletion: Promise<unknown> | undefined;
+    __setDetachedWebhookWorkImporterForTests(async () => ({
+      runDetachedWebhookWork: <T>(run: () => Promise<T>): Promise<T> => {
+        const work = run();
+        const originalCatch = work.catch.bind(work);
+        work.catch = ((onRejected) => {
+          const completion = originalCatch(onRejected);
+          detachedCompletion = completion;
+          // The production caller intentionally detaches this promise. Keep the RED assertion
+          // deterministic instead of letting Vitest's process-level rejection handler consume it.
+          void completion.catch(() => undefined);
+          return completion;
+        }) as typeof work.catch;
+        return work;
+      },
+    }));
+
+    let releaseDispatch: (() => void) | undefined;
+    const dispatchStarted = new Promise<void>((resolveStarted) => {
+      __setMockFridayDispatchForTests(async () => {
+        resolveStarted();
+        await new Promise<void>((resolve) => {
+          releaseDispatch = resolve;
+        });
+      });
+    });
+    const sessionKey = "agent:main:delete-during-dispatch";
+    const response = await postMessage({
+      deviceId: "phone-1",
+      clientRequestId: "delete-during-dispatch",
+      text: "still running",
+      sessionKey,
+    });
+    const runId = String((JSON.parse(response.body) as Record<string, unknown>).runId);
+    await dispatchStarted;
+
+    getRuntimeV3Store().deleteSession(sessionKey);
+    releaseDispatch?.();
+
+    expect(detachedCompletion).toBeDefined();
+    await expect(detachedCompletion).resolves.toBeUndefined();
+    expect(getRuntimeV3Store().run(runId)).toBeUndefined();
+  });
+
   it("dispatches different sessions concurrently", async () => {
     configure();
     const dispatchedBodies: string[] = [];

@@ -200,6 +200,10 @@ class SseEmitterRegistry {
   ): void {
     const last = events.at(-1);
     if (!last) return;
+    // Delta batches flush on a timer. Session deletion may purge the run during that delay;
+    // dropping the stale batch is correct and prevents the timer callback from throwing an
+    // uncaught `unknown runId` error into the gateway process.
+    if (!store.run(runId)) return;
     store.appendRunEvent(runId, eventType, {
       _sourceEventType: last.type,
       _sourceEventData: last.data,

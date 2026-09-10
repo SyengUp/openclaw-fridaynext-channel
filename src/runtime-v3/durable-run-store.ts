@@ -402,6 +402,10 @@ export class DurableRunStore {
     const agentId = input.agentId.trim() || "main";
     const deviceIds = [...new Set(input.deviceIds.map(normalizedDeviceId))].filter(Boolean);
     if (!runId || !sessionKey || deviceIds.length === 0) return undefined;
+    // A late lifecycle/tool frame may arrive after `sessions.delete` aborted the core run.
+    // The deletion tombstone is authoritative for that exact run id even when the frame's
+    // timestamp is later; only a genuinely new run id may recreate activity in the session.
+    if (this.deletedRunIds.has(runId)) return undefined;
 
     const existing = this.runsById.get(runId);
     if (existing) {

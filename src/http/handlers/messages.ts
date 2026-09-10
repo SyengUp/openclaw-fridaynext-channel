@@ -828,6 +828,13 @@ export async function handleMessages(req: IncomingMessage, res: ServerResponse):
     }
   };
 
+  // `sessions.delete` is allowed to abort a live core run and durably purge its plugin record.
+  // The detached dispatch can settle a moment later; that is an expected deletion race, not a
+  // ledger invariant failure. Never write or flush a terminal event for a run the authoritative
+  // session deletion has already removed.
+  const durableRunWasPurged = (): boolean =>
+    durableStore !== undefined && durableStore.run(runId) === undefined;
+
   const runAgent = async () => {
     if (!(await waitForDurableDispatchSlot())) {
       return;
@@ -835,6 +842,15 @@ export async function handleMessages(req: IncomingMessage, res: ServerResponse):
     durableStore?.appendRunEvent(runId, "dispatch.started", { phase: "dispatching" });
     try {
       const completed = await runAgentAttempt();
+      if (durableRunWasPurged()) {
+        log(
+          "RUN_SETTLED_AFTER_DELETE",
+          normalizedDeviceId,
+          runId,
+          `dispatchCompleted=${completed}`,
+        );
+        return;
+      }
       if (completed) {
         sseEmitter.flushRuntimeV3Run(runId);
         durableStore?.appendRunEvent(runId, "run.completed", { phase: "end" });
@@ -1048,10 +1064,19 @@ export async function handleMessages(req: IncomingMessage, res: ServerResponse):
     });
     return runAgent();
   }).catch((err) => {
-    sseEmitter.flushRuntimeV3Run(runId);
-    durableStore?.appendRunEvent(runId, "run.failed", { error: String(err) });
-    log("RUN_ERROR", normalizedDeviceId, runId, String(err), "error");
-    sseEmitter.untrackRun(runId);
+    try {
+      if (!durableRunWasPurged()) {
+        sseEmitter.flushRuntimeV3Run(runId);
+        durableStore?.appendRunEvent(runId, "run.failed", { error: String(err) });
+      }
+    } catch (settleErr) {
+      // This is the terminal fire-and-forget boundary. Error reporting must never reject again:
+      // doing so becomes an unhandled rejection and terminates the entire gateway process.
+      log("RUN_SETTLE_ERROR", normalizedDeviceId, runId, String(settleErr), "error");
+    } finally {
+      log("RUN_ERROR", normalizedDeviceId, runId, String(err), "error");
+      sseEmitter.untrackRun(runId);
+    }
   });
 
   return true;
