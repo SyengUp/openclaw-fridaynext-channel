@@ -71,7 +71,6 @@ describe("friday-next channel gateway lifecycle", () => {
       lastStartAt: 100,
       lastStopAt: 200,
       lastError: "provider stopped",
-      connected: false,
       lastInboundAt: 150,
       mode: "http+sse",
     });
@@ -93,5 +92,35 @@ describe("friday-next channel gateway lifecycle", () => {
       lastError: null,
       mode: "http+sse",
     });
+  });
+
+  it("does not report passive client presence as runtime connectivity", async () => {
+    const status = (
+      fridayNextChannelPlugin as {
+        status?: {
+          buildAccountSnapshot?: (params: unknown) => Promise<unknown> | unknown;
+        };
+      }
+    ).status;
+    expect(status?.buildAccountSnapshot).toBeTypeOf("function");
+
+    const running = (await status!.buildAccountSnapshot!({
+      account: { accountId: "default", name: "Friday Next Channel", enabled: true },
+      runtime: {
+        accountId: "default",
+        running: true,
+        lastStartAt: 300,
+        lastStopAt: null,
+        lastError: null,
+      },
+    })) as Record<string, unknown>;
+
+    expect(running).toMatchObject({
+      accountId: "default",
+      configured: true,
+      running: true,
+      mode: "http+sse",
+    });
+    expect(running).not.toHaveProperty("connected");
   });
 });

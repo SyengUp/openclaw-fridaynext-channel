@@ -215,9 +215,10 @@ const fridayStatus = createComputedAccountStatusAdapter({
       enabled: account?.enabled !== false,
       configured: true,
       // Lifecycle fields come from `params.runtime`, populated by core around startAccount just
-      // like Telegram. Only Friday-specific transport facts belong in the computed extras.
+      // like Telegram. Do not map phone SSE subscribers onto the generic `connected` field:
+      // friday-next is a passive HTTP/SSE server, so zero clients is healthy, and protocol-v3
+      // clients live in DurableRunStore rather than the legacy emitter connection registry.
       extra: {
-        connected: sseEmitter.getConnectionCount() > 0,
         lastInboundAt: inbound ?? runtime?.lastInboundAt ?? null,
         mode: "http+sse",
       },
