@@ -207,9 +207,36 @@ export async function handleRuntimeV3SessionSnapshot(
   if (!key) return json(res, 400, { error: "Missing session key" });
   const store = getRuntimeV3Store();
   const runs = store.runs().filter((run) => run.sessionKey === key);
-  const dedupedEvents = store.eventsForSession(key);
+  const url = new URL(req.url ?? "/", "http://localhost");
+  const requestedRunIds = new Set(
+    url.searchParams
+      .getAll("runId")
+      .map((runId) => runId.trim())
+      .filter(Boolean),
+  );
+  const segmentScope = url.searchParams.get("segments");
+  const latestRunId = runs.at(-1)?.runId;
+  const selectedRunIds =
+    segmentScope === "none"
+      ? new Set<string>()
+      : requestedRunIds.size > 0
+        ? requestedRunIds
+        : new Set([
+            ...runs
+              .filter(
+                (run) =>
+                  run.phase !== "completed" && run.phase !== "failed" && run.phase !== "cancelled",
+              )
+              .map((run) => run.runId),
+            ...(latestRunId ? [latestRunId] : []),
+          ]);
+  const dedupedEvents = runs
+    .filter((run) => selectedRunIds.has(run.runId))
+    .flatMap((run) => store.eventsForRun(run.runId))
+    .sort((a, b) => a.occurredAt - b.occurredAt || a.runSeq - b.runSeq);
+  const transcriptLimit = Math.min(500, Math.max(1, integerQuery(url, "transcriptLimit", 110)));
   const transcript = normalizeHistoryMessages(
-    readSessionTranscriptRawMessages(key, Number.MAX_SAFE_INTEGER),
+    readSessionTranscriptRawMessages(key, transcriptLimit),
   );
   resolveHistoryMessageMedia(transcript);
   const sessionUsage = await readSessionUsageSnapshot(key);

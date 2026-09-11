@@ -233,6 +233,114 @@ describe("runtime protocol v3", () => {
     expect(JSON.parse(secondResponse.body).revision).toBe(first.revision);
   });
 
+  it("bounds recovery snapshots to requested runs and the requested transcript tail", async () => {
+    const root = configure();
+    const sessionKey = "agent:main:bounded-snapshot";
+    const transcriptFile = path.join(root, "bounded-snapshot.jsonl");
+    fs.writeFileSync(
+      transcriptFile,
+      [
+        { type: "session", sessionId: "bounded-snapshot-session" },
+        ...["one", "two", "three", "four"].map((text, index) => ({
+          type: "message",
+          id: `entry-${index + 1}`,
+          timestamp: `2026-09-05T00:00:0${index}.000Z`,
+          message: { role: index % 2 === 0 ? "user" : "assistant", content: text },
+        })),
+      ]
+        .map((line) => JSON.stringify(line))
+        .join("\n") + "\n",
+      "utf8",
+    );
+    setFridayAgentForwardRuntime({
+      runtime: {
+        agent: {
+          session: {
+            resolveStorePath: () => path.join(root, "sessions.json"),
+            loadSessionStore: () => ({
+              [sessionKey]: {
+                sessionId: "bounded-snapshot-session",
+                sessionFile: transcriptFile,
+              },
+            }),
+          },
+        },
+        config: { current: () => ({}) },
+      },
+    } as never);
+
+    const store = getRuntimeV3Store();
+    const historical = store.acceptCommand({
+      clientRequestId: "bounded-historical",
+      deviceId: "PHONE-1",
+      sessionKey,
+      agentId: "main",
+      text: "old",
+      attachments: [],
+    }).run!;
+    store.appendRunEvent(historical.runId, "run.started", {});
+    store.appendRunEvent(historical.runId, "assistant.delta", { text: "old result" });
+    store.appendRunEvent(historical.runId, "run.completed", {});
+
+    const recovering = store.acceptCommand({
+      clientRequestId: "bounded-recovering",
+      deviceId: "PHONE-1",
+      sessionKey,
+      agentId: "main",
+      text: "current",
+      attachments: [],
+    }).run!;
+    store.appendRunEvent(recovering.runId, "run.started", {});
+    store.appendRunEvent(recovering.runId, "assistant.delta", { text: "current result" });
+
+    const request = {
+      method: "GET",
+      url:
+        `/friday-next/v3/sessions/${encodeURIComponent(sessionKey)}/snapshot` +
+        `?runId=${encodeURIComponent(recovering.runId)}&transcriptLimit=2`,
+      headers: { authorization: "Bearer tok" },
+    } as IncomingMessage;
+    const response = new MockRes();
+    await handleRuntimeV3SessionSnapshot(
+      request,
+      response as unknown as ServerResponse,
+      sessionKey,
+    );
+    const snapshot = JSON.parse(response.body) as {
+      runs: Array<{ runId: string }>;
+      transcript: Array<{ id: string }>;
+      segments: Array<{ runId: string; eventType: string }>;
+    };
+
+    expect(snapshot.runs.map((run) => run.runId)).toEqual([historical.runId, recovering.runId]);
+    expect(snapshot.transcript.map((message) => message.id)).toEqual(["entry-3", "entry-4"]);
+    expect(new Set(snapshot.segments.map((event) => event.runId))).toEqual(
+      new Set([recovering.runId]),
+    );
+    expect(snapshot.segments.map((event) => event.eventType)).toEqual([
+      "run.started",
+      "assistant.delta",
+    ]);
+
+    const legacyRequest = {
+      method: "GET",
+      url: `/friday-next/v3/sessions/${encodeURIComponent(sessionKey)}/snapshot`,
+      headers: { authorization: "Bearer tok" },
+    } as IncomingMessage;
+    const legacyResponse = new MockRes();
+    await handleRuntimeV3SessionSnapshot(
+      legacyRequest,
+      legacyResponse as unknown as ServerResponse,
+      sessionKey,
+    );
+    const legacySnapshot = JSON.parse(legacyResponse.body) as {
+      segments: Array<{ runId: string }>;
+    };
+    expect(new Set(legacySnapshot.segments.map((event) => event.runId))).toEqual(
+      new Set([recovering.runId]),
+    );
+  });
+
   it("resumes a queued command after reconstructing the plugin runtime", async () => {
     const root = configure();
     let dispatchCount = 0;
