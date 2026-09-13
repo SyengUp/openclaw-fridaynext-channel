@@ -3,6 +3,7 @@ import { dispatchGatewayMethod } from "openclaw/plugin-sdk/gateway-method-runtim
 import { verifySession } from "../../attest/attest-store.js";
 import { attestGateDecision, ATTEST_REJECTION_BODY } from "../../attest/attest-gate.js";
 import { normalizeAgentId } from "../../agent-id.js";
+import { resolveApprovalViaGateway } from "../../approval/approval-resolution.js";
 import { resolveFridayNextConfig } from "../../config.js";
 import { getHostOpenClawConfigSnapshot } from "../../host-config.js";
 import {
@@ -13,6 +14,7 @@ import {
   type InboxAttentionItem,
 } from "../../inbox/attention-projection.js";
 import { clearLegacyNotificationLogOnce, cronResultStore } from "../../inbox/cron-result-store.js";
+import { legacyApprovalStore, type LegacyApprovalKind } from "../../inbox/legacy-approval-store.js";
 import { getFridayNextRuntime } from "../../runtime.js";
 import { getRuntimeV3Store } from "../../runtime-v3/runtime-store.js";
 import { sseEmitter } from "../../sse/emitter.js";
@@ -74,6 +76,32 @@ async function requestGateway(method: string, params: Record<string, unknown>): 
   return response.payload;
 }
 
+function isUnknownGatewayMethod(error: unknown, method: string): boolean {
+  if (!(error instanceof Error)) return false;
+  const code = (error as { code?: unknown }).code;
+  const escapedMethod = method.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  return (
+    ((code === "UNKNOWN_METHOD" || code === "METHOD_NOT_FOUND" || code === "INVALID_REQUEST") &&
+      new RegExp(`unknown method:\\s*${escapedMethod}(?:\\s|$)`, "i").test(error.message)) ||
+    new RegExp(`^unknown method:\\s*${escapedMethod}(?:\\s|$)`, "i").test(error.message)
+  );
+}
+
+async function listApprovalsWithLegacyFallback(
+  method: string,
+  kind: LegacyApprovalKind,
+): Promise<unknown> {
+  try {
+    return await requestGateway(method, {});
+  } catch (error) {
+    if (!isUnknownGatewayMethod(error, method)) throw error;
+    // COMPAT(openclaw<=2026.7.1 approval-list-rpc): 旧版没有三套 pending-list RPC，
+    // 只在方法明确不存在时读取 approval capability 的结构化持久镜像。
+    // CLEANUP: 最低宿主版本高于 2026.7.1 后删除该回退和 legacyApprovalStore。
+    return legacyApprovalStore.list(kind);
+  }
+}
+
 function sourceState(
   result: PromiseSettledResult<unknown>,
   fetchedAtMs: number,
@@ -100,18 +128,39 @@ function object(value: unknown): Record<string, unknown> {
     : {};
 }
 
+function isLegacyCronListDeliveryPreviewError(error: unknown): boolean {
+  if (!(error instanceof Error)) return false;
+  const code = (error as { code?: unknown }).code;
+  return (
+    code === "INVALID_REQUEST" &&
+    /cron\.list params/i.test(error.message) &&
+    /unexpected property ['"]includeDeliveryPreviews['"]/i.test(error.message)
+  );
+}
+
 async function listAllCronJobs(agentId?: string): Promise<unknown[]> {
   const jobs: unknown[] = [];
   for (let page = 0; page < MAX_CRON_PAGES; page += 1) {
-    const payload = object(
-      await requestGateway("cron.list", {
-        includeDisabled: true,
+    const params = {
+      includeDisabled: true,
+      limit: PAGE_SIZE,
+      offset: page * PAGE_SIZE,
+      ...(agentId ? { agentId } : {}),
+    };
+    let response: unknown;
+    try {
+      response = await requestGateway("cron.list", {
+        ...params,
         includeDeliveryPreviews: false,
-        limit: PAGE_SIZE,
-        offset: page * PAGE_SIZE,
-        ...(agentId ? { agentId } : {}),
-      }),
-    );
+      });
+    } catch (error) {
+      if (!isLegacyCronListDeliveryPreviewError(error)) throw error;
+      // COMPAT(openclaw<=2026.7.1 cron-list-delivery-preview-param): 旧版 schema 不认识
+      // includeDeliveryPreviews，只在精确命中该校验错误时使用旧参数集重试。
+      // CLEANUP: 最低宿主版本高于 2026.7.1 且旧版测试床退役后删除此分支及对应测试。
+      response = await requestGateway("cron.list", params);
+    }
+    const payload = object(response);
     if (!Array.isArray(payload.jobs)) throw new Error("cron.list returned an invalid response");
     const rows = payload.jobs;
     jobs.push(...rows);
@@ -134,7 +183,13 @@ function modelAuthPayload(value: unknown): boolean {
 }
 
 function updateStatusPayload(value: unknown): boolean {
-  return Object.hasOwn(object(value), "updateAvailable");
+  const payload = object(value);
+  // COMPAT(openclaw<=2026.7.1 update-status-sentinel-only): 旧版 update.status 的完整契约
+  // 只有 sentinel；新版才加入 updateAvailable/activeRun/lastRun/schedule。
+  // CLEANUP: 最低宿主版本高于 2026.7.1 后移除 sentinel-only 接受路径及对应测试。
+  return ["updateAvailable", "activeRun", "lastRun", "schedule", "sentinel"].some((key) =>
+    Object.hasOwn(payload, key),
+  );
 }
 
 function nextRevision(nowMs: number): number {
@@ -170,9 +225,9 @@ async function handleSnapshot(req: IncomingMessage, res: ServerResponse): Promis
 
   const [exec, plugin, systemAgent, cronJobs, cronStatus, modelAuth, update] =
     await Promise.allSettled([
-      requestGateway("exec.approval.list", {}),
-      requestGateway("plugin.approval.list", {}),
-      requestGateway("openclaw.approval.list", {}),
+      listApprovalsWithLegacyFallback("exec.approval.list", "exec"),
+      listApprovalsWithLegacyFallback("plugin.approval.list", "plugin"),
+      listApprovalsWithLegacyFallback("openclaw.approval.list", "system-agent"),
       listAllCronJobs(),
       requestGateway("cron.status", {}),
       requestGateway("models.authStatus", { agentId }),
@@ -264,28 +319,49 @@ async function handleResolve(req: IncomingMessage, res: ServerResponse): Promise
       decision,
       ...(kind === "system-agent" ? { kind } : {}),
     });
-  } catch (error) {
-    const gatewayError = object((error as { gatewayError?: unknown }).gatewayError);
+  } catch (nativeError) {
+    let resolutionError = nativeError;
+    if (isUnknownGatewayMethod(nativeError, method)) {
+      try {
+        // COMPAT(openclaw<=2026.7.1 approval-resolve-rpc): 旧版没有按 kind 拆分的 resolve
+        // RPC，使用其 SDK 提供的统一 resolver；新版始终走上面的原生方法。
+        // CLEANUP: 最低宿主版本高于 2026.7.1 后删除此分支及对应测试。
+        await resolveApprovalViaGateway({
+          cfg: getHostOpenClawConfigSnapshot(getFridayNextRuntime().config),
+          approvalId,
+          decision: decision as "allow-once" | "allow-always" | "deny",
+          allowPluginFallback: true,
+          clientDisplayName: "Friday Next",
+        });
+        legacyApprovalStore.remove(kind, approvalId);
+        sseEmitter.broadcastLive({ type: "inbox-changed", data: {} }, true);
+        return json(res, 200, { ok: true, approvalId, kind, decision });
+      } catch (fallbackError) {
+        resolutionError = fallbackError;
+      }
+    }
+    const gatewayError = object((resolutionError as { gatewayError?: unknown }).gatewayError);
     const details = object(gatewayError.details);
-    const code = (error as { code?: unknown }).code;
+    const code = (resolutionError as { code?: unknown }).code;
     const reason = typeof details.reason === "string" ? details.reason : undefined;
     const stale =
       code === "APPROVAL_ALREADY_RESOLVED" ||
       code === "APPROVAL_NOT_FOUND" ||
       reason === "APPROVAL_ALREADY_RESOLVED" ||
       reason === "APPROVAL_NOT_FOUND" ||
-      (error instanceof Error &&
+      (resolutionError instanceof Error &&
         /approval (?:not found|already resolved)|unknown or expired approval id/i.test(
-          error.message,
+          resolutionError.message,
         ));
     if (!stale) {
       return json(res, 502, {
         ok: false,
-        error: error instanceof Error ? error.message : String(error),
+        error: resolutionError instanceof Error ? resolutionError.message : String(resolutionError),
         ...(typeof code === "string" ? { code } : {}),
       });
     }
   }
+  legacyApprovalStore.remove(kind, approvalId);
   sseEmitter.broadcastLive({ type: "inbox-changed", data: {} }, true);
   return json(res, 200, { ok: true, approvalId, kind, decision });
 }

@@ -9,10 +9,10 @@
 //     (answered / expired / cancelled) over SSE — the core emits nothing deliver-shaped
 //     on resolution, and the gateway's question.resolved broadcast is WS-only.
 
-import { questionGatewayRuntime } from "openclaw/plugin-sdk/question-gateway-runtime";
 import { sseEmitter } from "../sse/emitter.js";
 import { toSessionStoreKey } from "../session/session-manager.js";
 import { createFridayNextLogger } from "../logging.js";
+import { getFridayQuestionDeliveryRegistrar } from "./question-gateway-runtime-compat.js";
 
 const logger = createFridayNextLogger("question");
 
@@ -94,13 +94,27 @@ export function noteFridayQuestionPrompt(params: {
   sessionKey: string;
   deviceId: string;
   runId?: string;
-}): void {
+}): Promise<void> {
+  return noteFridayQuestionPromptAsync(params);
+}
+
+async function noteFridayQuestionPromptAsync(params: {
+  questionId: string;
+  sessionKey: string;
+  deviceId: string;
+  runId?: string;
+}): Promise<void> {
   const questionId = params.questionId.trim();
   const rawSessionKey = params.sessionKey.trim();
   const deviceId = params.deviceId.trim().toUpperCase();
   // toSessionStoreKey maps "" onto the agent main key — reject empty input before canonicalizing.
   if (!questionId || !rawSessionKey || !deviceId) return;
   const sessionKey = toSessionStoreKey(rawSessionKey);
+  if (sessionKeyByQuestionId.has(questionId)) return;
+
+  const registerChannelDelivery = await getFridayQuestionDeliveryRegistrar();
+  if (!registerChannelDelivery) return;
+  // 加载 SDK 期间同一 questionId 可能已由另一条 deliver 路径完成注册。
   if (sessionKeyByQuestionId.has(questionId)) return;
 
   const existing = pendingBySessionKey.get(sessionKey);
@@ -121,30 +135,35 @@ export function noteFridayQuestionPrompt(params: {
   pendingBySessionKey.set(sessionKey, entry);
   sessionKeyByQuestionId.set(questionId, sessionKey);
 
-  questionGatewayRuntime.registerChannelDelivery({
-    questionId,
-    deliveryId: `friday-next:${deviceId}:${questionId}`,
-    finalize: (statusLine) => {
-      const tracked = pendingBySessionKey.get(sessionKey);
-      if (tracked && tracked.questionId === questionId) dropPending(tracked);
-      const { op, answeredLabels } = terminalOpFromStatusLine(statusLine);
-      const payload: FridayQuestionTerminalPayload = {
-        op,
-        questionId,
-        statusLine,
-        answeredLabels,
-        sessionKey,
-        ...(entry.runId ? { runId: entry.runId } : {}),
-        deviceId,
-        ts: Date.now(),
-      };
-      logger.info(`question ${questionId} terminal op=${op} session=${sessionKey}`);
-      // runId rides along so the event mirrors into the durable runtime-v3 journal
-      // (the app only listens there); the question terminalizes while its run is still
-      // blocked in waitAnswer, so the append lands before run completion.
-      sseEmitter.broadcast({ type: "question", data: { ...payload } }, deviceId, true);
-    },
-  });
+  try {
+    registerChannelDelivery({
+      questionId,
+      deliveryId: `friday-next:${deviceId}:${questionId}`,
+      finalize: (statusLine) => {
+        const tracked = pendingBySessionKey.get(sessionKey);
+        if (tracked && tracked.questionId === questionId) dropPending(tracked);
+        const { op, answeredLabels } = terminalOpFromStatusLine(statusLine);
+        const payload: FridayQuestionTerminalPayload = {
+          op,
+          questionId,
+          statusLine,
+          answeredLabels,
+          sessionKey,
+          ...(params.runId?.trim() ? { runId: params.runId.trim() } : {}),
+          deviceId,
+          ts: Date.now(),
+        };
+        logger.info(`question ${questionId} terminal op=${op} session=${sessionKey}`);
+        // runId rides along so the event mirrors into the durable runtime-v3 journal
+        // (the app only listens there); the question terminalizes while its run is still
+        // blocked in waitAnswer, so the append lands before run completion.
+        sseEmitter.broadcast({ type: "question", data: { ...payload } }, deviceId, true);
+      },
+    });
+  } catch (error) {
+    dropPending(entry);
+    throw error;
+  }
 }
 
 /** True while the session has an unanswered ask_user question (its run is blocked on it). */

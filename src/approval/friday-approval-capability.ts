@@ -19,6 +19,7 @@ import { sseEmitter } from "../sse/emitter.js";
 import { resolveFridayDeviceIdForSessionKey } from "../friday-session.js";
 import { createFridayNextLogger } from "../logging.js";
 import { runtimeV3StoreIfInitialized } from "../runtime-v3/runtime-store.js";
+import { legacyApprovalStore } from "../inbox/legacy-approval-store.js";
 
 const logger = createFridayNextLogger("approval");
 
@@ -37,8 +38,11 @@ export interface FridayApprovalPayload {
   // plugin
   toolName?: string | null;
   severity?: string | null;
+  proposalHash?: string | null;
+  agentId?: string | null;
   metadata: { label: string; value: string }[];
   actions: { decision: string; label: string; style: string }[];
+  createdAtMs?: number | null;
   expiresAtMs?: number | null;
   decision?: string | null;
   resolvedBy?: string | null;
@@ -54,6 +58,7 @@ interface PreparedTarget {
 interface PendingEntry {
   deviceId: string;
   approvalId: string;
+  kind: FridayApprovalPayload["kind"];
 }
 
 const GLOBAL_INBOX_TARGET = "__FRIDAY_INBOX_ALL__";
@@ -101,30 +106,47 @@ export function buildPayload(params: {
   const actionsRaw = Array.isArray(view.actions) ? (view.actions as Record<string, unknown>[]) : [];
   const metaRaw = Array.isArray(view.metadata) ? (view.metadata as Record<string, unknown>[]) : [];
   const sessionKey = sessionKeyOf(request);
+  const envelope = request as
+    | { request?: Record<string, unknown>; createdAtMs?: unknown; expiresAtMs?: unknown }
+    | undefined;
+  const inner = envelope?.request;
+  const kind =
+    view.approvalKind === "plugin"
+      ? "plugin"
+      : view.approvalKind === "system-agent"
+        ? "system-agent"
+        : "exec";
   return {
     op,
     approvalId: str(view.approvalId) ?? "",
-    kind:
-      view.approvalKind === "plugin"
-        ? "plugin"
-        : view.approvalKind === "system-agent"
-          ? "system-agent"
-          : "exec",
-    title: str(view.title) ?? "",
-    description: str(view.description),
-    commandText: str(view.commandText),
+    kind,
+    title:
+      kind === "system-agent"
+        ? (str(inner?.title) ?? str(view.title) ?? "")
+        : (str(view.title) ?? ""),
+    description:
+      kind === "system-agent"
+        ? (str(inner?.description) ?? str(view.description))
+        : str(view.description),
+    commandText:
+      kind === "system-agent"
+        ? (str(inner?.command) ?? str(view.commandText))
+        : str(view.commandText),
     commandPreview: str(view.commandPreview),
     cwd: str(view.cwd),
     host: str(view.host),
     toolName: str(view.toolName),
     severity: str(view.severity),
+    proposalHash: str(inner?.proposalHash),
+    agentId: str(inner?.agentId),
     metadata: metaRaw.map((m) => ({ label: str(m.label) ?? "", value: str(m.value) ?? "" })),
     actions: actionsRaw.map((a) => ({
       decision: str(a.decision) ?? "",
       label: str(a.label) ?? "",
       style: str(a.style) ?? "secondary",
     })),
-    expiresAtMs: num(view.expiresAtMs),
+    createdAtMs: num(envelope?.createdAtMs),
+    expiresAtMs: num(view.expiresAtMs) ?? num(envelope?.expiresAtMs),
     decision: str(view.decision),
     resolvedBy: str(view.resolvedBy),
     sessionKey: sessionKey ?? null,
@@ -198,29 +220,32 @@ const fridayApprovalNativeRuntime = createChannelApprovalNativeRuntimeAdapter<
     },
     deliverPending: ({ preparedTarget, pendingPayload }) => {
       const deviceId = preparedTarget.deviceId;
+      legacyApprovalStore.upsert({ ...pendingPayload, deviceId });
       emitInboxInvalidation();
       if (deviceId === GLOBAL_INBOX_TARGET) {
-        return { deviceId, approvalId: pendingPayload.approvalId };
+        return { deviceId, approvalId: pendingPayload.approvalId, kind: pendingPayload.kind };
       }
       logger.info(
         `deliver approval ${pendingPayload.approvalId} kind=${pendingPayload.kind} -> ${deviceId}`,
       );
       emitApproval(deviceId, { ...pendingPayload, deviceId });
-      return { deviceId, approvalId: pendingPayload.approvalId };
+      return { deviceId, approvalId: pendingPayload.approvalId, kind: pendingPayload.kind };
     },
     updateEntry: async ({ entry, payload }) => {
+      legacyApprovalStore.remove(payload.kind, payload.approvalId || entry.approvalId);
       emitInboxInvalidation();
       if (entry.deviceId !== GLOBAL_INBOX_TARGET) {
         emitApproval(entry.deviceId, { ...payload, deviceId: entry.deviceId });
       }
     },
     deleteEntry: async ({ entry, phase }) => {
+      legacyApprovalStore.remove(entry.kind, entry.approvalId);
       emitInboxInvalidation();
       if (entry.deviceId === GLOBAL_INBOX_TARGET) return;
       emitApproval(entry.deviceId, {
         op: phase === "resolved" ? "resolved" : "expired",
         approvalId: entry.approvalId,
-        kind: "exec",
+        kind: entry.kind,
         title: "",
         metadata: [],
         actions: [],

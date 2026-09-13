@@ -890,7 +890,7 @@ export async function handleMessages(req: IncomingMessage, res: ServerResponse):
             // to the app unchanged (presentation + channelData.askUser ride along).
             const askUser = readFridayAskUserBinding(payload);
             if (askUser) {
-              noteFridayQuestionPrompt({
+              await noteFridayQuestionPrompt({
                 questionId: askUser.questionId,
                 sessionKey: baseSessionKey,
                 deviceId: normalizedDeviceId,

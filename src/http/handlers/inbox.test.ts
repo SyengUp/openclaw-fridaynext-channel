@@ -4,13 +4,20 @@ import path from "node:path";
 import { Readable } from "node:stream";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cronResultStore, setInboxV2RootForTest } from "../../inbox/cron-result-store.js";
+import { legacyApprovalStore } from "../../inbox/legacy-approval-store.js";
 import { setRuntimeV3RootForTest } from "../../runtime-v3/runtime-store.js";
 import { setMockRuntime } from "../../test-support/mock-runtime.js";
 import { handleInbox } from "./inbox.js";
 
-const { dispatchGatewayMethod } = vi.hoisted(() => ({ dispatchGatewayMethod: vi.fn() }));
+const { dispatchGatewayMethod, resolveApprovalOverGateway } = vi.hoisted(() => ({
+  dispatchGatewayMethod: vi.fn(),
+  resolveApprovalOverGateway: vi.fn(),
+}));
 
 vi.mock("openclaw/plugin-sdk/gateway-method-runtime", () => ({ dispatchGatewayMethod }));
+vi.mock("../../approval/approval-resolution.js", () => ({
+  resolveApprovalViaGateway: resolveApprovalOverGateway,
+}));
 
 type IncomingMessageLike = import("node:http").IncomingMessage;
 type ServerResponseLike = import("node:http").ServerResponse;
@@ -51,13 +58,17 @@ beforeEach(() => {
   setInboxV2RootForTest(path.join(root, "inbox-v2"));
   setRuntimeV3RootForTest(path.join(root, "runtime-v3"));
   cronResultStore.resetForTest();
+  legacyApprovalStore.resetForTest();
   dispatchGatewayMethod.mockReset();
+  resolveApprovalOverGateway.mockReset();
+  resolveApprovalOverGateway.mockResolvedValue(undefined);
 });
 
 afterEach(() => {
   setInboxV2RootForTest(null);
   setRuntimeV3RootForTest(null);
   cronResultStore.resetForTest();
+  legacyApprovalStore.resetForTest();
   fs.rmSync(root, { recursive: true, force: true });
 });
 
@@ -168,6 +179,184 @@ describe("inbox snapshot", () => {
       sources: { modelAuth: { status: "stale", detail: "auth temporarily unavailable" } },
     });
   });
+
+  it("兼容 2026.7.1：cron.list 拒绝 includeDeliveryPreviews 时仅去掉该参数重试", async () => {
+    dispatchGatewayMethod.mockImplementation(
+      async (method: string, params: Record<string, unknown>) => {
+        if (
+          method === "exec.approval.list" ||
+          method === "plugin.approval.list" ||
+          method === "openclaw.approval.list"
+        ) {
+          return { ok: true, payload: [] };
+        }
+        if (method === "cron.list") {
+          if (Object.hasOwn(params, "includeDeliveryPreviews")) {
+            return {
+              ok: false,
+              error: {
+                code: "INVALID_REQUEST",
+                message:
+                  "invalid cron.list params: at root: unexpected property 'includeDeliveryPreviews'",
+              },
+            };
+          }
+          return {
+            ok: true,
+            payload: {
+              jobs: [
+                {
+                  id: "legacy-failed",
+                  name: "旧版失败任务",
+                  enabled: true,
+                  state: { lastRunStatus: "error", lastRunAtMs: 20 },
+                },
+              ],
+              total: 1,
+            },
+          };
+        }
+        if (method === "cron.status") return { ok: true, payload: { enabled: true } };
+        if (method === "models.authStatus") {
+          return { ok: true, payload: { providers: [] } };
+        }
+        if (method === "update.status") {
+          return { ok: true, payload: { updateAvailable: null, sentinel: null } };
+        }
+        throw new Error(`unexpected method ${method}`);
+      },
+    );
+
+    const result = await invoke(
+      "GET",
+      "/friday-next-admin/inbox/snapshot?deviceId=phone-a&afterCursor=0",
+    );
+
+    expect(result.json).toMatchObject({
+      attention: { automations: [expect.objectContaining({ kind: "cronFailed" })] },
+      sources: { cronJobs: { status: "fresh" } },
+    });
+    expect(dispatchGatewayMethod.mock.calls.filter(([method]) => method === "cron.list")).toEqual([
+      [
+        "cron.list",
+        expect.objectContaining({ includeDeliveryPreviews: false, includeDisabled: true }),
+      ],
+      ["cron.list", expect.not.objectContaining({ includeDeliveryPreviews: expect.anything() })],
+    ]);
+  });
+
+  it("兼容 2026.7.1：仅含 sentinel 的 update.status 是有效快照", async () => {
+    dispatchGatewayMethod.mockImplementation(async (method: string) => {
+      if (method === "cron.list") return { ok: true, payload: { jobs: [], total: 0 } };
+      if (method === "cron.status") return { ok: true, payload: { enabled: true } };
+      if (method === "models.authStatus") {
+        return { ok: true, payload: { providers: [] } };
+      }
+      if (method === "update.status") return { ok: true, payload: { sentinel: null } };
+      return { ok: true, payload: [] };
+    });
+
+    const result = await invoke(
+      "GET",
+      "/friday-next-admin/inbox/snapshot?deviceId=phone-a&afterCursor=0",
+    );
+
+    expect(result.json).toMatchObject({
+      attention: { system: [] },
+      sources: { update: { status: "fresh" } },
+    });
+  });
+
+  it("兼容 2026.7.1：pending-list 方法不存在时读取结构化审批镜像", async () => {
+    legacyApprovalStore.upsert({
+      op: "request",
+      approvalId: "legacy-exec-1",
+      kind: "exec",
+      title: "命令审批",
+      commandText: "pnpm test",
+      cwd: "/workspace",
+      metadata: [],
+      actions: [],
+      expiresAtMs: Date.now() + 60_000,
+      deviceId: "",
+      ts: Date.now() - 100,
+    });
+    dispatchGatewayMethod.mockImplementation(async (method: string) => {
+      if (
+        method === "exec.approval.list" ||
+        method === "plugin.approval.list" ||
+        method === "openclaw.approval.list"
+      ) {
+        return {
+          ok: false,
+          error: { code: "INVALID_REQUEST", message: `unknown method: ${method}` },
+        };
+      }
+      if (method === "cron.list") return { ok: true, payload: { jobs: [], total: 0 } };
+      if (method === "cron.status") return { ok: true, payload: { enabled: true } };
+      if (method === "models.authStatus") return { ok: true, payload: { providers: [] } };
+      if (method === "update.status") return { ok: true, payload: { sentinel: null } };
+      throw new Error(`unexpected method ${method}`);
+    });
+
+    const result = await invoke(
+      "GET",
+      "/friday-next-admin/inbox/snapshot?deviceId=phone-a&afterCursor=0",
+    );
+
+    expect(result.json).toMatchObject({
+      attention: {
+        approvals: [
+          expect.objectContaining({
+            id: "approval:exec:legacy-exec-1",
+            kind: "execApproval",
+            title: "pnpm test",
+          }),
+        ],
+      },
+      sources: {
+        execApprovals: { status: "fresh" },
+        pluginApprovals: { status: "fresh" },
+        systemAgentApprovals: { status: "fresh" },
+      },
+    });
+  });
+
+  it("审批列表的瞬时失败不得回退镜像并伪装成 fresh", async () => {
+    legacyApprovalStore.upsert({
+      op: "request",
+      approvalId: "must-not-leak",
+      kind: "exec",
+      title: "命令审批",
+      commandText: "pnpm test",
+      metadata: [],
+      actions: [],
+      expiresAtMs: Date.now() + 60_000,
+      deviceId: "",
+      ts: Date.now(),
+    });
+    dispatchGatewayMethod.mockImplementation(async (method: string) => {
+      if (method === "exec.approval.list") throw new Error("gateway disconnected");
+      if (method === "plugin.approval.list" || method === "openclaw.approval.list") {
+        return { ok: true, payload: [] };
+      }
+      if (method === "cron.list") return { ok: true, payload: { jobs: [], total: 0 } };
+      if (method === "cron.status") return { ok: true, payload: { enabled: true } };
+      if (method === "models.authStatus") return { ok: true, payload: { providers: [] } };
+      if (method === "update.status") return { ok: true, payload: { sentinel: null } };
+      throw new Error(`unexpected method ${method}`);
+    });
+
+    const result = await invoke(
+      "GET",
+      "/friday-next-admin/inbox/snapshot?deviceId=phone-a&afterCursor=0",
+    );
+
+    expect(result.json).toMatchObject({
+      attention: { approvals: [] },
+      sources: { execApprovals: { status: "stale", detail: "gateway disconnected" } },
+    });
+  });
 });
 
 describe("inbox approval resolve", () => {
@@ -212,5 +401,43 @@ describe("inbox approval resolve", () => {
     });
     expect(result.status).toBe(400);
     expect(dispatchGatewayMethod).not.toHaveBeenCalled();
+  });
+
+  it("兼容 2026.7.1：原生 resolve 方法不存在时使用统一 SDK resolver", async () => {
+    legacyApprovalStore.upsert({
+      op: "request",
+      approvalId: "legacy-exec-1",
+      kind: "exec",
+      title: "命令审批",
+      commandText: "pnpm test",
+      metadata: [],
+      actions: [],
+      expiresAtMs: Date.now() + 60_000,
+      deviceId: "",
+      ts: Date.now(),
+    });
+    dispatchGatewayMethod.mockResolvedValue({
+      ok: false,
+      error: {
+        code: "INVALID_REQUEST",
+        message: "unknown method: exec.approval.resolve",
+      },
+    });
+
+    const result = await invoke("POST", "/friday-next-admin/inbox/approvals/resolve", {
+      approvalId: "legacy-exec-1",
+      kind: "exec",
+      decision: "allow-once",
+    });
+
+    expect(result.status).toBe(200);
+    expect(resolveApprovalOverGateway).toHaveBeenCalledWith(
+      expect.objectContaining({
+        approvalId: "legacy-exec-1",
+        decision: "allow-once",
+        allowPluginFallback: true,
+      }),
+    );
+    expect(legacyApprovalStore.list("exec")).toEqual([]);
   });
 });

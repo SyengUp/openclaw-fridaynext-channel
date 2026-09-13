@@ -487,7 +487,7 @@ describe("handleMessages serial-queue question bypass", () => {
       sessionOptions: {},
     }).run!;
     getRuntimeV3Store().claimRun(blocked.runId);
-    noteFridayQuestionPrompt({
+    await noteFridayQuestionPrompt({
       questionId: "ask_0123456789abcdef0123456789abcdef",
       sessionKey: SESSION_KEY,
       deviceId: "AA11",

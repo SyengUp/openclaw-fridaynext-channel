@@ -36,7 +36,10 @@ describe("buildPayload", () => {
     const p = buildPayload({
       op: "request",
       view: execView,
-      request: reqWith("agent:main:fridaynext:s1", "run-exact-1"),
+      request: {
+        ...reqWith("agent:main:fridaynext:s1", "run-exact-1"),
+        createdAtMs: 100,
+      },
       deviceId: "DEV1",
     });
     expect(p.op).toBe("request");
@@ -50,6 +53,7 @@ describe("buildPayload", () => {
     expect(p.runId).toBe("run-exact-1");
     expect(p.deviceId).toBe("DEV1");
     expect(p.expiresAtMs).toBe(123);
+    expect(p.createdAtMs).toBe(100);
   });
 
   it("maps a plugin approval view (toolName/severity/description)", () => {
@@ -75,5 +79,37 @@ describe("buildPayload", () => {
     expect(p.actions).toEqual([]);
     expect(p.metadata).toEqual([]);
     expect(p.sessionKey).toBeNull();
+  });
+
+  it("保留 system-agent 镜像重建所需的结构化原始字段", () => {
+    const p = buildPayload({
+      op: "request",
+      view: {
+        approvalId: "system:1",
+        approvalKind: "system-agent",
+        title: "OpenClaw change requires approval",
+        description: "safe description",
+        expiresAtMs: 456,
+      },
+      request: {
+        request: {
+          title: "更新系统配置",
+          description: "启用安全策略",
+          command: "config.apply",
+          proposalHash: "a".repeat(64),
+          agentId: "main",
+        },
+      },
+      deviceId: "DEV2",
+    });
+
+    expect(p).toMatchObject({
+      kind: "system-agent",
+      title: "更新系统配置",
+      description: "启用安全策略",
+      commandText: "config.apply",
+      proposalHash: "a".repeat(64),
+      agentId: "main",
+    });
   });
 });

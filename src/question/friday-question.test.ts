@@ -14,6 +14,10 @@ import {
   readFridayAskUserBinding,
   terminalOpFromStatusLine,
 } from "./friday-question.js";
+import {
+  __resetQuestionGatewayRuntimeLoaderForTest,
+  __setQuestionGatewayRuntimeLoaderForTest,
+} from "./question-gateway-runtime-compat.js";
 import { sseEmitter } from "../sse/emitter.js";
 import { setMockRuntime } from "../test-support/mock-runtime.js";
 
@@ -29,16 +33,18 @@ describe("friday-question", () => {
     setMockRuntime();
     __resetFridayQuestionsForTest();
     registerChannelDelivery.mockReset();
+    __resetQuestionGatewayRuntimeLoaderForTest();
     vi.spyOn(sseEmitter, "broadcast").mockImplementation(() => {});
   });
 
   afterEach(() => {
     vi.restoreAllMocks();
     __resetFridayQuestionsForTest();
+    __resetQuestionGatewayRuntimeLoaderForTest();
   });
 
-  it("marks a session as having a pending question, canonically keyed", () => {
-    noteFridayQuestionPrompt({
+  it("marks a session as having a pending question, canonically keyed", async () => {
+    await noteFridayQuestionPrompt({
       questionId: QUESTION_ID,
       sessionKey: "Agent:Main:FridayNext:CurlTest01",
       deviceId: "dev-1",
@@ -48,8 +54,8 @@ describe("friday-question", () => {
     expect(hasPendingFridayQuestion("agent:main:fridaynext:other")).toBe(false);
   });
 
-  it("registers a channel delivery finalizer and broadcasts the terminal event with runId", () => {
-    noteFridayQuestionPrompt({
+  it("registers a channel delivery finalizer and broadcasts the terminal event with runId", async () => {
+    await noteFridayQuestionPrompt({
       questionId: QUESTION_ID,
       sessionKey: "agent:main:fridaynext:s1",
       deviceId: "dev-1",
@@ -86,24 +92,24 @@ describe("friday-question", () => {
     expect(terminalOpFromStatusLine("Answered")).toEqual({ op: "resolved", answeredLabels: [] });
   });
 
-  it("is idempotent per questionId", () => {
+  it("is idempotent per questionId", async () => {
     const params = {
       questionId: QUESTION_ID,
       sessionKey: "agent:main:fridaynext:s1",
       deviceId: "DEV1",
     };
-    noteFridayQuestionPrompt(params);
-    noteFridayQuestionPrompt(params);
+    await noteFridayQuestionPrompt(params);
+    await noteFridayQuestionPrompt(params);
     expect(registerChannelDelivery).toHaveBeenCalledTimes(1);
   });
 
-  it("a new question supersedes the session's previous pending entry", () => {
-    noteFridayQuestionPrompt({
+  it("a new question supersedes the session's previous pending entry", async () => {
+    await noteFridayQuestionPrompt({
       questionId: QUESTION_ID,
       sessionKey: "agent:main:fridaynext:s1",
       deviceId: "DEV1",
     });
-    noteFridayQuestionPrompt({
+    await noteFridayQuestionPrompt({
       questionId: "ask_abcdef0123456789abcdef0123456789",
       sessionKey: "agent:main:fridaynext:s1",
       deviceId: "DEV1",
@@ -114,10 +120,10 @@ describe("friday-question", () => {
     expect(hasPendingFridayQuestion("agent:main:fridaynext:s1")).toBe(true);
   });
 
-  it("drops pending state when the TTL backstop fires (gateway restart wipes core state)", () => {
+  it("drops pending state when the TTL backstop fires (gateway restart wipes core state)", async () => {
     vi.useFakeTimers();
     try {
-      noteFridayQuestionPrompt({
+      await noteFridayQuestionPrompt({
         questionId: QUESTION_ID,
         sessionKey: "agent:main:fridaynext:s1",
         deviceId: "DEV1",
@@ -127,6 +133,40 @@ describe("friday-question", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it("兼容 2026.7.1：缺少 question runtime 时不创建无法终态化的 pending 状态", async () => {
+    __setQuestionGatewayRuntimeLoaderForTest(async () => {
+      throw Object.assign(
+        new Error(
+          "Cannot find module '/app/dist/plugin-sdk/root-alias.cjs/question-gateway-runtime'",
+        ),
+        { code: "MODULE_NOT_FOUND" },
+      );
+    });
+
+    await expect(
+      noteFridayQuestionPrompt({
+        questionId: QUESTION_ID,
+        sessionKey: "agent:main:fridaynext:s1",
+        deviceId: "DEV1",
+      }),
+    ).resolves.toBeUndefined();
+    expect(hasPendingFridayQuestion("agent:main:fridaynext:s1")).toBe(false);
+  });
+
+  it("非兼容性加载错误仍然向上传递", async () => {
+    __setQuestionGatewayRuntimeLoaderForTest(async () => {
+      throw new Error("runtime initialization exploded");
+    });
+
+    await expect(
+      noteFridayQuestionPrompt({
+        questionId: QUESTION_ID,
+        sessionKey: "agent:main:fridaynext:s1",
+        deviceId: "DEV1",
+      }),
+    ).rejects.toThrow("runtime initialization exploded");
   });
 
   it("reads the askUser binding off delivered payloads only", () => {
