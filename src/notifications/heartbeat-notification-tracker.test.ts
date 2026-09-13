@@ -1,41 +1,56 @@
 import { afterEach, describe, expect, it } from "vitest";
 import {
+  claimRecentHeartbeatFallback,
   noteHeartbeatActivity,
-  recentHeartbeatAtMs,
-  recentHeartbeatAgentId,
+  recentHeartbeatForRun,
   resetHeartbeatNotificationTrackerForTest,
 } from "./heartbeat-notification-tracker.js";
 
 describe("heartbeat-notification-tracker", () => {
   afterEach(() => resetHeartbeatNotificationTrackerForTest());
 
-  it("returns null before any heartbeat activity", () => {
-    expect(recentHeartbeatAtMs()).toBeNull();
+  it("returns null before activity or without an exact run id", () => {
+    expect(recentHeartbeatForRun("missing")).toBeNull();
+    noteHeartbeatActivity("run-1", 1_000);
+    expect(recentHeartbeatForRun(undefined, 1_500)).toBeNull();
+    expect(recentHeartbeatForRun("other-run", 1_500)).toBeNull();
   });
 
-  it("returns the start timestamp right after activity", () => {
-    noteHeartbeatActivity(1_000);
-    expect(recentHeartbeatAtMs(1_500)).toBe(1_000);
+  it("returns the exact run right after activity", () => {
+    noteHeartbeatActivity("run-1", 1_000);
+    expect(recentHeartbeatForRun("run-1", 1_500)).toEqual({ agentId: null });
   });
 
-  it("keeps the timestamp within the window and expires it after", () => {
+  it("keeps the run within the window and expires it after", () => {
     const WINDOW_MS = 10 * 60_000;
-    noteHeartbeatActivity(1_000);
-    expect(recentHeartbeatAtMs(1_000 + 60_000)).toBe(1_000); // within window
-    expect(recentHeartbeatAtMs(1_000 + WINDOW_MS + 1)).toBeNull(); // past window
+    noteHeartbeatActivity("run-1", 1_000);
+    expect(recentHeartbeatForRun("run-1", 1_000 + 60_000)).toEqual({ agentId: null });
+    expect(recentHeartbeatForRun("run-1", 1_000 + WINDOW_MS + 1)).toBeNull();
   });
 
   it("records and returns the origin agent id within the window", () => {
     const WINDOW_MS = 10 * 60_000;
-    noteHeartbeatActivity(1_000, "hamaestro");
-    expect(recentHeartbeatAgentId(1_000 + 60_000)).toBe("hamaestro");
-    expect(recentHeartbeatAgentId(1_000 + WINDOW_MS + 1)).toBeNull(); // expires with the window
+    noteHeartbeatActivity("run-1", 1_000, "hamaestro");
+    expect(recentHeartbeatForRun("run-1", 1_000 + 60_000)?.agentId).toBe("hamaestro");
+    expect(recentHeartbeatForRun("run-1", 1_000 + WINDOW_MS + 1)).toBeNull();
   });
 
   it("normalizes a blank/absent origin agent id to null", () => {
-    noteHeartbeatActivity(1_000, "   ");
-    expect(recentHeartbeatAgentId(1_500)).toBeNull();
-    noteHeartbeatActivity(2_000);
-    expect(recentHeartbeatAgentId(2_500)).toBeNull();
+    noteHeartbeatActivity("run-1", 1_000, "   ");
+    expect(recentHeartbeatForRun("run-1", 1_500)?.agentId).toBeNull();
+    noteHeartbeatActivity("run-2", 2_000);
+    expect(recentHeartbeatForRun("run-2", 2_500)?.agentId).toBeNull();
+  });
+
+  it("offers one run-scoped fallback claim, then consumes it", () => {
+    noteHeartbeatActivity("run-1", 1_000, "hamaestro");
+    expect(claimRecentHeartbeatFallback(1_500)).toEqual({ agentId: "hamaestro" });
+    expect(claimRecentHeartbeatFallback(1_600)).toBeNull();
+  });
+
+  it("expires an unclaimed fallback with the heartbeat run", () => {
+    const WINDOW_MS = 10 * 60_000;
+    noteHeartbeatActivity("run-1", 1_000);
+    expect(claimRecentHeartbeatFallback(1_000 + WINDOW_MS + 1)).toBeNull();
   });
 });

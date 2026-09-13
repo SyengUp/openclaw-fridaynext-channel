@@ -35,10 +35,26 @@ export const UNKNOWN_CRON_DELIVERY: CronDeliveryTarget = {
   to: null,
 };
 
+/** OpenClaw auto-seeds heartbeat as a cron-store job, but it is infrastructure activity rather
+ *  than a user scheduled task. It must never compete for a FridayNext inbox attribution. */
+export function isSystemHeartbeatCronJob(job: unknown): boolean {
+  if (!job || typeof job !== "object") return false;
+  const record = job as { declarationKey?: unknown; payload?: unknown };
+  const declarationKey =
+    typeof record.declarationKey === "string" ? record.declarationKey.trim().toLowerCase() : "";
+  const payload =
+    record.payload && typeof record.payload === "object"
+      ? (record.payload as { kind?: unknown })
+      : undefined;
+  const payloadKind = typeof payload?.kind === "string" ? payload.kind.trim().toLowerCase() : "";
+  return payloadKind === "heartbeat" || declarationKey.startsWith("heartbeat:");
+}
+
 /** Classify a cron job record (from the `cron_changed` hook's job snapshot or the cron store).
  *  Anything we can't read confidently degrades to "unknown" — never to a hard exclusion. */
 export function readCronDeliveryTarget(job: unknown): CronDeliveryTarget {
   if (!job || typeof job !== "object") return UNKNOWN_CRON_DELIVERY;
+  if (isSystemHeartbeatCronJob(job)) return { deliversToFridayNext: false, to: null };
   const delivery = (job as { delivery?: unknown }).delivery;
   // No delivery block = the job announces nothing by itself, but its agent turn can still push via
   // the `message` tool — unknown, not excluded.

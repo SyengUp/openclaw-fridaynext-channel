@@ -1,8 +1,11 @@
 /**
- * Short-lived record of the most recently STARTED heartbeat run, fed by the gateway's
+ * Short-lived records of STARTED heartbeat runs, fed by the gateway's
  * `before_agent_run` hook (gated on `ctx.trigger === "heartbeat"`). The channel's outbound
  * capture (`channel.ts` sendText / sendMedia) consults it to classify an offline background
- * push as a "heartbeat" rather than a generic "push".
+ * push as a "heartbeat" rather than a generic "push" — but ONLY when the outbound carries
+ * that exact run id. OpenClaw's current channel adapter drops the run id for direct heartbeat
+ * delivery, so each run also contributes ONE consumable fallback claim. This closes that metadata
+ * gap without recreating the old reusable global window that mislabeled many unrelated sends.
  *
  * Why anchor on `before_agent_run` and not the `onHeartbeatEvent` runtime signal: the
  * heartbeat event carries only TERMINAL statuses ("sent" / "ok-empty" / "failed" …) and is
@@ -12,8 +15,9 @@
  * analog of the cron tracker's `cron_changed` "started" signal. It is a conversation hook,
  * gated by the friday-next plugin's `hooks.allowConversationAccess` (enabled on this gateway).
  *
- * Unlike cron, a heartbeat has no durable per-job identity — it is a recurring self-check —
- * so we track only the run's start timestamp for time-window correlation.
+ * The previous implementation exposed one reusable global 10-minute slot. Every unrelated
+ * outbound in that interval was then labelled as heartbeat. Exact run keys plus a consumable
+ * fallback preserve the signal while bounding metadata-free correlation to one send per run.
  */
 
 // A heartbeat run announces once its agent turn completes; keep the window wide enough to
@@ -21,39 +25,71 @@
 // unrelated offline push. Heartbeat intervals are far longer than this.
 const WINDOW_MS = 10 * 60_000;
 
-let atMs: number | null = null;
-// The originating agent's id (from the heartbeat run's `agent:<id>:…:heartbeat` session key).
-// A heartbeat's outbound delivery reaches the channel with a device/history session key that
-// resolves to the app's CURRENT session agent (usually `main`), NOT the agent that actually ran
-// the heartbeat — so without this the notifications inbox mis-attributes every non-main agent's
-// heartbeat to `main`. Captured here at run start (the only carrier of the true origin identity).
-let originAgentId: string | null = null;
+const MAX_TRACKED = 64;
+const runs = new Map<
+  string,
+  { atMs: number; agentId: string | null; fallbackClaimed: boolean }
+>();
+
+function prune(nowMs: number): void {
+  for (const [runId, run] of runs) {
+    if (nowMs - run.atMs > WINDOW_MS) runs.delete(runId);
+  }
+  if (runs.size <= MAX_TRACKED) return;
+  const oldestFirst = [...runs.entries()].sort((a, b) => a[1].atMs - b[1].atMs);
+  for (const [runId] of oldestFirst.slice(0, runs.size - MAX_TRACKED)) runs.delete(runId);
+}
 
 /** Record a heartbeat run starting (from `before_agent_run` with `trigger === "heartbeat"`).
  *  `agentId` is the run's origin agent (extracted from `ctx.sessionKey`) so the outbound capture
  *  can attribute the push to it instead of the delivery-routing session's agent. */
-export function noteHeartbeatActivity(nowMs: number = Date.now(), agentId?: string | null): void {
-  atMs = nowMs;
-  originAgentId = agentId?.trim() || null;
+export function noteHeartbeatActivity(
+  runId: string | undefined,
+  nowMs: number = Date.now(),
+  agentId?: string | null,
+): void {
+  const id = (runId ?? "").trim();
+  if (!id) return;
+  runs.set(id, { atMs: nowMs, agentId: agentId?.trim() || null, fallbackClaimed: false });
+  prune(nowMs);
 }
 
-/** The start timestamp of a heartbeat run that fired within the window, else null. Returning
- *  the timestamp (not a bool) lets the caller compare recency against the cron tracker so the
- *  more-recent background trigger wins when both are live. */
-export function recentHeartbeatAtMs(nowMs: number = Date.now()): number | null {
-  if (atMs == null) return null;
-  if (nowMs - atMs > WINDOW_MS) return null;
-  return atMs;
+/** Resolve heartbeat identity only for the exact outbound run id. */
+export function recentHeartbeatForRun(
+  runId: string | undefined,
+  nowMs: number = Date.now(),
+): { agentId: string | null } | null {
+  const id = (runId ?? "").trim();
+  if (!id) return null;
+  prune(nowMs);
+  const run = runs.get(id);
+  return run ? { agentId: run.agentId } : null;
 }
 
-/** The origin agent id of a heartbeat run that fired within the window, else null. */
-export function recentHeartbeatAgentId(nowMs: number = Date.now()): string | null {
-  if (atMs == null || nowMs - atMs > WINDOW_MS) return null;
-  return originAgentId;
+/**
+ * Claim the one metadata-free outbound that may belong to a heartbeat run. Passing `runId`
+ * consumes that exact run's fallback (used when the adapter did retain the id); otherwise the
+ * newest unclaimed run wins. A run can never claim a second unrelated outbound.
+ */
+export function claimRecentHeartbeatFallback(
+  nowMs: number = Date.now(),
+  runId?: string,
+): { agentId: string | null } | null {
+  prune(nowMs);
+  const exactId = (runId ?? "").trim();
+  const candidate = exactId
+    ? ([exactId, runs.get(exactId)] as const)
+    : [...runs.entries()]
+        .filter(([, run]) => !run.fallbackClaimed)
+        .sort((a, b) => b[1].atMs - a[1].atMs)[0];
+  if (!candidate) return null;
+  const [, run] = candidate;
+  if (!run || run.fallbackClaimed) return null;
+  run.fallbackClaimed = true;
+  return { agentId: run.agentId };
 }
 
 /** Test-only reset. */
 export function resetHeartbeatNotificationTrackerForTest(): void {
-  atMs = null;
-  originAgentId = null;
+  runs.clear();
 }

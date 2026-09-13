@@ -47,6 +47,7 @@ import {
 import { verifySession } from "../attest/attest-store.js";
 import { attestGateDecision, ATTEST_REJECTION_BODY } from "../attest/attest-gate.js";
 import { handleSessionDelete } from "./handlers/session-delete.js";
+import { handleSessionReadState } from "./handlers/session-read-state.js";
 import { handleAgentIdentity } from "./handlers/agent-identity.js";
 import { handleCommandsList } from "./handlers/commands-list.js";
 import {
@@ -110,8 +111,8 @@ async function handleFridayNextRoute(req: IncomingMessage, res: ServerResponse):
     res.end(JSON.stringify(ATTEST_REJECTION_BODY));
     return true;
   }
-  if (pathname === "/friday-next/push/registration" || pathname === "/friday-next/push/handled") return handlePush(req, res);
-
+  if (pathname === "/friday-next/push/registration" || pathname === "/friday-next/push/handled")
+    return handlePush(req, res);
 
   // Route: GET /friday-next/attest/challenge
   if (req.method === "GET" && pathname === "/friday-next/attest/challenge") {
@@ -280,7 +281,7 @@ async function handleFridayNextRoute(req: IncomingMessage, res: ServerResponse):
     return await handleHistorySessions(req, res);
   }
 
-  // Route: GET /friday-next/notifications (durable agent-initiated background pushes: cron/heartbeat)
+  // Route: GET /friday-next/notifications (durable user-visible cron/background pushes)
   if (req.method === "GET" && pathname === "/friday-next/notifications") {
     return await handleNotifications(req, res);
   }
@@ -397,6 +398,16 @@ export function registerFridayNextHttpRoutes(api: {
     auth: "gateway",
     match: "exact",
     gatewayRuntimeScopeSurface: "trusted-operator",
+  });
+
+  // OpenClaw 原生会话未读状态。读取走 sessions.list，写入走 sessions.patch；
+  // 两者都必须运行在 Gateway 鉴权请求作用域，不能从普通插件鉴权路由代调。
+  // 不提升到 trusted-operator：这里的受限 patch 字段仅需 operator.write。
+  api.registerHttpRoute({
+    path: "/friday-next-admin/sessions/state",
+    handler: handleSessionReadState,
+    auth: "gateway",
+    match: "exact",
   });
 
   // Agent rename. Same sibling-prefix + trusted-operator reasoning as above:

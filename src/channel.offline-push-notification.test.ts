@@ -11,6 +11,7 @@ import {
   resetCronNotificationTrackerForTest,
 } from "./notifications/cron-notification-tracker.js";
 import { resetHeartbeatNotificationTrackerForTest } from "./notifications/heartbeat-notification-tracker.js";
+import { noteHeartbeatActivity } from "./notifications/heartbeat-notification-tracker.js";
 
 /**
  * Real cron deliveries reach sendText with a device/history session key — never `agent:…:cron:…`
@@ -83,6 +84,32 @@ describe("friday-next offline push notification capture", () => {
     await outbound.sendText({ to: deviceId, text: "普通在线回复" });
 
     expect(readNotifications(notifDir, deviceId)).toHaveLength(0);
+  });
+
+  it("does not persist an exact heartbeat run even when the device is offline", async () => {
+    const deviceId = "DEV-OFFLINE-HEARTBEAT";
+    noteHeartbeatActivity("run-heartbeat", Date.now(), "main");
+
+    await outbound.sendText({
+      to: deviceId,
+      text: "heartbeat infrastructure output",
+      requesterRunId: "run-heartbeat",
+    });
+
+    expect(readNotifications(notifDir, deviceId)).toHaveLength(0);
+  });
+
+  it("suppresses one metadata-free heartbeat delivery without swallowing the next outbound", async () => {
+    const deviceId = "DEV-OFFLINE-HEARTBEAT-FALLBACK";
+    noteHeartbeatActivity("run-heartbeat", Date.now(), "main");
+
+    await outbound.sendText({ to: deviceId, text: "heartbeat infrastructure output" });
+    await outbound.sendText({ to: deviceId, text: "later ordinary background output" });
+
+    const entries = readNotifications(notifDir, deviceId);
+    expect(entries).toHaveLength(1);
+    expect(entries[0]?.kind).toBe("push");
+    expect(entries[0]?.text).toBe("later ordinary background output");
   });
 
   it("still captures classified cron session keys even when the device is online", async () => {

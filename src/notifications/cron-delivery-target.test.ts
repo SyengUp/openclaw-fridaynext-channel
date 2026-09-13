@@ -45,6 +45,22 @@ describe("readCronDeliveryTarget", () => {
     expect(readCronDeliveryTarget({ id: "j", name: "巡检" }).deliversToFridayNext).toBeNull();
   });
 
+  it("excludes the system heartbeat job even when its delivery target is unknown or friday-next", () => {
+    expect(
+      readCronDeliveryTarget({
+        id: "heartbeat-main",
+        declarationKey: "heartbeat:main",
+        payload: { kind: "heartbeat" },
+      }),
+    ).toEqual({ deliversToFridayNext: false, to: null });
+    expect(
+      readCronDeliveryTarget({
+        payload: { kind: "heartbeat" },
+        delivery: { mode: "announce", channel: "friday-next" },
+      }),
+    ).toEqual({ deliversToFridayNext: false, to: null });
+  });
+
   it("treats an announce with no explicit channel as unknown (origin-channel fallback)", () => {
     expect(
       readCronDeliveryTarget({ delivery: { mode: "announce" } }).deliversToFridayNext,

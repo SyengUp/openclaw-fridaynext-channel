@@ -29,7 +29,7 @@ describe("FridayNotificationsStore", () => {
     expect(classifyNotificationKind(undefined)).toBeNull();
   });
 
-  it("appends only background pushes, with monotonic seq + derived agent/kind", () => {
+  it("appends cron pushes but suppresses heartbeat and normal replies", () => {
     const a = store.append({
       deviceId: DEV,
       ts: 1000,
@@ -54,16 +54,11 @@ describe("FridayNotificationsStore", () => {
     expect(a?.seq).toBe(1);
     expect(a?.agentId).toBe("main");
     expect(a?.kind).toBe("cron");
-    expect(b?.seq).toBe(2);
-    expect(b?.agentId).toBe("ha-maestro");
-    expect(b?.kind).toBe("heartbeat");
+    expect(b).toBeNull();
     expect(skipped).toBeNull();
   });
 
-  it("originAgentId overrides the delivery-key agent (heartbeat mis-attribution fix)", () => {
-    // A heartbeat from `hamaestro` is delivered under the app's CURRENT session key (main), so the
-    // delivery key alone would mislabel it as `main` (→ "F.R.I.D.A.Y" subtitle). The run-start
-    // tracker supplies the true origin agent, which must win.
+  it("suppresses a temporally-attributed heartbeat fallback", () => {
     const captured = store.append({
       deviceId: DEV,
       ts: 1000,
@@ -73,16 +68,15 @@ describe("FridayNotificationsStore", () => {
       fallbackKind: "heartbeat",
       originAgentId: "hamaestro",
     });
-    expect(captured?.agentId).toBe("hamaestro");
-    expect(captured?.kind).toBe("heartbeat");
+    expect(captured).toBeNull();
   });
 
-  it("originAgentId is normalized (trim/lowercase) and blank falls back to the key", () => {
+  it("originAgentId is normalized for cron and blank falls back to the key", () => {
     const upper = store.append({
       deviceId: DEV,
       ts: 1000,
-      sourceSessionKey: "agent:main:main:heartbeat",
-      text: "hb",
+      sourceSessionKey: "agent:main:cron:one:run:x",
+      text: "cron",
       hasMedia: false,
       originAgentId: "  HaMaestro  ",
     });
@@ -91,8 +85,8 @@ describe("FridayNotificationsStore", () => {
     const blank = store.append({
       deviceId: DEV,
       ts: 2000,
-      sourceSessionKey: "agent:ha-maestro:main:heartbeat",
-      text: "hb2",
+      sourceSessionKey: "agent:ha-maestro:cron:two:run:y",
+      text: "cron2",
       hasMedia: false,
       originAgentId: "   ",
     });

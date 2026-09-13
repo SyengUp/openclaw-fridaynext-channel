@@ -322,7 +322,7 @@ export default defineChannelPluginEntry({
       const originAgentId = String(ctx?.sessionKey ?? "")
         .match(/^agent:([^:]+):/i)?.[1]
         ?.toLowerCase();
-      noteHeartbeatActivity(Date.now(), originAgentId);
+      noteHeartbeatActivity(ctx?.runId, Date.now(), originAgentId);
       hookLogger.info(
         `[HEARTBEAT_RUN] runId=${ctx?.runId ?? "(none)"} sessionKey=${ctx?.sessionKey ?? "(none)"} agent=${originAgentId ?? "(none)"}`,
       );

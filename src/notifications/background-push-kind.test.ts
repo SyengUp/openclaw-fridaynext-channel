@@ -28,26 +28,44 @@ describe("resolveBackgroundPushKind", () => {
     });
   });
 
-  it("returns heartbeat when only a heartbeat fired recently", () => {
-    noteHeartbeatActivity();
-    expect(resolveBackgroundPushKind()).toEqual({ kind: "heartbeat", cron: null, agentId: null });
+  it("does not let heartbeat activity claim more than one metadata-free outbound", () => {
+    noteHeartbeatActivity("heartbeat-run");
+    expect(resolveBackgroundPushKind(undefined, "unrelated-run").kind).toBe("heartbeat");
+    expect(resolveBackgroundPushKind()).toEqual({
+      kind: null,
+      cron: null,
+      agentId: null,
+    });
   });
 
-  it("surfaces the origin agent id of the winning trigger", () => {
-    noteHeartbeatActivity(Date.now(), "hamaestro");
-    const hb = resolveBackgroundPushKind();
-    expect(hb.kind).toBe("heartbeat");
-    expect(hb.agentId).toBe("hamaestro");
+  it("recognises only the exact heartbeat run and carries its origin agent", () => {
+    noteHeartbeatActivity("heartbeat-run", Date.now(), "hamaestro");
+    expect(resolveBackgroundPushKind(undefined, "heartbeat-run")).toEqual({
+      kind: "heartbeat",
+      cron: null,
+      agentId: "hamaestro",
+    });
+  });
 
-    noteCronActivity("job-1", "任务", "ops-bot"); // cron fresher → wins, carries its own agent
+  it("carries origin-agent identity through the metadata-free heartbeat fallback", () => {
+    noteHeartbeatActivity("heartbeat-run", Date.now(), "hamaestro");
+    expect(resolveBackgroundPushKind()).toEqual({
+      kind: "heartbeat",
+      cron: null,
+      agentId: "hamaestro",
+    });
+  });
+
+  it("surfaces the origin agent id of a cron trigger", () => {
+    noteCronActivity("job-1", "任务", "ops-bot");
     const cron = resolveBackgroundPushKind();
     expect(cron.kind).toBe("cron");
     expect(cron.agentId).toBe("ops-bot");
   });
 
-  it("cron wins over heartbeat when it fired more recently", () => {
-    noteHeartbeatActivity(1_000);
-    noteCronActivity("job-1", "任务"); // now() > 1_000, so cron is fresher
+  it("an unrelated heartbeat run cannot mask a cron", () => {
+    noteHeartbeatActivity("heartbeat-run");
+    noteCronActivity("job-1", "任务");
     expect(resolveBackgroundPushKind().kind).toBe("cron");
   });
 

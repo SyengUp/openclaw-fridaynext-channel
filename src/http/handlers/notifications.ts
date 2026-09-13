@@ -1,11 +1,10 @@
 /**
  * GET /friday-next/notifications?deviceId=&afterSeq=
  *
- * Returns the durable log of agent-initiated background pushes (cron / heartbeat)
- * for a device. These deliver to ephemeral `cron:<id>:run:<runId>` / `:heartbeat`
- * sessions the app never shows, so they are surfaced here as a notifications inbox
- * instead. Captured at the outbound boundary regardless of connection, so pushes
- * sent while the device was offline appear on reconnect.
+ * Returns the durable log of user-visible scheduled/background pushes for a device.
+ * Raw heartbeat output is not an inbox item (matching Control UI). User-visible pushes are
+ * captured at the outbound boundary regardless of connection, so anything sent while the device
+ * was offline appears on reconnect.
  */
 
 import type { IncomingMessage, ServerResponse } from "node:http";
@@ -14,21 +13,31 @@ import { fridayNotificationsStore } from "../../notifications/notifications-stor
 import { resolveConfiguredAgents } from "./agents-list.js";
 import { loadCronStore, resolveCronStorePath } from "openclaw/plugin-sdk/config-runtime";
 import { cronJobIdFromSessionKey } from "../../notifications/cron-session-key.js";
+import { isSystemHeartbeatCronJob } from "../../notifications/cron-delivery-target.js";
+import {
+  shouldHideNotification,
+  type CronNotificationMetadata,
+} from "../../notifications/notification-visibility.js";
 
 /** Best-effort jobId → job-name map from the cron store (empty on any failure —
  *  the app falls back to a generic "定时任务" label when a name is absent). */
-async function loadCronJobNames(): Promise<Map<string, string>> {
-  const names = new Map<string, string>();
+async function loadCronNotificationMetadata(): Promise<Map<string, CronNotificationMetadata>> {
+  const metadata = new Map<string, CronNotificationMetadata>();
   try {
     const store = await loadCronStore(resolveCronStorePath());
     for (const job of store.jobs) {
       const name = job.name?.trim();
-      if (job.id && name) names.set(job.id, name);
+      if (job.id) {
+        metadata.set(job.id, {
+          ...(name ? { name } : {}),
+          isSystemHeartbeat: isSystemHeartbeatCronJob(job),
+        });
+      }
     }
   } catch {
     /* best-effort — a cron-store read failure must not break the inbox */
   }
-  return names;
+  return metadata;
 }
 
 export async function handleNotifications(
@@ -73,24 +82,27 @@ export async function handleNotifications(
 
   // Resolve cron job names once (jobId → human name) so the app can subtitle each
   // notification with its scheduled-task name rather than the agent name.
-  const cronJobNames = await loadCronJobNames();
+  const cronMetadata = await loadCronNotificationMetadata();
 
-  const notifications = items.map((n) => ({
-    seq: n.seq,
-    ts: n.ts,
-    agentId: n.agentId,
-    agentName: nameById.get(n.agentId),
-    // Resolve the cron job's CURRENT name LIVE from its jobId (embedded in the session key
-    // for message-tool crons, or captured on the record for announce crons) so renaming a
-    // job updates every past notification. Fall back to the last-known captured name only
-    // when the job no longer exists (live lookup returns nothing).
-    jobName:
-      cronJobNames.get(cronJobIdFromSessionKey(n.sourceSessionKey) ?? n.jobId ?? "") ||
-      n.jobName?.trim(),
-    kind: n.kind,
-    text: n.text,
-    hasMedia: n.hasMedia,
-  }));
+  const notifications = items.map((n) => {
+    const jobId = cronJobIdFromSessionKey(n.sourceSessionKey) ?? n.jobId ?? "";
+    const hidden = shouldHideNotification(n, cronMetadata);
+    return {
+      seq: n.seq,
+      ts: n.ts,
+      agentId: n.agentId,
+      agentName: nameById.get(n.agentId),
+      // Resolve the cron job's CURRENT name LIVE from its jobId (embedded in the session key
+      // for message-tool crons, or captured on the record for announce crons) so renaming a
+      // job updates every past notification. Fall back to the last-known captured name only
+      // when the job no longer exists (live lookup returns nothing).
+      jobName: cronMetadata.get(jobId)?.name || n.jobName?.trim(),
+      kind: n.kind,
+      text: n.text,
+      hasMedia: n.hasMedia,
+      ...(hidden ? { hidden: true } : {}),
+    };
+  });
   const maxSeq = notifications.reduce((m, n) => (n.seq > m ? n.seq : m), afterSeq);
 
   res.statusCode = 200;

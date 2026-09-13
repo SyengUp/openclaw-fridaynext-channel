@@ -20,6 +20,26 @@ describe("FridayNext HTTP route registration", () => {
     });
   });
 
+  it("registers session read state with gateway auth and least-privilege scopes", () => {
+    setMockRuntime({ authToken: "test-token" });
+    const routes: Array<Record<string, unknown>> = [];
+
+    registerFridayNextHttpRoutes({
+      logger: { info: vi.fn(), warn: vi.fn() },
+      registerHttpRoute: (route) => routes.push(route),
+    });
+
+    expect(routes.find((route) => route.path === "/friday-next-admin/sessions/state")).toEqual(
+      expect.objectContaining({
+        auth: "gateway",
+        match: "exact",
+      }),
+    );
+    expect(
+      routes.find((route) => route.path === "/friday-next-admin/sessions/state"),
+    ).not.toHaveProperty("gatewayRuntimeScopeSurface");
+  });
+
   it("routes non-PUT session pin requests to the handler for a 405 response", async () => {
     setMockRuntime({ authToken: "test-token" });
     const routes: Array<Record<string, unknown>> = [];

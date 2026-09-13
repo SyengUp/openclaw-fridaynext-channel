@@ -151,11 +151,10 @@ async function handleSend(ctx: MessageActionCtx): Promise<unknown> {
   // and would mask the background-push origin.
   //
   // The session key alone is NOT a reliable background-push signal: an isolated cron's message-tool
-  // call can run under a marker-less key, so we ALSO consult the cron/heartbeat trackers. A
-  // cron/heartbeat push is captured REGARDLESS of connection state — its live SSE delivery can be
-  // lost to a connection flap (getConnection reports "online" while a just-reconnected/backgrounded
-  // app never receives it), and the inbox is its only durable record. A normal reply is captured
-  // only when offline; a normal online reply classifies to null and the store ignores it.
+  // call can run under a marker-less key, so we ALSO consult the cron tracker. Cron pushes are
+  // captured REGARDLESS of connection state — their live SSE delivery can be lost to a connection
+  // flap. Heartbeat is recognized only to suppress it from the user inbox. A normal reply is
+  // captured only when offline; a normal online reply classifies to null and the store ignores it.
   {
     const conn = sseEmitter.getConnection(to);
     const willHaveMedia =

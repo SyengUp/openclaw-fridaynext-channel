@@ -318,17 +318,18 @@ export const fridayNextChannelPlugin = createChatChannelPlugin({
 
       const conn = sseEmitter.getConnection(deviceId);
 
-      // Durable notification capture for agent-initiated background pushes
-      // (cron/heartbeat). Written BEFORE the connection gate so an offline device
+      // Durable notification capture for agent-initiated user-visible background pushes.
+      // Written BEFORE the connection gate so an offline device
       // still surfaces it on next reconnect. Key classification alone misses REAL
       // cron deliveries (the core passes no origin identity, so sessionKey resolves
       // to a device/history key, never `:cron:`) — when the device is offline the
       // send cannot reach it live, so capture it as a "push". If a scheduled task
       // fired within the correlation window we attribute it to that cron by name.
-      // Cron/heartbeat background pushes are captured REGARDLESS of connection — the inbox is
-      // their durable record, so a lost live delivery (SSE flap / backgrounded app) can't drop
-      // them. A normal reply is captured only when offline.
-      const bg = resolveBackgroundPushKind(deviceId);
+      // Cron background pushes are captured REGARDLESS of connection — the inbox is their
+      // durable record, so a lost live delivery (SSE flap / backgrounded app) can't drop them.
+      // Exact heartbeat runs are classified only so the store can suppress their infrastructure
+      // output; a normal reply is captured only when offline.
+      const bg = resolveBackgroundPushKind(deviceId, runIdFromCtx);
       fridayNotificationsStore.append({
         deviceId,
         ts: Date.now(),
@@ -391,7 +392,7 @@ export const fridayNextChannelPlugin = createChatChannelPlugin({
       // Durable notification capture; before any gate. Same offline "push" fallback
       // as sendText — real cron deliveries never carry a `:cron:` session key, so a
       // recently-fired scheduled task lends the push its name.
-      const bgForMedia = resolveBackgroundPushKind(deviceId);
+      const bgForMedia = resolveBackgroundPushKind(deviceId, runIdFromCtx);
       fridayNotificationsStore.append({
         deviceId,
         ts: Date.now(),

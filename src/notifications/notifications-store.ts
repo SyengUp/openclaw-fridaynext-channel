@@ -6,8 +6,9 @@ import { getHostOpenClawConfigSnapshot } from "../host-config.js";
 import { getFridayNextRuntime } from "../runtime.js";
 
 /**
- * Durable, per-device log of agent-INITIATED background pushes (cron / heartbeat /
- * scheduled tasks). Unlike the SSE offline queue, this is appended *unconditionally*
+ * Durable, per-device log of agent-INITIATED background pushes (cron / scheduled tasks).
+ * Raw heartbeat output is deliberately excluded, matching Control UI. Unlike the SSE offline
+ * queue, this is appended *unconditionally*
  * at the outbound boundary — BEFORE the `if (connection)` gate — so a push sent
  * while the Friday device is offline is still captured and surfaced as a
  * notification when the app next reconnects. (Those pushes deliver to ephemeral
@@ -20,7 +21,7 @@ export interface FridayNotification {
   /** Epoch ms. */
   ts: number;
   agentId: string;
-  /** "cron" | "heartbeat" — the background-push kind. */
+  /** "cron" | "push" — the user-visible background-push kind. Legacy logs may say heartbeat. */
   kind: string;
   /** Originating (internal) session key, for traceability. */
   sourceSessionKey: string;
@@ -161,14 +162,14 @@ export class FridayNotificationsStore {
     fallbackKind?: string | null;
     jobId?: string;
     jobName?: string;
-    // Origin agent id for a background push (cron/heartbeat). The delivery `sourceSessionKey`
+    // Origin agent id for a background push. The delivery `sourceSessionKey`
     // resolves to the app's CURRENT session agent, not the agent that ran the background job, so
     // deriving the agent from it mislabels every non-main agent's push as `main`. When the caller
     // knows the true origin (from the run-start trackers) it passes it here to override.
     originAgentId?: string | null;
   }): FridayNotification | null {
     const kind = classifyNotificationKind(args.sourceSessionKey) ?? args.fallbackKind ?? null;
-    if (!kind) return null;
+    if (!kind || kind === "heartbeat") return null;
     const deviceId = args.deviceId.trim().toUpperCase();
     if (!deviceId) return null;
 
