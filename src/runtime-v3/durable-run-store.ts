@@ -328,6 +328,7 @@ export class DurableRunStore {
   private readonly deletedRequestsByKey = new Map<string, DurableDeletedRequest>();
   private readonly deletedRunIds = new Set<string>();
   private readonly listenersByDevice = new Map<string, Set<(event: DurableRuntimeEvent) => void>>();
+  private pushCursors: Record<string, number> = {};
   readonly serverInstanceId: string;
 
   constructor(private readonly rootDir: string) {
@@ -335,6 +336,8 @@ export class DurableRunStore {
     fs.mkdirSync(this.deliveryDir(), { recursive: true });
     fs.mkdirSync(this.runSnapshotsDir(), { recursive: true });
     this.serverInstanceId = this.loadOrCreateServerInstanceId();
+    const pushFile = path.join(this.rootDir, "push-cursors.json");
+    if (fs.existsSync(pushFile)) this.pushCursors = JSON.parse(fs.readFileSync(pushFile,"utf8")) as Record<string, number>;
     this.loadSessionDeletions();
     this.loadEventHeads();
     this.loadRuns();
@@ -768,6 +771,13 @@ export class DurableRunStore {
     return bounded;
   }
 
+  // 推送消费水位与 SSE ACK 分离，未入推送队列的事件不能被 ACK 压缩清掉。
+  setPushCursor(deviceId: string, cursor: number | null): void {
+    const key = normalizedDeviceId(deviceId);
+    if (cursor === null) delete this.pushCursors[key]; else this.pushCursors[key] = cursor;
+    this.writeJSONAtomically(path.join(this.rootDir,"push-cursors.json"),this.pushCursors);
+  }
+
   acknowledgedEventId(deviceId: string): number {
     return this.acknowledgements[normalizedDeviceId(deviceId)] ?? 0;
   }
@@ -1133,7 +1143,7 @@ export class DurableRunStore {
 
   private compactAcknowledgedDeliveryEvents(deviceId: string): void {
     const normalized = normalizedDeviceId(deviceId);
-    const acknowledged = this.acknowledgements[normalized] ?? 0;
+    const acknowledged = Math.min(this.acknowledgements[normalized] ?? 0, this.pushCursors[normalized] ?? Number.MAX_SAFE_INTEGER);
     if (acknowledged <= 0) return;
     const events = this.readDeliveryEvents(normalized);
     if (events.length === 0) return;

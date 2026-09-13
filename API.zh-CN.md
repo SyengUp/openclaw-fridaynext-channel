@@ -286,3 +286,13 @@ curl -sS -D - "http://127.0.0.1:18789/friday-next/events?deviceId=test" \
 ```
 
 成功时应为 `Content-Type: text/event-stream`。
+
+
+## APNs 会话通知
+
+`GET /friday-next/push/registration` 返回 `{capability:"push-v1"}`。
+`POST /friday-next/push/registration` 接受 `{deviceId,profileId,registrationId,pushGrant}`，只在固定 Friday 中继核验绑定后登记。
+`DELETE /friday-next/push/registration` 接受 `{deviceId}`，停止该设备的队列。
+`POST /friday-next/push/handled` 接受 `{deviceId,notificationId}`，仅由 App 在前台实际展示通知或正在查看目标会话时调用；后台 SSE ACK 不得调用。
+
+以上接口均要求 gateway bearer，公网请求还经过 App Attest session gate。注册独立于订阅权益，不影响 SSE listener 在线计数。插件通过独立持久游标与队列处理完成、失败、审批和询问，等待 1 秒前台确认后发给中继。切换网关不删除注册。

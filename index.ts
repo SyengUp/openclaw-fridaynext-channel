@@ -1,3 +1,4 @@
+import { startPushRuntime } from "./src/push/push-runtime.js";
 import { defineChannelPluginEntry } from "openclaw/plugin-sdk/core";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import type {
@@ -186,6 +187,7 @@ export default defineChannelPluginEntry({
       lastApiRoutesRegistered = new WeakRef(api);
       registerFridayNextHttpRoutes(api);
       registerFridayNextPluginTools(api);
+      startPushRuntime();
       void restoreDurableRuntimeV3().catch((error: unknown) => {
         hookLogger.error(
           `[RUNTIME_V3_RECOVERY_FAILED] error=${error instanceof Error ? error.message : String(error)}`,

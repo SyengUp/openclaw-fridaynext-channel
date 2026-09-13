@@ -1,3 +1,4 @@
+import { getPushRuntime } from "../../push/push-runtime.js";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import crypto from "node:crypto";
 import { abortRunForSessionKey } from "../../agent/abort-run.js";
@@ -287,6 +288,7 @@ export async function handleRuntimeV3Cancel(
     return json(res, 200, { ok: true, runId, phase: "cancelled", eventId: event.eventId });
   }
 
+  getPushRuntime().cancel(runId);
   store.transition(runId, "cancelPending");
   markUserAbort(run.sessionKey);
   const result = await abortRunForSessionKey(run.sessionKey);

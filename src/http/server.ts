@@ -7,6 +7,7 @@
 
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { isPublicRequest } from "./middleware/public-surface.js";
+import { handlePush } from "./handlers/push.js";
 import { handleMessages } from "./handlers/messages.js";
 import { handleSseStream } from "./handlers/sse.js";
 import { handleFilesUpload } from "./handlers/files-upload.js";
@@ -109,6 +110,8 @@ async function handleFridayNextRoute(req: IncomingMessage, res: ServerResponse):
     res.end(JSON.stringify(ATTEST_REJECTION_BODY));
     return true;
   }
+  if (pathname === "/friday-next/push/registration" || pathname === "/friday-next/push/handled") return handlePush(req, res);
+
 
   // Route: GET /friday-next/attest/challenge
   if (req.method === "GET" && pathname === "/friday-next/attest/challenge") {
