@@ -528,7 +528,7 @@ function commonPrefixLen(a: string, b: string): number {
   return i;
 }
 
-// P1 of the subagent streaming redo (see subagent-streaming-redo-plan.md):
+// P1 of the subagent streaming redo (see ../Friday/docs/archive/subagent-streaming-redo-plan.md):
 // the plugin ships authoritative correlation keys so the app stops self-deriving identity.
 describe("forwardAgentEventRaw (subagent stable-identity fields: A1/A2/A3)", () => {
   const sessionKey = "agent:main:friday-session-test";
