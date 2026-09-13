@@ -64,6 +64,7 @@ Only these names are emitted:
 | `tool-hook` | `before_tool_call` / `after_tool_call` | Hook payload + `runId`, `deviceId`, `sessionKey` |
 | `outbound`  | Channel `sendText` / `sendMedia`, dispatch errors | Proactive push or `op: "dispatch_error"` |
 | `subagent`  | Plugin hooks | Subagent lifecycle: `phase: "spawning"` \| `"spawned"` \| `"ended"` |
+| `inbox-changed` | Structured cron / approval lifecycle | Payload-free invalidation hint; refetch the inbox snapshot |
 | `ping`      | (reserved / internal) | — |
 
 **Removed (breaking):** `run-start`, `run-complete`, `run-error`, `final`, `reasoning`, `block`, `attachment`, `tts`, `tool` as top-level SSE event names, `dispatch`, and any plugin-synthesized “final delta” events. Consume **`agent`** (`stream: "lifecycle"` + `phase`) and **`deliver`** instead.
@@ -508,6 +509,37 @@ Stored at `~/.openclaw/friday-next/prompt-capsules/capsules.json`.
   Limits (violations ⇒ `400`): ≤ 200 capsules; each needs a non-empty unique string `id`;
   `name` / `iconSystemName` ≤ 100 chars; `prompt` ≤ 8000 chars. Unknown fields are dropped;
   missing `sortOrder` / `createdAt` / `updatedAt` are filled server-side.
+
+## Inbox v2
+
+`GET /friday-next-admin/inbox/snapshot?deviceId=<id>&agentId=<id>&afterCursor=<n>` returns the
+five-category inbox contract. `cronResults` is an incremental event stream persisted per device;
+`approvals`, `automations`, and `system` are full current-state projections. Every source also has
+an independent `fresh`, `stale`, or `unsupported` status, so a partial gateway failure never means
+"authoritative empty". `scopeUpgrade` is reported as unsupported for Friday's HTTP bearer
+transport.
+
+`system.update` entries include a bounded `payload.diagnostic` projection for display:
+`runId`, `status`, `phase`, `reason`, `targetVersion`, failed step summaries, the running version,
+plugin errors, and OpenClaw's `nextAction` / `doctorHint` when present. The original `update.status`
+snapshot remains under `payload.status` for forward compatibility; clients should render the
+normalized diagnostic and may parse the original shape only as a rolling-upgrade fallback.
+Like Control UI, a terminal update run is a locally acknowledgeable report even when it failed:
+it has `requiresAction:false`, `payload.forced:false`, and `payload.canDismiss:true`. An active run
+or an update sentinel failure without a corresponding run remains forced and non-dismissible.
+
+Cron history is created only by `cron_changed.finished` with a stable run identity and an explicit
+`delivery: {channel:"friday-next", to:<this device>}` target. Outbound text, heartbeat, worker and
+session-key/time-window heuristics never write this store. The legacy `GET/DELETE
+/friday-next/notifications` endpoint remains as a cron-only projection of the same v2 store.
+
+`POST /friday-next-admin/inbox/approvals/resolve` accepts `{approvalId, kind, decision}` and routes
+strictly to `exec.approval.resolve`, `plugin.approval.resolve`, or the canonical `approval.resolve`
+for `system-agent`. Already-resolved or expired ids are idempotent success. `DELETE
+/friday-next-admin/inbox/cron-results/<cursor>?deviceId=<id>` tombstones one cron result.
+
+The plugin emits live-only `inbox-changed` SSE invalidations when cron or approval state changes.
+Clients must refetch the snapshot; the event intentionally carries no state to merge.
 
 ## Scheduled tasks (cron)
 

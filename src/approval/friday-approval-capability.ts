@@ -1,4 +1,4 @@
-// Friday Next exec/plugin approval capability.
+// Friday Next exec/plugin/system-agent approval capability.
 //
 // Lets the Friday app receive tool-execution approval REQUESTS (e.g. a Codex model wanting to run a
 // shell command that needs confirmation) and submit allow/deny DECISIONS — instead of those
@@ -26,7 +26,7 @@ const logger = createFridayNextLogger("approval");
 export interface FridayApprovalPayload {
   op: "request" | "resolved" | "expired";
   approvalId: string;
-  kind: "exec" | "plugin";
+  kind: "exec" | "plugin" | "system-agent";
   title: string;
   description?: string | null;
   // exec
@@ -54,6 +54,12 @@ interface PreparedTarget {
 interface PendingEntry {
   deviceId: string;
   approvalId: string;
+}
+
+const GLOBAL_INBOX_TARGET = "__FRIDAY_INBOX_ALL__";
+
+function emitInboxInvalidation(): void {
+  sseEmitter.broadcastLive({ type: "inbox-changed", data: {} }, true);
 }
 
 /** Pull the originating sessionKey out of an exec/plugin approval request (`request.request.*`). */
@@ -98,7 +104,12 @@ export function buildPayload(params: {
   return {
     op,
     approvalId: str(view.approvalId) ?? "",
-    kind: view.approvalKind === "plugin" ? "plugin" : "exec",
+    kind:
+      view.approvalKind === "plugin"
+        ? "plugin"
+        : view.approvalKind === "system-agent"
+          ? "system-agent"
+          : "exec",
     title: str(view.title) ?? "",
     description: str(view.description),
     commandText: str(view.commandText),
@@ -134,10 +145,11 @@ const fridayApprovalNativeRuntime = createChannelApprovalNativeRuntimeAdapter<
   never,
   FridayApprovalPayload
 >({
-  eventKinds: ["exec", "plugin"],
+  eventKinds: ["exec", "plugin", "system-agent"],
   availability: {
     isConfigured: () => true,
-    shouldHandle: ({ request }) => deviceForRequest(request) !== undefined,
+    // 全局审批快照属于设备 owner 收件箱，即使审批不是由 Friday 会话发起也必须监听。
+    shouldHandle: () => true,
   },
   presentation: {
     buildPendingPayload: ({ request, view }) => {
@@ -186,6 +198,10 @@ const fridayApprovalNativeRuntime = createChannelApprovalNativeRuntimeAdapter<
     },
     deliverPending: ({ preparedTarget, pendingPayload }) => {
       const deviceId = preparedTarget.deviceId;
+      emitInboxInvalidation();
+      if (deviceId === GLOBAL_INBOX_TARGET) {
+        return { deviceId, approvalId: pendingPayload.approvalId };
+      }
       logger.info(
         `deliver approval ${pendingPayload.approvalId} kind=${pendingPayload.kind} -> ${deviceId}`,
       );
@@ -193,9 +209,14 @@ const fridayApprovalNativeRuntime = createChannelApprovalNativeRuntimeAdapter<
       return { deviceId, approvalId: pendingPayload.approvalId };
     },
     updateEntry: async ({ entry, payload }) => {
-      emitApproval(entry.deviceId, { ...payload, deviceId: entry.deviceId });
+      emitInboxInvalidation();
+      if (entry.deviceId !== GLOBAL_INBOX_TARGET) {
+        emitApproval(entry.deviceId, { ...payload, deviceId: entry.deviceId });
+      }
     },
     deleteEntry: async ({ entry, phase }) => {
+      emitInboxInvalidation();
+      if (entry.deviceId === GLOBAL_INBOX_TARGET) return;
       emitApproval(entry.deviceId, {
         op: phase === "resolved" ? "resolved" : "expired",
         approvalId: entry.approvalId,
@@ -223,18 +244,20 @@ const fridayApprovalNativeRuntime = createChannelApprovalNativeRuntimeAdapter<
 export const fridayApprovalCapability: ChannelApprovalCapability = {
   native: {
     describeDeliveryCapabilities: ({ request }) => {
-      const enabled = deviceForRequest(request) !== undefined;
+      const hasOrigin = deviceForRequest(request) !== undefined;
       return {
-        enabled,
+        enabled: true,
         preferredSurface: "origin",
-        supportsOriginSurface: true,
-        supportsApproverDmSurface: false,
+        supportsOriginSurface: hasOrigin,
+        // 没有 Friday 来源设备时，以内部哨兵保持生命周期监听，仅发送无载荷失效通知。
+        supportsApproverDmSurface: true,
       };
     },
     resolveOriginTarget: ({ request }) => {
       const deviceId = deviceForRequest(request);
       return deviceId ? { to: deviceId } : null;
     },
+    resolveApproverDmTargets: () => [{ to: GLOBAL_INBOX_TARGET }],
   },
   // The field is `unknown`-typed, so the parameterized adapter assigns directly — the widening
   // happens at the field boundary (function-param contravariance), no cast needed.

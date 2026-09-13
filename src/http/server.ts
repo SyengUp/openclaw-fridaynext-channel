@@ -28,6 +28,7 @@ import { handleAgentFiles } from "./handlers/agent-files.js";
 import { handleAgentToolsCatalog } from "./handlers/agent-tools-catalog.js";
 import { handleHistorySessions } from "./handlers/history-sessions.js";
 import { handleNotifications, handleNotificationDelete } from "./handlers/notifications.js";
+import { handleInbox } from "./handlers/inbox.js";
 import { handleHistoryMessages } from "./handlers/history-messages.js";
 import { handleProgressCardGet } from "./handlers/progress-card.js";
 import { handleHistorySetTitle } from "./handlers/history-set-title.js";
@@ -440,6 +441,17 @@ export function registerFridayNextHttpRoutes(api: {
     handler: handleAdminModelsList,
     auth: "gateway",
     match: "exact",
+  });
+
+  // Inbox v2 聚合三类原生审批以及 Control UI 同源的 cron/model/update 当前状态。
+  // 读取 approvals 需要 operator.approvals，update.status 需要 operator.admin，因此使用
+  // trusted-operator；处理器仍只开放快照、严格审批转发和 cron 历史删除三个窄操作。
+  api.registerHttpRoute({
+    path: "/friday-next-admin/inbox",
+    handler: handleInbox,
+    auth: "gateway",
+    match: "prefix",
+    gatewayRuntimeScopeSurface: "trusted-operator",
   });
 
   // Scheduled-task (cron) management. Same sibling-prefix reasoning as above. The two

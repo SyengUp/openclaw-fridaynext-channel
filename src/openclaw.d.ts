@@ -86,6 +86,7 @@ declare module "openclaw/plugin-sdk/channel-contract" {
     native: {
       describeDeliveryCapabilities: (params: { request: unknown }) => unknown;
       resolveOriginTarget: (params: { request: unknown }) => unknown;
+      resolveApproverDmTargets?: (params: { request: unknown }) => unknown;
     };
     nativeRuntime?: unknown;
   }

@@ -3,6 +3,7 @@ import { createFridayNextLogger } from "../logging.js";
 import { fridaySseOfflineQueue } from "./offline-queue.js";
 import { runtimeV3StoreIfInitialized } from "../runtime-v3/runtime-store.js";
 import type { DurableRunStore } from "../runtime-v3/durable-run-store.js";
+import { clearStructuredRunSource, structuredRunSource } from "../runtime-v3/run-source.js";
 
 const logger = createFridayNextLogger("sse", "info");
 
@@ -16,6 +17,7 @@ export type SseEventType =
   | "subagent"
   | "approval"
   | "question"
+  | "inbox-changed"
   | "session-status"
   | "session-title"
   | "talk"
@@ -286,6 +288,7 @@ class SseEmitterRegistry {
           rootRunId: typeof event.data.rootRunId === "string" ? event.data.rootRunId : undefined,
           parentRunId:
             typeof event.data.parentRunId === "string" ? event.data.parentRunId : undefined,
+          sourceKind: structuredRunSource(runId),
         });
       }
     } else if (run && deviceId) {
@@ -358,6 +361,9 @@ class SseEmitterRegistry {
     }
     this.flushRuntimeV3Run(runId);
     this.appendRuntimeMirror(store, runId, eventType, [event]);
+    if (eventType === "run.completed" || eventType === "run.failed") {
+      clearStructuredRunSource(runId);
+    }
   }
 
   getConnectionCount(): number {

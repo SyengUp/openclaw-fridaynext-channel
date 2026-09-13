@@ -15,6 +15,8 @@ export type DurableRunPhase =
   | "failed"
   | "cancelled";
 
+export type DurableRunSourceKind = "session" | "cron" | "heartbeat" | "subagent";
+
 export type DurableRunCommand = {
   clientRequestId: string;
   deviceId: string;
@@ -29,6 +31,7 @@ export type DurableRunRecord = DurableRunCommand & {
   runId: string;
   payloadHash: string;
   origin?: "command" | "observed";
+  sourceKind?: DurableRunSourceKind;
   deliveryDeviceIds?: string[];
   phase: DurableRunPhase;
   createdAt: number;
@@ -47,6 +50,7 @@ export type ObserveRunInput = {
   occurredAt?: number;
   rootRunId?: string;
   parentRunId?: string;
+  sourceKind?: DurableRunSourceKind;
 };
 
 export type DurableRuntimeEvent = {
@@ -58,6 +62,7 @@ export type DurableRuntimeEvent = {
   runId: string;
   rootRunId?: string;
   parentRunId?: string;
+  sourceKind?: DurableRunSourceKind;
   runSeq: number;
   eventType: string;
   occurredAt: number;
@@ -337,7 +342,8 @@ export class DurableRunStore {
     fs.mkdirSync(this.runSnapshotsDir(), { recursive: true });
     this.serverInstanceId = this.loadOrCreateServerInstanceId();
     const pushFile = path.join(this.rootDir, "push-cursors.json");
-    if (fs.existsSync(pushFile)) this.pushCursors = JSON.parse(fs.readFileSync(pushFile,"utf8")) as Record<string, number>;
+    if (fs.existsSync(pushFile))
+      this.pushCursors = JSON.parse(fs.readFileSync(pushFile, "utf8")) as Record<string, number>;
     this.loadSessionDeletions();
     this.loadEventHeads();
     this.loadRuns();
@@ -382,6 +388,7 @@ export class DurableRunStore {
       runId: crypto.randomUUID(),
       payloadHash: hash,
       origin: "command",
+      sourceKind: "session",
       deliveryDeviceIds: [command.deviceId],
       phase: "queued",
       createdAt: now,
@@ -416,6 +423,7 @@ export class DurableRunStore {
         return undefined;
       }
       for (const deviceId of deviceIds) this.attachDeviceToRun(runId, deviceId);
+      if (input.sourceKind) this.markRunSourceKind(runId, input.sourceKind);
       return this.runsById.get(runId);
     }
 
@@ -437,6 +445,7 @@ export class DurableRunStore {
       runId,
       payloadHash: payloadHash(command),
       origin: "observed",
+      ...(input.sourceKind ? { sourceKind: input.sourceKind } : {}),
       deliveryDeviceIds: deviceIds,
       phase: "running",
       createdAt,
@@ -449,6 +458,18 @@ export class DurableRunStore {
     this.runsById.set(record.runId, record);
     this.indexRunSession(record);
     return record;
+  }
+
+  /** 将 host 的结构化 trigger 绑定到精确 runId，并持久化供终态回放分类。 */
+  markRunSourceKind(runId: string, sourceKind: DurableRunSourceKind): DurableRunRecord | undefined {
+    const current = this.runsById.get(runId.trim());
+    if (!current) return undefined;
+    if (current.sourceKind === sourceKind) return current;
+    if (current.origin === "command" && sourceKind !== "session") return current;
+    const updated = { ...current, sourceKind };
+    this.persistRun(updated);
+    this.runsById.set(updated.runId, updated);
+    return updated;
   }
 
   /** Adds a delivery audience and idempotently backfills every already-durable semantic event. */
@@ -649,6 +670,7 @@ export class DurableRunStore {
         runId: current.runId,
         ...(current.rootRunId ? { rootRunId: current.rootRunId } : {}),
         ...(current.parentRunId ? { parentRunId: current.parentRunId } : {}),
+        ...(current.sourceKind ? { sourceKind: current.sourceKind } : {}),
         runSeq,
         eventType: eventType.trim(),
         occurredAt,
@@ -774,8 +796,9 @@ export class DurableRunStore {
   // 推送消费水位与 SSE ACK 分离，未入推送队列的事件不能被 ACK 压缩清掉。
   setPushCursor(deviceId: string, cursor: number | null): void {
     const key = normalizedDeviceId(deviceId);
-    if (cursor === null) delete this.pushCursors[key]; else this.pushCursors[key] = cursor;
-    this.writeJSONAtomically(path.join(this.rootDir,"push-cursors.json"),this.pushCursors);
+    if (cursor === null) delete this.pushCursors[key];
+    else this.pushCursors[key] = cursor;
+    this.writeJSONAtomically(path.join(this.rootDir, "push-cursors.json"), this.pushCursors);
   }
 
   acknowledgedEventId(deviceId: string): number {
@@ -1143,7 +1166,10 @@ export class DurableRunStore {
 
   private compactAcknowledgedDeliveryEvents(deviceId: string): void {
     const normalized = normalizedDeviceId(deviceId);
-    const acknowledged = Math.min(this.acknowledgements[normalized] ?? 0, this.pushCursors[normalized] ?? Number.MAX_SAFE_INTEGER);
+    const acknowledged = Math.min(
+      this.acknowledgements[normalized] ?? 0,
+      this.pushCursors[normalized] ?? Number.MAX_SAFE_INTEGER,
+    );
     if (acknowledged <= 0) return;
     const events = this.readDeliveryEvents(normalized);
     if (events.length === 0) return;

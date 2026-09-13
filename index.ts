@@ -21,15 +21,7 @@ import {
 } from "./src/friday-session.js";
 import { setFridayAgentForwardRuntime } from "./src/agent-forward-runtime.js";
 import { setUpgradeRuntime } from "./src/upgrade-runtime.js";
-import {
-  noteCronActivity,
-  updateCronDeliveryTarget,
-} from "./src/notifications/cron-notification-tracker.js";
-import {
-  loadCronDeliveryTarget,
-  resolveCronDeliveryFromHook,
-} from "./src/notifications/cron-delivery-lookup.js";
-import { noteHeartbeatActivity } from "./src/notifications/heartbeat-notification-tracker.js";
+import { captureCronChanged } from "./src/inbox/cron-result-capture.js";
 import { getOpenClawAgentRunContext } from "./src/agent-run-context-bridge.js";
 import { accumulateRunUsage } from "./src/agent/run-usage-accumulator.js";
 import { createFridayNextLogger } from "./src/logging.js";
@@ -43,6 +35,8 @@ import { createCalendarLogTool } from "./src/tools/calendar-log-tool.js";
 import { createLocationQueryTool } from "./src/tools/location-query-tool.js";
 import { createSendFileTool } from "./src/tools/send-file-tool.js";
 import { restoreDurableRuntimeV3 } from "./src/runtime-v3/runtime-recovery.js";
+import { noteStructuredRunSource } from "./src/runtime-v3/run-source.js";
+import { runtimeV3StoreIfInitialized } from "./src/runtime-v3/runtime-store.js";
 
 const hookLogger = createFridayNextLogger("hook");
 
@@ -273,59 +267,30 @@ export default defineChannelPluginEntry({
     // "thinking". OpenClaw never sets this; we assert it on the plugin side. Best-effort.
     ensureCodexReasoningSummary((msg) => hookLogger.info(msg));
 
-    // Track scheduled-task (cron) activity so the notifications inbox can subtitle an
-    // offline background push with its originating cron job's NAME. A real `announce`
-    // cron delivery reaches the channel outbound with no cron origin (see channel.ts
-    // sendText), so we anchor on this first-party lifecycle hook instead.
-    api.on("cron_changed", (event: any, ctx?: any) => {
-      const action = event?.action;
-      if (action !== "started" && action !== "finished") return;
-      const jobId = String(event?.jobId ?? "").trim();
-      if (!jobId) return;
-      // Best-effort origin agent so the notifications inbox attributes the push to the job's
-      // owning agent, not the delivery session's (usually the app's current `main`). Falls back
-      // to the session-key derivation when the event doesn't carry it — no regression.
-      const cronAgentId = event.job?.agentId ?? event.agentId ?? undefined;
-      // WHERE the job delivers decides whether it may claim a friday-next push at all. Without it,
-      // any same-minute job wins the correlation by recency alone — that is how 2026-07-31's
-      // "每日科技" push ended up labelled "miloco-home-patrol" (a job that never pushes to the app).
-      const delivery = resolveCronDeliveryFromHook(jobId, event, ctx);
-      noteCronActivity(jobId, event.job?.name, cronAgentId, { action, delivery });
-      // The hook's job snapshot omits `delivery`, so the sync read above is usually "unknown".
-      // Patch it in from the cron store; a run lasts minutes, the disk read milliseconds.
-      if (delivery.deliversToFridayNext === null) {
-        void loadCronDeliveryTarget(jobId)
-          .then((resolved) => {
-            if (resolved.deliversToFridayNext !== null) updateCronDeliveryTarget(jobId, resolved);
-          })
-          .catch(() => {
-            /* best-effort — unknown just means the job stays eligible */
-          });
+    // 收件箱 cron 历史只接受 `cron_changed.finished` 的结构化事实。started 仅缓存同一运行
+    // 的 delivery/name，供一次性任务在 finished 前被 core 删除时继续精确判定；不会按时间
+    // 窗口去猜任何 outbound、worker 或 heartbeat 的来源。
+    api.on("cron_changed", async (event: unknown, ctx?: unknown) => {
+      try {
+        await captureCronChanged(event, ctx);
+      } catch (error) {
+        hookLogger.error(
+          `[CRON_INBOX_CAPTURE_FAILED] error=${error instanceof Error ? error.message : String(error)}`,
+        );
+      } finally {
+        // 所有 cron 生命周期都可能改变 automation 当前态；通知只负责失效，不携带状态。
+        sseEmitter.broadcastLive({ type: "inbox-changed", data: {} }, true);
       }
-      hookLogger.info(
-        `[CRON_CHANGED] action=${action} jobId=${jobId} name=${event.job?.name ?? "(none)"} agent=${cronAgentId ?? "(none)"} toFriday=${delivery.deliversToFridayNext ?? "(unknown)"}`,
-      );
     });
 
-    // Track heartbeat-run starts so the notifications inbox can label an offline background
-    // push as a "heartbeat" (not a generic "push"). Like cron, a real heartbeat `announce`
-    // delivery reaches the channel outbound with no origin marker; unlike cron, the only
-    // ordering-safe first-party signal is this run-start gate (the `onHeartbeatEvent` runtime
-    // event carries terminal statuses emitted after delivery). Conversation hook — fires
-    // because friday-next has `hooks.allowConversationAccess` enabled.
-    api.on("before_agent_run", (_event: any, ctx: any) => {
-      if (ctx?.trigger !== "heartbeat") return;
-      // The heartbeat run's `agent:<id>:…:heartbeat` origin key is the ONLY reliable carrier of the
-      // agent that ran it — the later outbound delivery resolves to the app's current session agent
-      // (usually `main`). Extract it here so the inbox subtitle reads the true origin. undefined on
-      // no-match → the store falls back to the delivery-key derivation (no regression).
-      const originAgentId = String(ctx?.sessionKey ?? "")
-        .match(/^agent:([^:]+):/i)?.[1]
-        ?.toLowerCase();
-      noteHeartbeatActivity(ctx?.runId, Date.now(), originAgentId);
-      hookLogger.info(
-        `[HEARTBEAT_RUN] runId=${ctx?.runId ?? "(none)"} sessionKey=${ctx?.sessionKey ?? "(none)"} agent=${originAgentId ?? "(none)"}`,
-      );
+    // 会话完成通知依赖精确 run 来源。这里只读取 host 提供的结构化 trigger，并把它
+    // 持久化到 durable runtime；不检查正文、agent 名称或时间窗口。
+    api.on("before_agent_run", (_event: unknown, ctx: any) => {
+      const sourceKind = noteStructuredRunSource(ctx?.runId, ctx?.trigger);
+      const runId = typeof ctx?.runId === "string" ? ctx.runId.trim() : "";
+      if (sourceKind && runId) {
+        runtimeV3StoreIfInitialized()?.markRunSourceKind(runId, sourceKind);
+      }
     });
 
     api.on("subagent_delivery_target", (event: any) => {

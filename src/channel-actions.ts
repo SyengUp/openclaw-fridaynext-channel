@@ -11,8 +11,6 @@ import {
   resolveFridayDeviceIdForOutbound,
   getLastRegisteredFridayDeviceId,
 } from "./friday-session.js";
-import { fridayNotificationsStore } from "./notifications/notifications-store.js";
-import { resolveBackgroundPushKind } from "./notifications/background-push-kind.js";
 import { runtimeV3StoreIfInitialized } from "./runtime-v3/runtime-store.js";
 
 type MessageActionCtx = {
@@ -143,39 +141,6 @@ async function handleSend(ctx: MessageActionCtx): Promise<unknown> {
     (legacyActiveRunId ? getRunRoute(legacyActiveRunId)?.sessionKey : undefined) ??
     ctx.sessionKey ??
     historySessionKey;
-
-  // Durable notification capture for the `message`-tool path (mirrors outbound.sendText).
-  // Classify by the ORIGIN session key (`ctx.sessionKey`, which for a cron/heartbeat run MAY be
-  // `agent:<id>:cron:<jobId>…` / `:heartbeat`), NOT the delivery-routing `sessionKey` above —
-  // that one gets overwritten by the device's last user-session run-route (attachment placement)
-  // and would mask the background-push origin.
-  //
-  // The session key alone is NOT a reliable background-push signal: an isolated cron's message-tool
-  // call can run under a marker-less key, so we ALSO consult the cron tracker. Cron pushes are
-  // captured REGARDLESS of connection state — their live SSE delivery can be lost to a connection
-  // flap. Heartbeat is recognized only to suppress it from the user inbox. A normal reply is
-  // captured only when offline; a normal online reply classifies to null and the store ignores it.
-  {
-    const conn = sseEmitter.getConnection(to);
-    const willHaveMedia =
-      pickStringArray(ctx.params, "mediaUrls").length > 0 || !!inlineBase64 || !!mediaPath;
-    const bg = resolveBackgroundPushKind(to);
-    fridayNotificationsStore.append({
-      deviceId: to,
-      ts: Date.now(),
-      // `ctx.sessionKey` is the true origin here. Its fallback (`sessionKey`) is the delivery route
-      // — for a background push that is the device's last run-route, possibly a stale PREVIOUS cron
-      // key the inbox read path would mistake for this push's job — so a correlated background push
-      // records no key rather than a misleading one (its identity comes from the tracker).
-      sourceSessionKey: ctx.sessionKey ?? (bg.kind ? undefined : sessionKey),
-      text: text || caption,
-      hasMedia: willHaveMedia,
-      fallbackKind: bg.kind ?? (conn ? null : "push"),
-      jobId: bg.cron?.jobId,
-      jobName: bg.cron?.name,
-      originAgentId: bg.agentId,
-    });
-  }
 
   // Send text via SSE outbound
   if (text) {

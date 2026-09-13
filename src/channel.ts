@@ -22,8 +22,6 @@ import {
 } from "openclaw/plugin-sdk/status-helpers";
 import { saveMediaBuffer } from "openclaw/plugin-sdk/media-store";
 import { sseEmitter } from "./sse/emitter.js";
-import { fridayNotificationsStore } from "./notifications/notifications-store.js";
-import { resolveBackgroundPushKind } from "./notifications/background-push-kind.js";
 import { describeMessageActions, handleMessageAction } from "./channel-actions.js";
 import { guessMimeType, resolveMediaAttachment } from "./http/handlers/files.js";
 import { downloadRemoteMedia, isHttpUrl } from "./media-fetch.js";
@@ -68,26 +66,6 @@ function resolveOutboundSessionKey(
     pickFirstString(rawCtx, ["requesterSessionKey", "sessionKey"]) ??
     resolveHistorySessionKeyForFridayDevice(deviceId)
   );
-}
-
-/**
- * The session key to RECORD on a notification (the live SSE broadcast keeps using the routing key).
- *
- * A background push's routing key is not its origin: with no run identity on the outbound ctx,
- * `resolveOutboundSessionKey` falls back to the device's LAST run-route, which can be arbitrarily
- * stale — on 2026-07-31 an offline cron push inherited the key of a user chat from 00:26 that
- * morning. Worse, that stale key can itself be a PREVIOUS cron run's `…:cron:<jobId>…` key, which
- * the inbox read path would then mistake for this push's job. So for a correlated background push
- * with no ctx-carried runId we record no key at all and let the verified tracker identity stand
- * (`fallbackKind` still classifies it). Normal replies and generic offline pushes keep the key —
- * it's how their agent is attributed.
- */
-function backgroundPushSourceSessionKey(
-  backgroundKind: string | null,
-  runIdFromCtx: string | undefined,
-  sessionKey: string | undefined,
-): string | undefined {
-  return backgroundKind && !runIdFromCtx ? undefined : sessionKey;
 }
 
 function resolveLocalMediaPath(mediaUrl: string, localRoots?: string[]): string {
@@ -318,29 +296,6 @@ export const fridayNextChannelPlugin = createChatChannelPlugin({
 
       const conn = sseEmitter.getConnection(deviceId);
 
-      // Durable notification capture for agent-initiated user-visible background pushes.
-      // Written BEFORE the connection gate so an offline device
-      // still surfaces it on next reconnect. Key classification alone misses REAL
-      // cron deliveries (the core passes no origin identity, so sessionKey resolves
-      // to a device/history key, never `:cron:`) — when the device is offline the
-      // send cannot reach it live, so capture it as a "push". If a scheduled task
-      // fired within the correlation window we attribute it to that cron by name.
-      // Cron background pushes are captured REGARDLESS of connection — the inbox is their
-      // durable record, so a lost live delivery (SSE flap / backgrounded app) can't drop them.
-      // Exact heartbeat runs are classified only so the store can suppress their infrastructure
-      // output; a normal reply is captured only when offline.
-      const bg = resolveBackgroundPushKind(deviceId, runIdFromCtx);
-      fridayNotificationsStore.append({
-        deviceId,
-        ts: Date.now(),
-        sourceSessionKey: backgroundPushSourceSessionKey(bg.kind, runIdFromCtx, sessionKey),
-        text,
-        hasMedia: false,
-        fallbackKind: bg.kind ?? (conn ? null : "push"),
-        jobId: bg.cron?.jobId,
-        jobName: bg.cron?.name,
-        originAgentId: bg.agentId,
-      });
       logger.info(
         `[SEND_TEXT] to=${deviceId} runId=${runId ?? "(none)"} sessionKey=${sessionKey ?? "(none)"} textLen=${text.length} online=${!!conn}`,
       );
@@ -388,22 +343,6 @@ export const fridayNextChannelPlugin = createChatChannelPlugin({
       const sessionKey = resolveOutboundSessionKey(deviceId, runId, rawCtx);
       const audioAsVoice = ctx.audioAsVoice === true;
       const caption = ctx.text ?? "";
-
-      // Durable notification capture; before any gate. Same offline "push" fallback
-      // as sendText — real cron deliveries never carry a `:cron:` session key, so a
-      // recently-fired scheduled task lends the push its name.
-      const bgForMedia = resolveBackgroundPushKind(deviceId, runIdFromCtx);
-      fridayNotificationsStore.append({
-        deviceId,
-        ts: Date.now(),
-        sourceSessionKey: backgroundPushSourceSessionKey(bgForMedia.kind, runIdFromCtx, sessionKey),
-        text: caption,
-        hasMedia: true,
-        fallbackKind: bgForMedia.kind ?? (sseEmitter.getConnection(deviceId) ? null : "push"),
-        jobId: bgForMedia.cron?.jobId,
-        jobName: bgForMedia.cron?.name,
-        originAgentId: bgForMedia.agentId,
-      });
 
       if (!mediaUrl) {
         return {

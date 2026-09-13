@@ -128,7 +128,7 @@ Lets the app edit a single agent the way ControlUI does — model / core files /
 
 ## SSE event names
 
-`connected` | `agent` | `deliver` | `tool-hook` | `outbound` | `ping` | `subagent`
+`connected` | `agent` | `deliver` | `tool-hook` | `outbound` | `ping` | `subagent` | `inbox-changed`
 
 `subagent` events carry `phase: "spawning"|"spawned"|"ended"` with `runId`, `parentRunId`, `label`, `depth`, `deviceId` for subagent lifecycle UI.
 

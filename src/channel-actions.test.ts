@@ -368,11 +368,10 @@ describe("channel-actions handleSend sessionKey routing", () => {
 });
 
 /**
- * The `message`-tool path (handleAction → handleSend) must also feed the durable notification store,
- * mirroring outbound.sendText. Without this a cron push that the agent delivers via the message tool
- * is captured nowhere and the app never surfaces it (the original "科技要闻" bug).
+ * 收件箱 v2 不再从 message tool 的正文、sessionKey、在线状态或最近 cron 时间窗口推断类型。
+ * 这里保留回归测试，确保旧通知日志不会再被任何发送路径写入。
  */
-describe("channel-actions handleSend notification capture", () => {
+describe("channel-actions handleSend 不参与收件箱分类", () => {
   let historyDir = "";
 
   beforeEach(() => {
@@ -400,7 +399,7 @@ describe("channel-actions handleSend notification capture", () => {
     return res;
   }
 
-  it("captures a cron message-tool send as a 'cron' notification even when a user run-route masks the delivery key", async () => {
+  it("不根据 cron 风格 sessionKey 写通知", async () => {
     // This is the core fix: the agent's cron run calls the message tool; ctx.sessionKey is the cron
     // origin key, but the delivery-routing sessionKey gets overwritten by the device's last user run
     // (attachment placement). Classification must use ctx.sessionKey so the cron origin survives.
@@ -417,18 +416,14 @@ describe("channel-actions handleSend notification capture", () => {
       sessionKey: "agent:main:cron:job-xyz:run:abc",
     });
 
-    const notes = fridayNotificationsStore.readAfter(deviceId, 0);
-    expect(notes).toHaveLength(1);
-    expect(notes[0].kind).toBe("cron");
-    expect(notes[0].text).toBe("🌿 早安，周六科技要闻来了");
-    expect(notes[0].hasMedia).toBe(false);
+    expect(fridayNotificationsStore.readAfter(deviceId, 0)).toEqual([]);
   });
 
   // Regression (lost 23:00 每日趣闻汇总): the agent delivered the cron via the message tool while the
   // device was mid-reconnect (getConnection reports "online" but the app never got the live push),
   // AND ctx.sessionKey carried no cron marker. It must STILL be captured — via the cron tracker — so
   // the inbox holds a durable record.
-  it("captures an online message-tool send when a cron fired recently, even with an unclassified key", async () => {
+  it("不根据最近 cron tracker 写通知", async () => {
     const deviceId = "DEV-FLAP-CRON";
     connect(deviceId); // "online" during a connection flap
     noteCronActivity("job-趣闻", "每日趣闻汇总");
@@ -439,16 +434,10 @@ describe("channel-actions handleSend notification capture", () => {
       sessionKey: "agent:main:main", // marker-less origin (isolated cron ran under base session)
     });
 
-    const notes = fridayNotificationsStore.readAfter(deviceId, 0) as Array<{
-      kind: string;
-      jobName?: string;
-    }>;
-    expect(notes).toHaveLength(1);
-    expect(notes[0].kind).toBe("cron");
-    expect(notes[0].jobName).toBe("每日趣闻汇总");
+    expect(fridayNotificationsStore.readAfter(deviceId, 0)).toEqual([]);
   });
 
-  it("captures an offline message-tool send as a generic 'push' even without a cron key", async () => {
+  it("普通离线 push 不写通知", async () => {
     const deviceId = "DEV-OFF-1";
     // offline, non-cron origin → fallbackKind "push" keeps it from being silently lost
 
@@ -458,9 +447,7 @@ describe("channel-actions handleSend notification capture", () => {
       sessionKey: "agent:main:fridaynext:normal",
     });
 
-    const notes = fridayNotificationsStore.readAfter(deviceId, 0);
-    expect(notes).toHaveLength(1);
-    expect(notes[0].kind).toBe("push");
+    expect(fridayNotificationsStore.readAfter(deviceId, 0)).toEqual([]);
   });
 
   it("does NOT capture a normal online reply (non-background, device connected)", async () => {
@@ -476,7 +463,7 @@ describe("channel-actions handleSend notification capture", () => {
     expect(fridayNotificationsStore.readAfter(deviceId, 0)).toHaveLength(0);
   });
 
-  it("resolves a bare 'friday-next' channel target to the real device, not a FRIDAY-NEXT key", async () => {
+  it("频道名目标也不写通知", async () => {
     // Agents often pass the channel name as the message-tool target instead of a device id.
     // handleSend must resolve it to the real device so the notification lands where the app
     // (which queries by its own deviceId) will actually fetch it.
@@ -489,13 +476,11 @@ describe("channel-actions handleSend notification capture", () => {
       sessionKey: "agent:main:cron:job-res:run:r1",
     });
 
-    expect(fridayNotificationsStore.readAfter(deviceId, 0)).toHaveLength(1);
-    expect(fridayNotificationsStore.readAfter(deviceId, 0)[0].kind).toBe("cron");
-    // Crucially NOT keyed under the non-device channel name.
-    expect(fridayNotificationsStore.readAfter("FRIDAY-NEXT", 0)).toHaveLength(0);
+    expect(fridayNotificationsStore.readAfter(deviceId, 0)).toEqual([]);
+    expect(fridayNotificationsStore.readAfter("FRIDAY-NEXT", 0)).toEqual([]);
   });
 
-  it("captures a cron media send with hasMedia=true", async () => {
+  it("带媒体的 cron 风格发送也不写通知", async () => {
     const deviceId = "DEV-CRON-MEDIA";
     const mediaFile = path.join(historyDir, "chart.png");
     fs.writeFileSync(mediaFile, "png-bytes");
@@ -506,10 +491,6 @@ describe("channel-actions handleSend notification capture", () => {
       sessionKey: "agent:main:cron:job-media:run:m1",
     });
 
-    const notes = fridayNotificationsStore.readAfter(deviceId, 0);
-    expect(notes).toHaveLength(1);
-    expect(notes[0].kind).toBe("cron");
-    expect(notes[0].hasMedia).toBe(true);
-    expect(notes[0].text).toBe("今日走势");
+    expect(fridayNotificationsStore.readAfter(deviceId, 0)).toEqual([]);
   });
 });

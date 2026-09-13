@@ -4,22 +4,16 @@ import path from "node:path";
 import { EventEmitter } from "node:events";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { fridayNextChannelPlugin } from "./channel.js";
-import { sseEmitter } from "./sse/emitter.js";
-import { setNotificationsBaseDirForTest } from "./notifications/notifications-store.js";
 import {
   noteCronActivity,
   resetCronNotificationTrackerForTest,
 } from "./notifications/cron-notification-tracker.js";
-import { resetHeartbeatNotificationTrackerForTest } from "./notifications/heartbeat-notification-tracker.js";
-import { noteHeartbeatActivity } from "./notifications/heartbeat-notification-tracker.js";
-
-/**
- * Real cron deliveries reach sendText with a device/history session key — never `agent:…:cron:…`
- * (the core's ChannelOutboundContext carries no origin identity), so key classification alone
- * misses them and an offline device would silently lose the push. sendText/sendMedia must capture
- * any send that could NOT be delivered live (no SSE connection) as a "push" notification, while
- * online sends with unclassified keys stay un-captured (they reach the app live via SSE).
- */
+import {
+  noteHeartbeatActivity,
+  resetHeartbeatNotificationTrackerForTest,
+} from "./notifications/heartbeat-notification-tracker.js";
+import { setNotificationsBaseDirForTest } from "./notifications/notifications-store.js";
+import { sseEmitter } from "./sse/emitter.js";
 
 class MockRes extends EventEmitter {
   write(): boolean {
@@ -34,137 +28,67 @@ const outbound = fridayNextChannelPlugin.outbound as {
   sendText: (ctx: Record<string, unknown>) => Promise<unknown>;
 };
 
-function readNotifications(
-  dir: string,
-  deviceId: string,
-): Array<{ kind: string; text: string; jobId?: string; jobName?: string }> {
+function readLegacyNotifications(dir: string, deviceId: string): unknown[] {
   const file = path.join(dir, `${deviceId.toUpperCase()}.jsonl`);
   if (!fs.existsSync(file)) return [];
   return fs
     .readFileSync(file, "utf8")
     .split(/\r?\n/)
-    .filter((l) => l.trim())
-    .map((l) => JSON.parse(l) as { kind: string; text: string; jobId?: string; jobName?: string });
+    .filter((line) => line.trim())
+    .map((line) => JSON.parse(line) as unknown);
 }
 
-describe("friday-next offline push notification capture", () => {
-  let notifDir = "";
+describe("friday-next outbound 不参与收件箱分类", () => {
+  let notificationDir = "";
 
   beforeEach(() => {
     sseEmitter.resetForTest();
     resetCronNotificationTrackerForTest();
     resetHeartbeatNotificationTrackerForTest();
-    notifDir = fs.mkdtempSync(path.join(os.tmpdir(), "friday-notif-offline-"));
-    setNotificationsBaseDirForTest(notifDir);
+    notificationDir = fs.mkdtempSync(path.join(os.tmpdir(), "friday-notif-offline-"));
+    setNotificationsBaseDirForTest(notificationDir);
   });
 
   afterEach(() => {
     setNotificationsBaseDirForTest(null);
     resetCronNotificationTrackerForTest();
     resetHeartbeatNotificationTrackerForTest();
-    fs.rmSync(notifDir, { recursive: true, force: true });
+    fs.rmSync(notificationDir, { recursive: true, force: true });
   });
 
-  it("captures an offline cron-style sendText as a 'push' notification", async () => {
-    const deviceId = "DEV-OFFLINE-CRON";
-    // No SSE connection, no run route → sessionKey resolves to the device history
-    // fallback (unclassifiable) — exactly what a real cron delivery looks like.
-    await outbound.sendText({ to: deviceId, text: "早上好,这是定时问候" });
-
-    const entries = readNotifications(notifDir, deviceId);
-    expect(entries).toHaveLength(1);
-    expect(entries[0]?.kind).toBe("push");
-    expect(entries[0]?.text).toBe("早上好,这是定时问候");
+  it("普通离线 push 不写入旧通知日志", async () => {
+    const deviceId = "DEV-OFFLINE-PUSH";
+    await outbound.sendText({ to: deviceId, text: "后台普通消息" });
+    expect(readLegacyNotifications(notificationDir, deviceId)).toEqual([]);
   });
 
-  it("does NOT capture an online sendText with an unclassified session key", async () => {
-    const deviceId = "DEV-ONLINE-REPLY";
+  it("cron 风格 sessionKey 也不能绕过 cron_changed.finished 可信来源", async () => {
+    const deviceId = "DEV-CRON-LOOKALIKE";
+    await outbound.sendText({
+      to: deviceId,
+      text: "看起来像定时任务",
+      requesterSessionKey: "agent:main:cron:patrol:run:r1",
+    });
+    expect(readLegacyNotifications(notificationDir, deviceId)).toEqual([]);
+  });
+
+  it("旧 cron 时间关联 tracker 不能生成收件箱条目", async () => {
+    const deviceId = "DEV-TRACKER";
     sseEmitter.addConnection(deviceId, new MockRes() as never);
-
-    await outbound.sendText({ to: deviceId, text: "普通在线回复" });
-
-    expect(readNotifications(notifDir, deviceId)).toHaveLength(0);
+    noteCronActivity("job-1", "每日科技");
+    await outbound.sendText({ to: deviceId, text: "时间上接近 cron 的消息" });
+    expect(readLegacyNotifications(notificationDir, deviceId)).toEqual([]);
   });
 
-  it("does not persist an exact heartbeat run even when the device is offline", async () => {
-    const deviceId = "DEV-OFFLINE-HEARTBEAT";
+  it("heartbeat 无论是否携带 runId 都不写收件箱", async () => {
+    const deviceId = "DEV-HEARTBEAT";
     noteHeartbeatActivity("run-heartbeat", Date.now(), "main");
-
     await outbound.sendText({
       to: deviceId,
       text: "heartbeat infrastructure output",
       requesterRunId: "run-heartbeat",
     });
-
-    expect(readNotifications(notifDir, deviceId)).toHaveLength(0);
-  });
-
-  it("suppresses one metadata-free heartbeat delivery without swallowing the next outbound", async () => {
-    const deviceId = "DEV-OFFLINE-HEARTBEAT-FALLBACK";
-    noteHeartbeatActivity("run-heartbeat", Date.now(), "main");
-
-    await outbound.sendText({ to: deviceId, text: "heartbeat infrastructure output" });
-    await outbound.sendText({ to: deviceId, text: "later ordinary background output" });
-
-    const entries = readNotifications(notifDir, deviceId);
-    expect(entries).toHaveLength(1);
-    expect(entries[0]?.kind).toBe("push");
-    expect(entries[0]?.text).toBe("later ordinary background output");
-  });
-
-  it("still captures classified cron session keys even when the device is online", async () => {
-    const deviceId = "DEV-ONLINE-CRON";
-    sseEmitter.addConnection(deviceId, new MockRes() as never);
-
-    await outbound.sendText({
-      to: deviceId,
-      text: "定时巡检",
-      requesterSessionKey: "agent:main:cron:patrol:run:r1",
-    });
-
-    const entries = readNotifications(notifDir, deviceId);
-    expect(entries).toHaveLength(1);
-    expect(entries[0]?.kind).toBe("cron");
-  });
-
-  // Regression (lost 23:00 每日趣闻汇总): an ONLINE send whose session key carries NO cron marker
-  // but which correlates to a recently-fired cron (tracker) MUST still be captured durably — a
-  // connection flap can make getConnection report "online" while the app never receives the live
-  // push, and the inbox is the only durable record.
-  it("captures an online unclassified send when a cron fired recently (tracker)", async () => {
-    const deviceId = "DEV-ONLINE-FLAP-CRON";
-    sseEmitter.addConnection(deviceId, new MockRes() as never);
-    noteCronActivity("job-趣闻", "每日趣闻汇总");
-
-    await outbound.sendText({ to: deviceId, text: "🌙 深夜趣闻汇总" });
-
-    const entries = readNotifications(notifDir, deviceId) as Array<{
-      kind: string;
-      text: string;
-      jobName?: string;
-    }>;
-    expect(entries).toHaveLength(1);
-    expect(entries[0]?.kind).toBe("cron");
-    expect(entries[0]?.jobName).toBe("每日趣闻汇总");
-  });
-
-  // Regression (2026-07-31 07:32, device 8DDE95DE…): "每日科技" started at 07:30:00.022 and pushed
-  // at 07:32:48 — but "miloco-home-patrol" started 13ms later, overwrote the single correlation
-  // slot, and the inbox labelled the push with THAT job (which never delivers to the app).
-  it("credits the friday-next cron, not a same-minute job that pushes elsewhere", async () => {
-    const deviceId = "DEV-CONCURRENT-CRON";
-    noteCronActivity("aca31947", "每日科技", null, {
-      action: "started",
-      delivery: { deliversToFridayNext: true, to: null },
-    });
-    noteCronActivity("6cc44ff1", "miloco-home-patrol", null, { action: "started" });
-
-    await outbound.sendText({ to: deviceId, text: "🌿 7月31日科技新闻速览" });
-
-    const entries = readNotifications(notifDir, deviceId);
-    expect(entries).toHaveLength(1);
-    expect(entries[0]?.kind).toBe("cron");
-    expect(entries[0]?.jobName).toBe("每日科技");
-    expect(entries[0]?.jobId).toBe("aca31947");
+    await outbound.sendText({ to: deviceId, text: "metadata-free heartbeat" });
+    expect(readLegacyNotifications(notificationDir, deviceId)).toEqual([]);
   });
 });

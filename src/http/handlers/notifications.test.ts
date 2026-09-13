@@ -2,23 +2,16 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { Readable } from "node:stream";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { cronResultStore, setInboxV2RootForTest } from "../../inbox/cron-result-store.js";
 import { setMockRuntime } from "../../test-support/mock-runtime.js";
-import { setNotificationsBaseDirForTest } from "../../notifications/notifications-store.js";
 import { handleNotifications } from "./notifications.js";
-
-const { loadCronStore } = vi.hoisted(() => ({ loadCronStore: vi.fn() }));
-
-vi.mock("openclaw/plugin-sdk/config-runtime", () => ({
-  loadCronStore,
-  resolveCronStorePath: () => "/tmp/cron.json",
-}));
 
 type IncomingMessageLike = import("node:http").IncomingMessage;
 type ServerResponseLike = import("node:http").ServerResponse;
 
-const deviceId = "HEARTBEAT-CLEANUP-DEVICE";
-let dir = "";
+const deviceId = "TRUSTED-CRON-DEVICE";
+let root = "";
 
 function makeReq(): IncomingMessageLike {
   const req = Readable.from([]) as unknown as IncomingMessageLike;
@@ -46,87 +39,59 @@ async function invoke() {
   return {
     status: captured.statusCode,
     json: JSON.parse(captured.body) as {
-      notifications: Array<{ seq: number; hidden?: boolean; jobName?: string }>;
+      notifications: Array<{ seq: number; kind: string; text: string; jobName?: string }>;
+      maxSeq: number;
     },
   };
 }
 
 beforeEach(() => {
   setMockRuntime({ authToken: "test-token" });
-  dir = fs.mkdtempSync(path.join(os.tmpdir(), "friday-notification-route-"));
-  setNotificationsBaseDirForTest(dir);
-  loadCronStore.mockReset();
-  loadCronStore.mockResolvedValue({
-    jobs: [
-      {
-        id: "heartbeat-job",
-        name: "heartbeat-main",
-        declarationKey: "heartbeat:main",
-        payload: { kind: "heartbeat" },
-      },
-      { id: "daily-job", name: "每日科技", payload: { kind: "agentTurn" } },
-    ],
-  });
-  const records = [
-    {
-      seq: 1,
-      ts: 1,
-      agentId: "main",
-      kind: "cron",
-      sourceSessionKey: "",
-      jobId: "heartbeat-job",
-      text: "被错误归因给系统心跳的普通进度",
-      hasMedia: false,
-    },
-    {
-      seq: 2,
-      ts: 2,
-      agentId: "main",
-      kind: "heartbeat",
-      sourceSessionKey: "agent:main:main:heartbeat",
-      text: "旧版直接心跳记录",
-      hasMedia: false,
-    },
-    {
-      seq: 3,
-      ts: 3,
-      agentId: "main",
-      kind: "cron",
-      sourceSessionKey: "",
-      jobId: "daily-job",
-      text: "真正的定时任务通知",
-      hasMedia: false,
-    },
-    {
-      seq: 4,
-      ts: 4,
-      agentId: "main",
-      kind: "push",
-      sourceSessionKey: "agent:main:fridaynext:device",
-      text: "First heartbeat alert: your bot runs periodic background checks and messages you only when something needs attention.\n旧版心跳报告",
-      hasMedia: false,
-    },
-  ];
-  fs.writeFileSync(
-    path.join(dir, `${deviceId}.jsonl`),
-    records.map((record) => JSON.stringify(record)).join("\n") + "\n",
-  );
+  root = fs.mkdtempSync(path.join(os.tmpdir(), "friday-notification-route-"));
+  setInboxV2RootForTest(path.join(root, "inbox-v2"));
+  cronResultStore.resetForTest();
 });
 
 afterEach(() => {
-  setNotificationsBaseDirForTest(null);
-  fs.rmSync(dir, { recursive: true, force: true });
+  setInboxV2RootForTest(null);
+  cronResultStore.resetForTest();
+  fs.rmSync(root, { recursive: true, force: true });
 });
 
-describe("notifications route", () => {
-  it("marks historical heartbeat pollution as hidden while preserving real cron notifications", async () => {
+describe("legacy notifications route", () => {
+  it("只投影 inbox-v2 的结构化 cron 结果，不读取旧 push/heartbeat 日志", async () => {
+    const legacyDir = path.join(root, "notifications");
+    fs.mkdirSync(legacyDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(legacyDir, `${deviceId}.jsonl`),
+      `${JSON.stringify({ seq: 99, kind: "push", text: "旧 heartbeat 污染" })}\n`,
+      "utf8",
+    );
+    cronResultStore.append({
+      sourceIdentity: "run:trusted",
+      category: "cronResults",
+      kind: "cronResult",
+      lifecycle: "event",
+      occurredAtMs: 123,
+      deviceId,
+      jobId: "job-1",
+      jobName: "每日科技",
+      agentId: "main",
+      runId: "trusted",
+      status: "ok",
+      summary: "可信结果",
+    });
+
     const result = await invoke();
     expect(result.status).toBe(200);
     expect(result.json.notifications).toEqual([
-      expect.objectContaining({ seq: 1, hidden: true, jobName: "heartbeat-main" }),
-      expect.objectContaining({ seq: 2, hidden: true }),
-      expect.not.objectContaining({ seq: 3, hidden: true }),
-      expect.objectContaining({ seq: 4, hidden: true }),
+      expect.objectContaining({
+        seq: 1,
+        kind: "cron",
+        text: "可信结果",
+        jobName: "每日科技",
+      }),
     ]);
+    expect(result.json.maxSeq).toBe(1);
   });
 });
