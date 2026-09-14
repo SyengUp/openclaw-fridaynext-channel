@@ -195,8 +195,9 @@ function persistSessionBinds(): void {
  * Attach a device to a session's live stream. Registers the same session-key
  * variants as a POST mapping (so outbound / tool hooks resolve too), then injects
  * the session's buffered `agent` frames (see `session-replay-buffer.ts`) into the
- * device's durable SSE queue so it renders an in-progress or just-finished run
- * even if it attached late. Returns the number of replayed frames.
+ * device's durable SSE queue so it renders an in-progress run even if it
+ * attached late. Completed runs load through transcript history and must not be
+ * re-presented as a live stream. Returns the number of replayed frames.
  */
 export function bindFridayDeviceToSession(rawSessionKey: string, deviceId: string): number {
   const sk = rawSessionKey.trim();
@@ -219,7 +220,7 @@ export function bindFridayDeviceToSession(rawSessionKey: string, deviceId: strin
   persistSessionBinds();
   let replayed = 0;
   const byRun = replayWatermarkForDevice(did);
-  for (const frame of sessionReplayBuffer.framesFor(toSessionStoreKey(sk))) {
+  for (const frame of sessionReplayBuffer.replayableFramesFor(toSessionStoreKey(sk))) {
     const runId = typeof frame.data.runId === "string" ? frame.data.runId : "";
     const seq = typeof frame.data.seq === "number" ? frame.data.seq : undefined;
     const watermark = runId ? byRun.get(runId) : undefined;
@@ -268,10 +269,9 @@ export function resetSessionBindingsForTest(): void {
 /**
  * Per-device per-run inner `seq` watermark of frames already delivered to that
  * device (live or replayed). Bind re-injection skips buffered frames at or below
- * the watermark, so re-opening a session never re-delivers a completed run — the
- * app would treat the replayed `lifecycle.start` as a server restart and
- * unfreeze/re-stream the finished round. Frames for runs the device has never
- * seen (watermark absent) are injected whole.
+ * the watermark, so re-opening an active session never re-delivers the same
+ * prefix. Frames for unfinished runs the device has never seen (watermark
+ * absent) are injected whole; completed runs are filtered before this step.
  */
 const replayWatermarkByDevice = new Map<string, Map<string, number>>();
 const MAX_WATERMARKED_RUNS_PER_DEVICE = 64;
@@ -542,10 +542,11 @@ function completeAgentEventForward(params: {
   if (subagentMeta) payload.subagent = subagentMeta;
 
   // The replay buffer is keyed by the same session the app renders, so a device
-  // that binds later (e.g. opening a Control UI conversation in the app) gets the
-  // run's frames up to now — including runs that had NO Friday device at emit time.
-  // Buffered frames carry the same wire payload the live path sends; the app's
-  // per-run seq dedup makes re-injection idempotent.
+  // that binds later (e.g. opening a Control UI conversation in the app) can get
+  // an unfinished run's frames up to now — including runs that had NO Friday
+  // device at emit time. Bind filters terminal runs before injection. Buffered
+  // frames carry the same wire payload the live path sends; the app's per-run seq
+  // dedup makes active-prefix re-injection idempotent.
   if (sk) {
     sessionReplayBuffer.append(sk, { type: "agent", data: payload });
   }

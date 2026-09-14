@@ -4,11 +4,12 @@
  * Attaches a device to a session's live stream. This is how the app starts
  * receiving a conversation that was begun elsewhere (Control UI, WebChat, another
  * client): from now on every `agent` frame for that session is forwarded to the
- * device, and the session's buffered frames (see `session-replay-buffer.ts`) are
- * injected into the device's durable SSE queue so an in-progress or just-finished
- * run renders immediately. Idempotent: rebinding the same device/session is a
- * no-op apart from re-injecting the buffer (the app's per-run seq dedup drops
- * duplicates).
+ * device, and buffered frames for unfinished runs (see
+ * `session-replay-buffer.ts`) are injected into the device's durable SSE queue
+ * so an in-progress run renders immediately. Completed runs remain on the
+ * transcript/history path. Idempotent: rebinding the same device/session is a
+ * no-op apart from re-injecting the eligible buffer (the app's per-run seq dedup
+ * drops duplicates).
  */
 
 import type { IncomingMessage, ServerResponse } from "node:http";

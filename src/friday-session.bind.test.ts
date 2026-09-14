@@ -72,28 +72,80 @@ describe("session bind (watch a conversation started elsewhere)", () => {
       data: { phase: "end" },
     });
 
-  it("buffers frames of an un-owned session and replays them into the device on bind", () => {
+  it("buffers frames of an un-owned active session and replays them into the device on bind", () => {
     // No device ever POSTed to this session (Control UI conversation).
     lifecycleStart();
     delta(2, "hello");
     delta(3, "hello world");
-    lifecycleEnd(4);
 
     expect(sseEmitter.broadcastToRun).not.toHaveBeenCalled();
-    expect(sessionReplayBuffer.framesFor(sessionKey)).toHaveLength(4);
+    expect(sessionReplayBuffer.framesFor(sessionKey)).toHaveLength(3);
 
     const replayed = bindFridayDeviceToSession(sessionKey, watcherDevice);
-    expect(replayed).toBe(4);
+    expect(replayed).toBe(3);
     // Replay frames were injected into the watcher's durable SSE queue.
     const broadcastCalls = (sseEmitter.broadcast as ReturnType<typeof vi.fn>).mock.calls;
-    expect(broadcastCalls).toHaveLength(4);
+    expect(broadcastCalls).toHaveLength(3);
     for (const call of broadcastCalls) {
       expect(call[1]).toBe(watcherDevice);
       expect(call[0].type).toBe("agent");
       expect(call[0].data.sessionKey).toBe(sessionKey);
     }
     expect(broadcastCalls[0][0].data.seq).toBe(1);
-    expect(broadcastCalls[3][0].data.seq).toBe(4);
+    expect(broadcastCalls[2][0].data.seq).toBe(3);
+  });
+
+  it("does not replay a completed buffered run when a fresh device opens history", () => {
+    lifecycleStart();
+    delta(2, "already finished");
+    lifecycleEnd(3);
+
+    expect(sessionReplayBuffer.framesFor(sessionKey)).toHaveLength(3);
+    expect(bindFridayDeviceToSession(sessionKey, watcherDevice)).toBe(0);
+    expect(sseEmitter.broadcast).not.toHaveBeenCalled();
+  });
+
+  it("replays only the active run when completed and active frames share a session buffer", () => {
+    lifecycleStart();
+    delta(2, "old answer");
+    lifecycleEnd(3);
+    forwardAgentEventRaw({
+      runId: "run-2",
+      seq: 1,
+      ts: 200,
+      stream: "lifecycle",
+      sessionKey,
+      data: { phase: "start" },
+    });
+    forwardAgentEventRaw({
+      runId: "run-2",
+      seq: 2,
+      ts: 201,
+      stream: "assistant",
+      sessionKey,
+      data: { text: "live answer", delta: "live answer" },
+    });
+
+    expect(bindFridayDeviceToSession(sessionKey, watcherDevice)).toBe(2);
+    const calls = (sseEmitter.broadcast as ReturnType<typeof vi.fn>).mock.calls;
+    expect(calls).toHaveLength(2);
+    expect(calls.every((call) => call[0].data.runId === "run-2")).toBe(true);
+  });
+
+  it("treats lifecycle error as terminal and does not replay the failed run", () => {
+    lifecycleStart();
+    delta(2, "partial answer");
+    forwardAgentEventRaw({
+      runId: "run-1",
+      seq: 3,
+      ts: 103,
+      stream: "lifecycle",
+      sessionKey,
+      data: { phase: "error" },
+    });
+
+    expect(bindFridayDeviceToSession(sessionKey, watcherDevice)).toBe(0);
+    expect(sseEmitter.broadcast).not.toHaveBeenCalled();
   });
 
   it("forwards a bound session's live frames to the bound device (owner path)", () => {
@@ -225,17 +277,15 @@ describe("session bind (watch a conversation started elsewhere)", () => {
     expect(watchedDevicesForSessionKey(sessionKey)).toEqual([watcherDevice]);
   });
 
-  it("re-bind never re-injects frames already delivered (watermark)", () => {
+  it("re-bind never re-injects active frames already delivered (watermark)", () => {
     lifecycleStart();
     delta(2, "hello");
-    lifecycleEnd(3);
 
-    expect(bindFridayDeviceToSession(sessionKey, watcherDevice)).toBe(3);
+    expect(bindFridayDeviceToSession(sessionKey, watcherDevice)).toBe(2);
     (sseEmitter.broadcast as ReturnType<typeof vi.fn>).mockClear();
 
-    // Re-opening the session binds again — the completed run must NOT be re-delivered
-    // (the app would treat the replayed lifecycle.start as a restart and unfreeze the
-    // round that just landed on disk).
+    // Re-opening the session binds again — the already-delivered active prefix
+    // must not be injected a second time.
     expect(bindFridayDeviceToSession(sessionKey, watcherDevice)).toBe(0);
     expect(sseEmitter.broadcast).not.toHaveBeenCalled();
   });
@@ -254,17 +304,16 @@ describe("session bind (watch a conversation started elsewhere)", () => {
     expect(sseEmitter.broadcast).not.toHaveBeenCalled();
   });
 
-  it("a second device still receives the full replay on first bind", () => {
+  it("a second device still receives the full active replay on first bind", () => {
     lifecycleStart();
     delta(2, "hello");
-    lifecycleEnd(3);
     bindFridayDeviceToSession(sessionKey, watcherDevice);
 
     (sseEmitter.broadcast as ReturnType<typeof vi.fn>).mockClear();
     const otherDevice = "CCCCCCCC-DDDD-EEEE-FFFF-000000000000";
-    expect(bindFridayDeviceToSession(sessionKey, otherDevice)).toBe(3);
+    expect(bindFridayDeviceToSession(sessionKey, otherDevice)).toBe(2);
     const calls = (sseEmitter.broadcast as ReturnType<typeof vi.fn>).mock.calls;
-    expect(calls).toHaveLength(3);
+    expect(calls).toHaveLength(2);
     for (const call of calls) {
       expect(call[1]).toBe(otherDevice);
       expect(call[3]).toBeUndefined();
@@ -301,7 +350,7 @@ describe("session bind runtime-v3 integration", () => {
     fs.rmSync(tmp, { recursive: true, force: true });
   });
 
-  it("adopts buffered core frames into the durable v3 stream when the app binds", () => {
+  it("does not adopt a completed buffered core run into a fresh device's v3 stream", () => {
     const runId = "external-runtime-run";
     const emit = (seq: number, stream: string, data: Record<string, unknown>) =>
       forwardAgentEventRaw({ runId, seq, ts: 1_000 + seq, stream, sessionKey, data });
@@ -312,12 +361,8 @@ describe("session bind runtime-v3 integration", () => {
 
     const store = getRuntimeV3Store();
     expect(store.run(runId)).toBeUndefined();
-    expect(bindFridayDeviceToSession(sessionKey, watcherDevice)).toBe(3);
-    expect(store.run(runId)).toMatchObject({ origin: "observed", phase: "completed" });
-    expect(store.eventsAfter(watcherDevice, 0).map((event) => event.eventType)).toEqual([
-      "run.started",
-      "agent.assistant.delta",
-      "run.completed",
-    ]);
+    expect(bindFridayDeviceToSession(sessionKey, watcherDevice)).toBe(0);
+    expect(store.run(runId)).toBeUndefined();
+    expect(store.eventsAfter(watcherDevice, 0)).toEqual([]);
   });
 });
