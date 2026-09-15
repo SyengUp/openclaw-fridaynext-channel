@@ -19,7 +19,7 @@
 📱 FridayNext — a native iOS client for your OpenClaw gateway
 
 Your iPhone as a full OpenClaw channel + node. Install in one command:
-npx -y @syengup/friday-channel-next@beta --beta
+npx -y @syengup/friday-channel-next
 ```
 
 **正文：**
@@ -41,7 +41,7 @@ What makes it different:
 Self-hosted & private by default — talks to your own gateway, no middleman.
 
 Install (macOS, Linux, or Windows — needs Node.js):
-npx -y @syengup/friday-channel-next@beta --beta
+npx -y @syengup/friday-channel-next
 
 Then open FridayNext and follow the in-app setup. One command, no CLI needed after that.
 
