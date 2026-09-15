@@ -5,13 +5,13 @@
  * and then `broadcastToConnIds("talk.event", …)` to that socket. Plugin HTTP
  * dispatch builds an operator client with scopes but no connId, so a naive
  * `dispatchGatewayMethod("talk.session.*")` returns UNAVAILABLE and PCM never
- * reaches `/friday-next/events`.
+ * 因而 PCM 无法到达 FridayNext 的任何一条 SSE 链路。
  *
  * This bridge:
  *   1. Stamps a synthetic `friday-talk:<deviceId>:<uuid>` onto the request-scope
  *      client before dispatch (same ALS as `dispatchGatewayMethod`).
  *   2. Wraps `context.broadcastToConnIds` once so `talk.event` frames fan out
- *      on the existing SSE stream for that device.
+ *      同时分发到当前 v3 SSE 流与兼容旧客户端的 v1 流。
  *
  * iOS never opens a second operator WebSocket. Native Talk remains the fallback
  * when catalog.realtime.ready is false or create returns 503.
@@ -146,6 +146,9 @@ export function emitTalkSse(deviceId: string, data: Record<string, unknown>): vo
   logger.info(
     `sse type=${eventType} device=${deviceId} session=${sessionId} audioChars=${audio} live=${isLiveTalkEventType(data.type)}`,
   );
+  // FridayNext 1.5+ 只保留一条 v3 长连接。Talk 是实时媒体旁路而非任务运行，
+  // 因此经 v3 连接直接发送，不分配 runtime 游标，也不把 PCM 写入持久任务日志。
+  sseEmitter.broadcastRuntimeLiveToDevice(event, deviceId);
   if (isLiveTalkEventType(data.type)) {
     sseEmitter.broadcastLiveToDevice(event, deviceId, true);
     return;

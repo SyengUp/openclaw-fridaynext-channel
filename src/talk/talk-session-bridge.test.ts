@@ -52,6 +52,36 @@ describe("talk-session-bridge", () => {
     expect(body).not.toMatch(/id: \d+\nevent: talk[\s\S]*YWI=/);
   });
 
+  it("preserves the OpenClaw realtime transcript shape for iOS", () => {
+    const res = new MockRes();
+    sseEmitter.addConnection("PHONE-4", res as never);
+    const connId = mintTalkOwnerConnId("phone-4");
+    rememberTalkSession("sess-live", {
+      kind: "dispatch",
+      deviceId: "PHONE-4",
+      connId,
+    });
+
+    forwardTalkEvents(
+      {
+        type: "transcript",
+        role: "assistant",
+        text: "听见了，主人。很清楚。",
+        final: true,
+        relaySessionId: "sess-live",
+      },
+      new Set([connId]),
+    );
+
+    const body = res.writes.join("");
+    expect(body).toContain("event: talk");
+    expect(body).toContain('"sessionId":"sess-live"');
+    expect(body).toContain('"relaySessionId":"sess-live"');
+    expect(body).toContain('"role":"assistant"');
+    expect(body).toContain('"final":true');
+    expect(body).toContain("听见了，主人。很清楚。");
+  });
+
   it("installTalkEventBridge intercepts talk.event and still calls the original", () => {
     const original = vi.fn();
     const context = { broadcastToConnIds: original };

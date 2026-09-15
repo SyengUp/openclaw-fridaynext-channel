@@ -26,6 +26,7 @@ import {
   setFridayAgentForwardRuntime,
 } from "../../agent-forward-runtime.js";
 import { observeAgentEventForActiveRuns, resetActiveRunsForTest } from "../../agent/active-runs.js";
+import { emitTalkSse } from "../../talk/talk-session-bridge.js";
 
 class MockRes extends EventEmitter {
   statusCode = 0;
@@ -56,6 +57,20 @@ class BackpressuredRes extends EventEmitter {
   release(): void {
     this.blocked = false;
     this.emit("drain");
+  }
+  end(): void {
+    this.emit("finish");
+  }
+}
+
+class StreamingRes extends EventEmitter {
+  statusCode = 0;
+  writes: string[] = [];
+  setHeader(): void {}
+  flushHeaders(): void {}
+  write(chunk: string): boolean {
+    this.writes.push(chunk);
+    return true;
   }
   end(): void {
     this.emit("finish");
@@ -115,6 +130,67 @@ afterEach(() => {
 });
 
 describe("runtime protocol v3", () => {
+  it("multiplexes realtime Talk frames onto the v3 device stream", async () => {
+    configure();
+    const store = getRuntimeV3Store();
+    const request = Object.assign(new EventEmitter(), {
+      method: "GET",
+      url: "/friday-next/v3/events?deviceId=PHONE-1",
+      headers: { authorization: "Bearer tok" },
+    }) as unknown as IncomingMessage;
+    const response = new StreamingRes();
+
+    await handleRuntimeV3Events(request, response as unknown as ServerResponse);
+    emitTalkSse("PHONE-1", {
+      type: "audio",
+      audioBase64: "YWI=",
+      relaySessionId: "talk-1",
+    });
+    emitTalkSse("PHONE-1", {
+      type: "transcript",
+      role: "user",
+      text: "听得到吗",
+      final: true,
+      relaySessionId: "talk-1",
+    });
+
+    const stream = response.writes.join("");
+    expect(stream.match(/event: talk/g)).toHaveLength(2);
+    expect(stream).toContain("YWI=");
+    expect(stream).toContain("听得到吗");
+    expect(store.eventHead("PHONE-1")).toBe(0);
+    request.emit("close");
+  });
+
+  it("queues Talk control frames while the v3 response is backpressured", async () => {
+    configure();
+    const request = Object.assign(new EventEmitter(), {
+      method: "GET",
+      url: "/friday-next/v3/events?deviceId=PHONE-1",
+      headers: { authorization: "Bearer tok" },
+    }) as unknown as IncomingMessage;
+    const response = new BackpressuredRes();
+
+    await handleRuntimeV3Events(request, response as unknown as ServerResponse);
+    emitTalkSse("PHONE-1", {
+      type: "audio",
+      audioBase64: "YWI=",
+      relaySessionId: "talk-1",
+    });
+    emitTalkSse("PHONE-1", {
+      type: "transcript",
+      role: "assistant",
+      text: "听得很清楚",
+      final: true,
+      relaySessionId: "talk-1",
+    });
+
+    expect(response.writes.join("")).not.toContain("听得很清楚");
+    response.release();
+    expect(response.writes.join("")).toContain("听得很清楚");
+    request.emit("close");
+  });
+
   it("pauses durable replay while the response applies backpressure", async () => {
     configure();
     const store = getRuntimeV3Store();

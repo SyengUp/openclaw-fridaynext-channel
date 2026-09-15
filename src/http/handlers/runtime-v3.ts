@@ -13,6 +13,7 @@ import { readSessionTranscriptRawMessages } from "../../history/read-transcript.
 import { resolveHistoryMessageMedia } from "./history-messages.js";
 import { readSessionUsageSnapshot } from "../../session-usage-store.js";
 import { sseEmitter } from "../../sse/emitter.js";
+import type { SseEvent } from "../../sse/emitter.js";
 
 function json(res: ServerResponse, status: number, body: Record<string, unknown>): boolean {
   res.statusCode = status;
@@ -34,6 +35,10 @@ function integerQuery(url: URL, name: string, fallback: number): number {
 
 function writeRuntimeEvent(res: ServerResponse, event: DurableRuntimeEvent): boolean {
   return res.write(`id: ${event.eventId}\nevent: runtime\ndata: ${JSON.stringify(event)}\n\n`);
+}
+
+function writeRuntimeLiveEvent(res: ServerResponse, event: SseEvent): boolean {
+  return res.write(`event: ${event.type}\ndata: ${JSON.stringify(event.data)}\n\n`);
 }
 
 export async function handleRuntimeV3Events(
@@ -63,6 +68,26 @@ export async function handleRuntimeV3Events(
   let replaying = true;
   let closed = false;
   const replayBatchLimit = 256;
+  const liveQueueLimit = 512;
+  const pendingLive: SseEvent[] = [];
+
+  function enqueueLive(event: SseEvent): void {
+    if (pendingLive.length >= liveQueueLimit) {
+      const droppable = pendingLive.findIndex(
+        (candidate) => candidate.data.type === "audio" || candidate.data.type === "inputAudio",
+      );
+      pendingLive.splice(droppable >= 0 ? droppable : 0, 1);
+    }
+    pendingLive.push(event);
+  }
+
+  function pumpLive(): void {
+    if (closed || replaying || waitingDrain) return;
+    while (pendingLive.length > 0 && !waitingDrain) {
+      const event = pendingLive.shift();
+      if (event && !writeRuntimeLiveEvent(res, event)) waitingDrain = true;
+    }
+  }
 
   function pumpReplay(): void {
     if (closed || waitingDrain) return;
@@ -71,6 +96,7 @@ export async function handleRuntimeV3Events(
       const events = store.eventsAfter(deviceId, lastSent, replayBatchLimit);
       if (events.length === 0) {
         replaying = false;
+        pumpLive();
         return;
       }
       for (const event of events) {
@@ -94,10 +120,19 @@ export async function handleRuntimeV3Events(
       replaying = true;
     }
   });
+  const unsubscribeLive = sseEmitter.subscribeRuntimeLive(deviceId, (event) => {
+    if (closed) return;
+    if (replaying || waitingDrain) {
+      enqueueLive(event);
+      return;
+    }
+    if (!writeRuntimeLiveEvent(res, event)) waitingDrain = true;
+  });
 
   const handleDrain = (): void => {
     waitingDrain = false;
-    pumpReplay();
+    if (replaying) pumpReplay();
+    else pumpLive();
   };
   res.on("drain", handleDrain);
 
@@ -132,6 +167,7 @@ export async function handleRuntimeV3Events(
     clearInterval(keepalive);
     res.off("drain", handleDrain);
     unsubscribe();
+    unsubscribeLive();
   });
   return true;
 }

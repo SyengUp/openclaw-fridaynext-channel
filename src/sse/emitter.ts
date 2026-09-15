@@ -45,6 +45,8 @@ type PendingRuntimeDeltaBatch = {
   timer: ReturnType<typeof setTimeout>;
 };
 
+type RuntimeLiveListener = (event: SseEvent) => void;
+
 export class SseConnection {
   readonly deviceId: string;
   /** True when this SSE stream arrived over the public relay (filter-proxy marker). Drives the
@@ -143,6 +145,9 @@ export class SseConnection {
 
 class SseEmitterRegistry {
   private connections = new Map<string, SseConnection>();
+  /** v3 任务事件持久化在 `DurableRunStore`，Realtime Talk 音频则刻意保持瞬时。
+   * 这些监听器让 v3 HTTP 流复用实时旁路，无需伪造任务运行或把 PCM 写入 runtime 日志。 */
+  private runtimeLiveListeners = new Map<string, Set<RuntimeLiveListener>>();
   private runEmitter = new Map<string, Set<string>>();
   private lastRunIdByDevice = new Map<string, string>();
   private eventSeqByDevice = new Map<string, number>();
@@ -370,6 +375,24 @@ class SseEmitterRegistry {
     return this.connections.size;
   }
 
+  subscribeRuntimeLive(deviceId: string, listener: RuntimeLiveListener): () => void {
+    const key = deviceId.trim().toUpperCase();
+    const listeners = this.runtimeLiveListeners.get(key) ?? new Set<RuntimeLiveListener>();
+    listeners.add(listener);
+    this.runtimeLiveListeners.set(key, listeners);
+    return () => {
+      const current = this.runtimeLiveListeners.get(key);
+      current?.delete(listener);
+      if (current?.size === 0) this.runtimeLiveListeners.delete(key);
+    };
+  }
+
+  broadcastRuntimeLiveToDevice(event: SseEvent, deviceId: string): void {
+    const key = deviceId.trim().toUpperCase();
+    if (!key) return;
+    for (const listener of this.runtimeLiveListeners.get(key) ?? []) listener(event);
+  }
+
   setBacklogLimit(limit: number): void {
     this.backlogLimit = Math.max(0, Math.floor(limit));
   }
@@ -547,6 +570,7 @@ class SseEmitterRegistry {
   resetForTest(): void {
     for (const c of this.connections.values()) c.close();
     this.connections.clear();
+    this.runtimeLiveListeners.clear();
     this.runEmitter.clear();
     this.lastRunIdByDevice.clear();
     this.eventSeqByDevice.clear();
