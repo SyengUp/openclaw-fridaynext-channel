@@ -26,10 +26,7 @@
 const WINDOW_MS = 10 * 60_000;
 
 const MAX_TRACKED = 64;
-const runs = new Map<
-  string,
-  { atMs: number; agentId: string | null; fallbackClaimed: boolean }
->();
+const runs = new Map<string, { atMs: number; agentId: string | null; fallbackClaimed: boolean }>();
 
 function prune(nowMs: number): void {
   for (const [runId, run] of runs) {
