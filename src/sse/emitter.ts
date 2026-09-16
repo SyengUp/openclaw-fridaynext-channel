@@ -266,6 +266,27 @@ class SseEmitterRegistry {
     });
   }
 
+  /**
+   * v3 账本/直发的瘦身：累计 `text` 对按 `delta ?? text` 消费的 v3 客户端是纯冗余，而它
+   * 与每帧 delta 双发会让长思考 run 的投递账本膨胀（实测单个 852s run 的账本 gzip 前
+   * 80MB、1668 个事件、平均 48KB/事件），任何全量读账本的路径（ack 压缩、重连回放）都
+   * 随之被放大。仅当帧内携带非空 delta 时才丢弃累计 text；没有 delta 的帧保持原样
+   * （那是唯一的兜底数据）。v2 兼容队列/连接走 `SseConnection`，不经过这里。
+   */
+  private slimRuntimeTextPayload(event: SseEvent): SseEvent {
+    if (event.type !== "agent") return event;
+    const stream = typeof event.data.stream === "string" ? event.data.stream.toLowerCase() : "";
+    if (stream !== "thinking" && stream !== "reasoning" && stream !== "assistant") return event;
+    const inner = event.data.data;
+    if (!inner || typeof inner !== "object" || Array.isArray(inner)) return event;
+    const record = inner as Record<string, unknown>;
+    if (typeof record.delta !== "string" || record.delta.length === 0) return event;
+    if (!("text" in record)) return event;
+    const slim: Record<string, unknown> = { ...record };
+    delete slim.text;
+    return { ...event, data: { ...event.data, data: slim } };
+  }
+
   private mirrorIntoRuntimeV3(
     event: SseEvent,
     hintedRunId?: string,
@@ -273,15 +294,16 @@ class SseEmitterRegistry {
   ): void {
     const store = runtimeV3StoreIfInitialized();
     if (!store) return;
-    const rawRunId = hintedRunId ?? event.data.runId;
+    const mirror = this.slimRuntimeTextPayload(event);
+    const rawRunId = hintedRunId ?? mirror.data.runId;
     const runId = typeof rawRunId === "string" ? rawRunId.trim() : "";
     if (!runId) return;
-    const rawDeviceId = hintedDeviceId ?? event.data.deviceId;
+    const rawDeviceId = hintedDeviceId ?? mirror.data.deviceId;
     const deviceId = typeof rawDeviceId === "string" ? rawDeviceId.trim().toUpperCase() : "";
     let run = store.run(runId);
     if (!run && deviceId) {
       const sessionKey =
-        typeof event.data.sessionKey === "string" ? event.data.sessionKey.trim() : "";
+        typeof mirror.data.sessionKey === "string" ? mirror.data.sessionKey.trim() : "";
       const agentId = sessionKey.match(/^agent:([^:]+):/i)?.[1] ?? "main";
       if (sessionKey) {
         run = store.observeRun({
@@ -289,10 +311,10 @@ class SseEmitterRegistry {
           sessionKey,
           agentId,
           deviceIds: [deviceId],
-          occurredAt: typeof event.data.ts === "number" ? event.data.ts : undefined,
-          rootRunId: typeof event.data.rootRunId === "string" ? event.data.rootRunId : undefined,
+          occurredAt: typeof mirror.data.ts === "number" ? mirror.data.ts : undefined,
+          rootRunId: typeof mirror.data.rootRunId === "string" ? mirror.data.rootRunId : undefined,
           parentRunId:
-            typeof event.data.parentRunId === "string" ? event.data.parentRunId : undefined,
+            typeof mirror.data.parentRunId === "string" ? mirror.data.parentRunId : undefined,
           sourceKind: structuredRunSource(runId),
         });
       }
@@ -300,72 +322,72 @@ class SseEmitterRegistry {
       run = store.attachDeviceToRun(runId, deviceId);
     }
     if (!run) return;
-    const sourceKey = this.runtimeSourceKey(event);
+    const sourceKey = this.runtimeSourceKey(mirror);
     if (sourceKey) {
       const seen = this.persistedRuntimeSourceKeys(store, runId);
       if (seen.has(sourceKey)) return;
       seen.add(sourceKey);
     }
-    const phase = typeof event.data.phase === "string" ? event.data.phase.toLowerCase() : "";
-    const stream = typeof event.data.stream === "string" ? event.data.stream.toLowerCase() : "";
+    const phase = typeof mirror.data.phase === "string" ? mirror.data.phase.toLowerCase() : "";
+    const stream = typeof mirror.data.stream === "string" ? mirror.data.stream.toLowerCase() : "";
     const dataRecord =
-      event.data.data && typeof event.data.data === "object" && !Array.isArray(event.data.data)
-        ? (event.data.data as Record<string, unknown>)
+      mirror.data.data && typeof mirror.data.data === "object" && !Array.isArray(mirror.data.data)
+        ? (mirror.data.data as Record<string, unknown>)
         : null;
     const nestedPhase =
       typeof dataRecord?.phase === "string" ? dataRecord.phase.toLowerCase() : phase;
-    let eventType: string = event.type;
-    if (event.type === "agent") {
+    let eventType: string = mirror.type;
+    if (mirror.type === "agent") {
       if (stream === "lifecycle" && nestedPhase === "start") eventType = "run.started";
       else if (stream === "lifecycle" && nestedPhase === "end") eventType = "run.completed";
       else if (stream === "lifecycle" && nestedPhase === "error") eventType = "run.failed";
       else eventType = `agent.${stream || "event"}.${nestedPhase || "update"}`;
-    } else if (event.type === "deliver") {
-      const kind = typeof event.data.kind === "string" ? event.data.kind.toLowerCase() : "event";
+    } else if (mirror.type === "deliver") {
+      const kind = typeof mirror.data.kind === "string" ? mirror.data.kind.toLowerCase() : "event";
       eventType = `deliver.${kind}`;
-    } else if (event.type === "outbound") {
-      const op = typeof event.data.op === "string" ? event.data.op.toLowerCase() : "event";
+    } else if (mirror.type === "outbound") {
+      const op = typeof mirror.data.op === "string" ? mirror.data.op.toLowerCase() : "event";
       eventType = op === "dispatch_error" ? "run.failed" : `outbound.${op}`;
-    } else if (event.type === "tool-hook") {
+    } else if (mirror.type === "tool-hook") {
       eventType = `tool.${phase || "update"}`;
-    } else if (event.type === "subagent") {
+    } else if (mirror.type === "subagent") {
       eventType = `subagent.${phase || "update"}`;
-    } else if (event.type === "approval") {
-      const op = typeof event.data.op === "string" ? event.data.op.toLowerCase() : "update";
+    } else if (mirror.type === "approval") {
+      const op = typeof mirror.data.op === "string" ? mirror.data.op.toLowerCase() : "update";
       eventType = `approval.${op}`;
-    } else if (event.type === "question") {
-      const op = typeof event.data.op === "string" ? event.data.op.toLowerCase() : "update";
+    } else if (mirror.type === "question") {
+      const op = typeof mirror.data.op === "string" ? mirror.data.op.toLowerCase() : "update";
       eventType = `question.${op}`;
-    } else if (event.type === "fridaynext-health-query") {
+    } else if (mirror.type === "fridaynext-health-query") {
       eventType = "device.health.request";
-    } else if (event.type === "fridaynext-health-log") {
+    } else if (mirror.type === "fridaynext-health-log") {
       eventType = "device.health.request";
-    } else if (event.type === "fridaynext-calendar-query") {
+    } else if (mirror.type === "fridaynext-calendar-query") {
       eventType = "device.calendar.request";
-    } else if (event.type === "fridaynext-calendar-log") {
+    } else if (mirror.type === "fridaynext-calendar-log") {
       eventType = "device.calendar.request";
-    } else if (event.type === "fridaynext-location-query") {
+    } else if (mirror.type === "fridaynext-location-query") {
       eventType = "device.location.request";
     }
     // 现场 assistant 带 delta 字段却没有 phase，被映射为 .update；不能只看事件名后缀。
     // 仅合并可追加的文本更新及明确隐藏的候选进度，工具和生命周期仍作为顺序屏障。
     const textUpdate =
-      event.type === "agent" &&
+      mirror.type === "agent" &&
       ["assistant", "thinking", "reasoning"].includes(stream) &&
       (nestedPhase === "" || nestedPhase === "update" || nestedPhase === "delta") &&
       typeof dataRecord?.delta === "string";
     const hiddenCandidateUpdate =
-      event.type === "agent" &&
+      mirror.type === "agent" &&
       stream === "item" &&
       nestedPhase === "update" &&
       dataRecord?.hideFromChannelProgress === true &&
       dataRecord?.kind === "answer_candidate";
     if (eventType.endsWith(".delta") || textUpdate || hiddenCandidateUpdate) {
-      this.enqueueRuntimeDelta(store, runId, eventType, event);
+      this.enqueueRuntimeDelta(store, runId, eventType, mirror);
       return;
     }
     this.flushRuntimeV3Run(runId);
-    this.appendRuntimeMirror(store, runId, eventType, [event]);
+    this.appendRuntimeMirror(store, runId, eventType, [mirror]);
     if (eventType === "run.completed" || eventType === "run.failed") {
       clearStructuredRunSource(runId);
     }

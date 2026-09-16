@@ -207,7 +207,21 @@ describe("sseEmitter", () => {
           ? payload._sourceEventBatch
           : [{ type: payload._sourceEventType, data: payload._sourceEventData }],
       );
-    expect(replay).toEqual(sources);
+    // v3 账本有意剥离「delta 非空帧」的累计 text（见 slimRuntimeTextPayload：长思考 run
+    // 的账本体积控制）；除该字段外，回放的源事件必须与捕获时完全一致且顺序不变。
+    const withoutCumulativeText = (event: {
+      type: unknown;
+      data: { [key: string]: unknown };
+    }): { type: unknown; data: { [key: string]: unknown } } => {
+      const inner = event.data.data;
+      if (!inner || typeof inner !== "object" || Array.isArray(inner)) return event;
+      const record = inner as Record<string, unknown>;
+      if (typeof record.delta !== "string" || !("text" in record)) return event;
+      const slim = { ...record };
+      delete slim.text;
+      return { ...event, data: { ...event.data, data: slim } };
+    };
+    expect(replay).toEqual(sources.map(withoutCumulativeText));
   });
 
   it("flushes updates on the timer and keeps concurrent runs isolated", async () => {
@@ -305,6 +319,88 @@ describe("sseEmitter", () => {
           : [{ type: payload._sourceEventType, data: payload._sourceEventData }],
       ),
     ).toHaveLength(12);
+  });
+
+  it("drops the cumulative thinking text from the v3 ledger once a non-empty delta exists", () => {
+    setRuntimeV3RootForTest(path.join(tmp, "runtime-v3-slim"));
+    const store = getRuntimeV3Store();
+    const run = store.acceptCommand({
+      clientRequestId: "slim-thinking",
+      deviceId: "DEVICE-SLIM",
+      sessionKey: "agent:main:slim",
+      agentId: "main",
+      text: "test",
+      attachments: [],
+    }).run!;
+    sseEmitter.broadcastToRun(run.runId, {
+      type: "agent",
+      data: {
+        runId: run.runId,
+        seq: 1,
+        stream: "thinking",
+        data: {
+          text: `cumulative ${"long ".repeat(2000)}`,
+          delta: "step two",
+          reasoningPrefixChars: 20_000,
+        },
+      },
+    });
+    sseEmitter.flushRuntimeV3Run(run.runId);
+
+    const [event] = store.eventsForRun(run.runId);
+    const source = event.payload._sourceEventData as {
+      data: { text?: string; delta?: string; reasoningPrefixChars?: number };
+    };
+    expect(source.data.delta).toBe("step two");
+    expect(source.data.reasoningPrefixChars).toBe(20_000);
+    // 累计 text 与 delta 双发曾让单 run 账本膨胀到 80MB；v3 客户端各消费点均为
+    // `delta ?? text`，delta 非空时累计 text 是纯冗余。
+    expect(source.data.text).toBeUndefined();
+  });
+
+  it("keeps the cumulative thinking text when a frame carries no delta", () => {
+    setRuntimeV3RootForTest(path.join(tmp, "runtime-v3-keep"));
+    const store = getRuntimeV3Store();
+    const run = store.acceptCommand({
+      clientRequestId: "keep-thinking",
+      deviceId: "DEVICE-KEEP",
+      sessionKey: "agent:main:keep",
+      agentId: "main",
+      text: "test",
+      attachments: [],
+    }).run!;
+    sseEmitter.broadcastToRun(run.runId, {
+      type: "agent",
+      data: {
+        runId: run.runId,
+        seq: 1,
+        stream: "thinking",
+        data: { text: "cumulative only" },
+      },
+    });
+    sseEmitter.flushRuntimeV3Run(run.runId);
+
+    const [event] = store.eventsForRun(run.runId);
+    const source = event.payload._sourceEventData as { data: { text?: string; delta?: string } };
+    expect(source.data.text).toBe("cumulative only");
+    expect(source.data.delta).toBeUndefined();
+  });
+
+  it("keeps the full cumulative text on the v2 compatibility queue", () => {
+    const frame = {
+      type: "agent" as const,
+      data: {
+        runId: "run-v2-compat",
+        seq: 1,
+        stream: "thinking",
+        data: { text: "cumulative v2", delta: " v2" },
+      },
+    };
+    sseEmitter.broadcast(frame, "DEVICE-V2");
+    const [entry] = fridaySseOfflineQueue.readAfter("DEVICE-V2", 0);
+    const source = entry.data as { data: { text?: string; delta?: string } };
+    expect(source.data.text).toBe("cumulative v2");
+    expect(source.data.delta).toBe(" v2");
   });
 
   it("mirrors the same core source event only once", () => {

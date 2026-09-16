@@ -14,6 +14,9 @@ import { resolveHistoryMessageMedia } from "./history-messages.js";
 import { readSessionUsageSnapshot } from "../../session-usage-store.js";
 import { sseEmitter } from "../../sse/emitter.js";
 import type { SseEvent } from "../../sse/emitter.js";
+import { createFridayNextLogger } from "../../logging.js";
+
+const logger = createFridayNextLogger("runtime-v3", "info");
 
 function json(res: ServerResponse, status: number, body: Record<string, unknown>): boolean {
   res.statusCode = status;
@@ -62,21 +65,47 @@ export async function handleRuntimeV3Events(
   res.setHeader("Connection", "keep-alive");
   res.setHeader("X-Accel-Buffering", "no");
   res.flushHeaders();
+  logger.info(
+    `connect device=${deviceId} afterEventId=${afterEventId} head=${store.eventHead(deviceId)} floor=${store.eventFloor(deviceId)}`,
+  );
 
   let lastSent = afterEventId;
   let waitingDrain = false;
   let replaying = true;
   let closed = false;
+  let replayedCount = 0;
+  let replayLogged = false;
   const replayBatchLimit = 256;
   const liveQueueLimit = 512;
   const pendingLive: SseEvent[] = [];
+
+  // 背压此前完全静默：慢连接会让事件直发与 keepalive 一起停摆，App 侧 60s 无字节就判
+  // 半死重连，而从网关日志看不出任何痕迹。这里至少把进入背压的时刻钉进日志。
+  function markBackpressure(): void {
+    if (waitingDrain) return;
+    waitingDrain = true;
+    logger.warn(
+      `backpressure device=${deviceId} lastSent=${lastSent} pendingLive=${pendingLive.length}`,
+    );
+  }
+
+  function logReplayDone(): void {
+    if (replayLogged) return;
+    replayLogged = true;
+    logger.info(
+      `replay device=${deviceId} afterEventId=${afterEventId} count=${replayedCount} head=${store.eventHead(deviceId)}`,
+    );
+  }
 
   function enqueueLive(event: SseEvent): void {
     if (pendingLive.length >= liveQueueLimit) {
       const droppable = pendingLive.findIndex(
         (candidate) => candidate.data.type === "audio" || candidate.data.type === "inputAudio",
       );
-      pendingLive.splice(droppable >= 0 ? droppable : 0, 1);
+      const [dropped] = pendingLive.splice(droppable >= 0 ? droppable : 0, 1);
+      logger.warn(
+        `drop-live device=${deviceId} event=${dropped?.type ?? "unknown"} pendingLive=${pendingLive.length}`,
+      );
     }
     pendingLive.push(event);
   }
@@ -85,7 +114,7 @@ export async function handleRuntimeV3Events(
     if (closed || replaying || waitingDrain) return;
     while (pendingLive.length > 0 && !waitingDrain) {
       const event = pendingLive.shift();
-      if (event && !writeRuntimeLiveEvent(res, event)) waitingDrain = true;
+      if (event && !writeRuntimeLiveEvent(res, event)) markBackpressure();
     }
   }
 
@@ -96,14 +125,16 @@ export async function handleRuntimeV3Events(
       const events = store.eventsAfter(deviceId, lastSent, replayBatchLimit);
       if (events.length === 0) {
         replaying = false;
+        logReplayDone();
         pumpLive();
         return;
       }
       for (const event of events) {
         if (event.eventId <= lastSent) continue;
         lastSent = event.eventId;
+        replayedCount += 1;
         if (!writeRuntimeEvent(res, event)) {
-          waitingDrain = true;
+          markBackpressure();
           return;
         }
       }
@@ -116,7 +147,7 @@ export async function handleRuntimeV3Events(
     if (replaying || waitingDrain) return;
     lastSent = event.eventId;
     if (!writeRuntimeEvent(res, event)) {
-      waitingDrain = true;
+      markBackpressure();
       replaying = true;
     }
   });
@@ -126,7 +157,7 @@ export async function handleRuntimeV3Events(
       enqueueLive(event);
       return;
     }
-    if (!writeRuntimeLiveEvent(res, event)) waitingDrain = true;
+    if (!writeRuntimeLiveEvent(res, event)) markBackpressure();
   });
 
   const handleDrain = (): void => {
@@ -138,26 +169,30 @@ export async function handleRuntimeV3Events(
 
   const head = store.eventHead(deviceId);
   const floor = store.eventFloor(deviceId);
-  waitingDrain = !res.write(
-    `event: hello\ndata: ${JSON.stringify({
-      protocolVersion: 3,
-      pluginVersion: PLUGIN_VERSION,
-      serverInstanceId: store.serverInstanceId,
-      deviceId,
-      floorEventId: floor,
-      headEventId: head,
-      acknowledgedEventId: store.acknowledgedEventId(deviceId),
-      unfinishedRuns: store.unfinishedRuns(deviceId),
-      pendingDeviceRequests: store.pendingDeviceRequests(deviceId),
-    })}\n\n`,
-  );
+  if (
+    !res.write(
+      `event: hello\ndata: ${JSON.stringify({
+        protocolVersion: 3,
+        pluginVersion: PLUGIN_VERSION,
+        serverInstanceId: store.serverInstanceId,
+        deviceId,
+        floorEventId: floor,
+        headEventId: head,
+        acknowledgedEventId: store.acknowledgedEventId(deviceId),
+        unfinishedRuns: store.unfinishedRuns(deviceId),
+        pendingDeviceRequests: store.pendingDeviceRequests(deviceId),
+      })}\n\n`,
+    )
+  ) {
+    markBackpressure();
+  }
   lastSent = floor > 0 && afterEventId < floor - 1 ? floor - 1 : afterEventId;
   pumpReplay();
 
   const keepalive = setInterval(() => {
     if (closed || waitingDrain) return;
     if (!res.write(": keepalive\n\n")) {
-      waitingDrain = true;
+      markBackpressure();
       replaying = true;
     }
   }, 15_000);
@@ -168,6 +203,9 @@ export async function handleRuntimeV3Events(
     res.off("drain", handleDrain);
     unsubscribe();
     unsubscribeLive();
+    logger.info(
+      `disconnect device=${deviceId} lastSent=${lastSent} replayed=${replayedCount} pendingLive=${pendingLive.length}`,
+    );
   });
   return true;
 }

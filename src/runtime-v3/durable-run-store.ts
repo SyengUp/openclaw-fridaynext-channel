@@ -333,6 +333,14 @@ export class DurableRunStore {
   private readonly deletedRequestsByKey = new Map<string, DurableDeletedRequest>();
   private readonly deletedRunIds = new Set<string>();
   private readonly listenersByDevice = new Map<string, Set<(event: DurableRuntimeEvent) => void>>();
+  /**
+   * 进程内投递事件缓存（按规范化 deviceId）。投递日志是本进程独占写的 JSONL，本类所有
+   * 追加（appendRunEvent / attachDeviceToRun）与压缩（ack / 删除）都同步维护此缓存，
+   * 因此它始终是日志的权威镜像。此前每次 ack/replay 都对整个文件 readFileSync + 逐行
+   * JSON.parse——一次 852s run 的账本曾达 80MB 级（累计 text 与 delta 双发），重连回放
+   * 每 256 条就要全量重读一遍。调用方只读，勿原地修改返回的数组。
+   */
+  private readonly deliveryEventsByDevice = new Map<string, DurableRuntimeEvent[]>();
   private pushCursors: Record<string, number> = {};
   readonly serverInstanceId: string;
 
@@ -501,6 +509,7 @@ export class DurableRunStore {
       };
       this.appendLineDurable(this.deliveryFile(deviceId), event);
       this.eventHeadByDevice.set(deviceId, event.eventId);
+      this.deliveryEventsByDevice.get(deviceId)?.push(event);
       for (const listener of this.listenersByDevice.get(deviceId) ?? []) listener(event);
     }
     return updated;
@@ -678,6 +687,8 @@ export class DurableRunStore {
       };
       this.appendLineDurable(this.deliveryFile(deviceId), event);
       this.eventHeadByDevice.set(deviceId, event.eventId);
+      // eventId 单调（eventHead + 1），push 到尾部即保持排序；未建立缓存则不强制加载。
+      this.deliveryEventsByDevice.get(deviceId)?.push(event);
       return { deviceId, event };
     });
     const event = events[0].event;
@@ -1184,10 +1195,20 @@ export class DurableRunStore {
     // after this write can at worst leave extra replayable bytes, never reuse an ID.
     this.persistEventHeads();
     this.writeJSONLinesAtomically(this.deliveryFile(normalized), remaining);
+    this.deliveryEventsByDevice.set(normalized, remaining);
   }
 
   private readDeliveryEvents(deviceId: string): DurableRuntimeEvent[] {
-    const file = this.deliveryFile(normalizedDeviceId(deviceId));
+    const normalized = normalizedDeviceId(deviceId);
+    const cached = this.deliveryEventsByDevice.get(normalized);
+    if (cached) return cached;
+    const events = this.loadDeliveryEventsFromDisk(normalized);
+    this.deliveryEventsByDevice.set(normalized, events);
+    return events;
+  }
+
+  private loadDeliveryEventsFromDisk(normalizedDeviceId: string): DurableRuntimeEvent[] {
+    const file = this.deliveryFile(normalizedDeviceId);
     if (!fs.existsSync(file)) return [];
     const events: DurableRuntimeEvent[] = [];
     for (const line of fs.readFileSync(file, "utf8").split(/\r?\n/)) {
@@ -1326,6 +1347,9 @@ export class DurableRunStore {
         if (retained.length !== parsedEventCount) this.writeJSONLinesAtomically(file, retained);
       }
     }
+    // 这里直接重写了各设备的投递日志（文件名为 sha256，无法映射回 deviceId），
+    // 让整个投递缓存失效，下次读取从磁盘重建。
+    this.deliveryEventsByDevice.clear();
     for (const runId of this.deletedRunIds) {
       fs.rmSync(this.runSnapshotFile(runId), { force: true });
     }

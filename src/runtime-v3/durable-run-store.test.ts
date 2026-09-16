@@ -230,6 +230,32 @@ describe("DurableRunStore", () => {
     expect(reconstructed.run(run.runId)?.lastRunSeq).toBe(2);
   });
 
+  it("serves repeated delivery reads from an in-process cache instead of re-parsing the journal", () => {
+    const { store } = makeStore();
+    const run = store.acceptCommand(command()).run!;
+    store.appendRunEvent(run.runId, "run.started", { phase: "start" });
+    store.appendRunEvent(run.runId, "agent.thinking.update", { delta: "a" });
+    store.appendRunEvent(run.runId, "agent.thinking.update", { delta: "b" });
+
+    // 首次读取从磁盘重建并缓存。
+    expect(store.eventsAfter("PHONE-1", 0)).toHaveLength(3);
+
+    // 长 run 的投递账本可达数十 MB；ack/replay 每次全量 readFileSync + 逐行 JSON.parse
+    // 曾在一次 852s run 期间把常驻内存推到 4GB+。缓存命中后不得再触碰磁盘。
+    const spy = vi.spyOn(fs, "readFileSync");
+    expect(store.eventsAfter("PHONE-1", 0)).toHaveLength(3);
+    expect(store.eventsAfter("PHONE-1", 1)).toHaveLength(2);
+    expect(store.eventFloor("PHONE-1")).toBe(1);
+    expect(spy.mock.calls.filter(([file]) => String(file).includes("delivery"))).toEqual([]);
+    spy.mockRestore();
+
+    // append / ack 压缩必须同步缓存，缓存绝不返回陈旧内容。
+    store.appendRunEvent(run.runId, "run.completed", {});
+    expect(store.eventsAfter("PHONE-1", 3).map((event) => event.eventId)).toEqual([4]);
+    store.acknowledge("PHONE-1", 4);
+    expect(store.eventsAfter("PHONE-1", 0)).toEqual([]);
+  });
+
   it("compacts acknowledged terminal delivery events without losing the process snapshot or event head", () => {
     const { root, store } = makeStore();
     const run = store.acceptCommand(command()).run!;
