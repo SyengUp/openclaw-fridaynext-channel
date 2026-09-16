@@ -189,6 +189,18 @@ export function startFilterProxy(
       res.end();
     });
     req.pipe(upstream);
+    // 客户端中途断开（弱网/强制重连/半死 socket）必须传播到 core，否则 SSE handler
+    //（v2/v3 两条流）永远等不到 close：连接、订阅 listener 与写缓冲全部悬挂——实测
+    // App 连续重连后网关残留多条死链（5 次重连 = 5 条 ESTABLISHED、0 条 disconnect），
+    // 之后每个事件被写入 N 份，内存与 CPU 按悬挂数放大。
+    // 与 upgrade 路径的 closeBoth 同理，但 HTTP 路径要区分「完成」与「中止」：
+    // `close` 在两种情况下都会触发，用 writableFinished/writableEnded 甄别。
+    res.on("close", () => {
+      if (!res.writableFinished) upstream.destroy();
+    });
+    upstream.on("close", () => {
+      if (!res.writableEnded) res.destroy();
+    });
   });
 
   // Upgraded sockets are detached from the http server on 'upgrade', so neither close() nor
