@@ -6,6 +6,7 @@ import { fridayNextChannelPlugin } from "./channel.js";
 import { sseEmitter } from "./sse/emitter.js";
 import { setOfflineQueueBaseDirForTest } from "./sse/offline-queue.js";
 import { registerRunRoute } from "./run-metadata.js";
+import { getRuntimeV3Store, setRuntimeV3RootForTest } from "./runtime-v3/runtime-store.js";
 import {
   createTempHistoryDir,
   removeTempHistoryDir,
@@ -80,6 +81,7 @@ describe("friday-next channel outbound sessionKey routing", () => {
 
   afterEach(() => {
     setOfflineQueueBaseDirForTest(null);
+    setRuntimeV3RootForTest(null);
     removeTempHistoryDir(historyDir);
   });
 
@@ -136,6 +138,26 @@ describe("friday-next channel outbound sessionKey routing", () => {
     const evt = parseOutboundFrames(res).find((f) => f.type === "outbound" && f.data.op === "text");
     // No mapping registered for this device → synthesized device-level fallback.
     expect(evt?.data.sessionKey).toBe(`agent:main:friday-next-${deviceId}`);
+  });
+
+  it("sendText reaches a v3-only online device (no v2 connection)", async () => {
+    const deviceId = "DEV-V3-ONLY";
+    const runId = "run-v3-only";
+    const sessionKey = "agent:operator:friday-next:direct:v3-only";
+    registerRunRoute({ runId, deviceId, sessionKey });
+    sseEmitter.trackDeviceForRun(deviceId, runId);
+
+    // 1.5 App 只连 v3：v3 SSE handler 连接时仅注册 store listener，不进 v2 emitter。
+    // 旧口径只查 v2 连接 → 误判离线 → 整个 broadcast 被跳过，消息在 v3 侧彻底丢失。
+    setRuntimeV3RootForTest(path.join(historyDir, "runtime-v3-sendtext"));
+    const store = getRuntimeV3Store();
+    store.observeRun({ runId, sessionKey, agentId: "operator", deviceIds: [deviceId] });
+    const received: string[] = [];
+    store.subscribe(deviceId, (event) => received.push(event.eventType));
+
+    await outbound.sendText({ to: deviceId, text: "hi from v3" });
+
+    expect(received).toContain("outbound.text");
   });
 
   it("sendMedia carries the run's sessionKey (recovered via run-route)", async () => {

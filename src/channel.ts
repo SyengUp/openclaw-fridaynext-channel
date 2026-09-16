@@ -32,6 +32,7 @@ import {
   getLastRegisteredFridayDeviceId,
 } from "./friday-session.js";
 import { getRunRoute } from "./run-metadata.js";
+import { deviceOnlineForToolRequests } from "./tools/device-tool-route.js";
 import { isOperatorToolResultEnvelope } from "./operator-tool-result.js";
 import { getLastFridayInboundAt } from "./friday-inbound-stats.js";
 import { fridayApprovalCapability } from "./approval/friday-approval-capability.js";
@@ -294,13 +295,16 @@ export const fridayNextChannelPlugin = createChatChannelPlugin({
       const runId = runIdFromCtx ?? sseEmitter.getLastRunIdForDevice(deviceId) ?? undefined;
       const sessionKey = resolveOutboundSessionKey(deviceId, runId, rawCtx);
 
-      const conn = sseEmitter.getConnection(deviceId);
+      // 在线判定必须同时接受 v1/v3 两种 SSE 面：1.5 App 只连 v3（handler 仅注册
+      // store listener，不进 emitter 连接表），旧口径只查 v2 连接会把在线的 v3 设备
+      // 误判离线并跳过整个 broadcast——消息在 v3 侧彻底丢失。
+      const online = deviceOnlineForToolRequests(deviceId);
 
       logger.info(
-        `[SEND_TEXT] to=${deviceId} runId=${runId ?? "(none)"} sessionKey=${sessionKey ?? "(none)"} textLen=${text.length} online=${!!conn}`,
+        `[SEND_TEXT] to=${deviceId} runId=${runId ?? "(none)"} sessionKey=${sessionKey ?? "(none)"} textLen=${text.length} online=${online}`,
       );
 
-      if (conn) {
+      if (online) {
         sseEmitter.broadcast(
           {
             type: "outbound",
