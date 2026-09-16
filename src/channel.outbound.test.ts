@@ -160,6 +160,27 @@ describe("friday-next channel outbound sessionKey routing", () => {
     expect(received).toContain("outbound.text");
   });
 
+  it("sendMedia reaches a v3-only online device (no v2 connection)", async () => {
+    const deviceId = "DEV-V3-ONLY-MEDIA";
+    const runId = "run-v3-only-media";
+    const sessionKey = "agent:operator:friday-next:direct:v3-only-media";
+    const mediaFile = path.join(historyDir, "shot-v3.png");
+    fs.writeFileSync(mediaFile, "png-bytes");
+    registerRunRoute({ runId, deviceId, sessionKey });
+    sseEmitter.trackDeviceForRun(deviceId, runId);
+
+    // 与 sendText 同理：v3-only 在线设备在旧口径下被判离线，media broadcast 被整段跳过。
+    setRuntimeV3RootForTest(path.join(historyDir, "runtime-v3-sendmedia"));
+    const store = getRuntimeV3Store();
+    store.observeRun({ runId, sessionKey, agentId: "operator", deviceIds: [deviceId] });
+    const received: string[] = [];
+    store.subscribe(deviceId, (event) => received.push(event.eventType));
+
+    await outbound.sendMedia({ to: deviceId, text: "caption", mediaUrl: mediaFile });
+
+    expect(received).toContain("outbound.media");
+  });
+
   it("sendMedia carries the run's sessionKey (recovered via run-route)", async () => {
     const deviceId = "DEV-MEDIA-1";
     const runId = "run-media-1";

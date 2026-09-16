@@ -405,12 +405,13 @@ export const fridayNextChannelPlugin = createChatChannelPlugin({
           );
           const publicUrl = fnoss ?? tunnelUrl;
 
-          const conn = sseEmitter.getConnection(deviceId);
+          // 与 sendText 同理：在线判定必须覆盖 v3（1.5 App 只连 v3，不进 emitter 连接表）。
+          const online = deviceOnlineForToolRequests(deviceId);
           logger.info(
-            `[SEND_MEDIA] to=${deviceId} runId=${runId ?? "(none)"} sessionKey=${sessionKey ?? "(none)"} audioAsVoice=${audioAsVoice} url=${publicUrl} online=${!!conn}`,
+            `[SEND_MEDIA] to=${deviceId} runId=${runId ?? "(none)"} sessionKey=${sessionKey ?? "(none)"} audioAsVoice=${audioAsVoice} url=${publicUrl} online=${online}`,
           );
 
-          if (conn) {
+          if (online) {
             sseEmitter.broadcast(
               {
                 type: "outbound",
