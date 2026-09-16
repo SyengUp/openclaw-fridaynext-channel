@@ -93,21 +93,36 @@ if [[ "$DO_RESTART" == "1" ]]; then
 fi
 
 # ---- 5. 健康检查 ----------------------------------------------------------
+# Token 兼容两种形态：明文（旧配置）与 store 引用（`gateway.auth.token` =
+# {source,provider,id}，2026-09 起 OpenClaw 把明文迁进 state sqlite 的
+# `secret_store_entries`）。旧脚本只读明文 → 迁移后返回空 token → curl 401，
+# 而"非 HTML 即正常"的断言会把 401 当成功、掩盖问题。
 if [[ "$DO_VERIFY" == "1" ]]; then
   say "健康检查（等待启动）"
   sleep 6
   ssh "$HOST" 'export PATH=/opt/homebrew/opt/node/bin:$PATH; \
-    TOKEN=$(python3 -c "import json,sys,re
-try:
-  d=json.load(open(\"$HOME/.openclaw/openclaw.json\"))
-  print(d.get(\"gateway\",{}).get(\"auth\",{}).get(\"token\",\"\"))
-except Exception:
-  s=open(\"$HOME/.openclaw/openclaw.json\").read()
-  m=re.search(r\"[\x27\\\"]?token[\x27\\\"]?\\s*:\\s*[\x27\\\"]([^\x27\\\"]+)\",s)
-  print(m.group(1) if m else \"\")"); \
+    TOKEN=$(python3 -c "import json,os,sqlite3
+h=os.path.expanduser(\"~\")
+t=(json.load(open(h+\"/.openclaw/openclaw.json\")).get(\"gateway\") or {}).get(\"auth\",{}).get(\"token\",\"\")
+if isinstance(t,str):
+  print(t)
+elif isinstance(t,dict) and t.get(\"id\"):
+  try:
+    con=sqlite3.connect(h+\"/.openclaw/state/openclaw.sqlite\")
+    sql=\"SELECT value FROM secret_store_entries WHERE name=? AND deleted_at_ms IS NULL ORDER BY updated_at_ms DESC LIMIT 1\"
+    r=con.execute(sql,(t[\"id\"],)).fetchone()
+    print(r[0] if r else \"\")
+  except Exception:
+    print(\"\")
+else:
+  print(\"\")"); \
+    if [ -z "$TOKEN" ]; then echo "✗ 无法解析网关 token（openclaw.json 的 auth 形态变化？）"; exit 1; fi; \
     BODY=$(curl -s -m 10 -H "Authorization: Bearer $TOKEN" http://127.0.0.1:18789/friday-next/agents || true); \
     if echo "$BODY" | grep -q "<!DOCTYPE\\|<html\\|<head"; then \
       echo "✗ 返回的是 Control UI HTML —— 插件可能没加载（stale copy）"; exit 1; \
+    fi; \
+    if echo "$BODY" | grep -q "bearer token mismatch"; then \
+      echo "✗ 网关拒绝该 token（gateway.auth 与 store 不同步？）"; exit 1; \
     fi; \
     echo "$BODY" | head -c 120; echo; \
     echo "  /friday-next/agents 正常"' || die "健康检查失败"
