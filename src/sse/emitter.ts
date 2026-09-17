@@ -42,8 +42,22 @@ type PendingRuntimeDeltaBatch = {
   eventType: string;
   events: SseEvent[];
   bytes: number;
+  /** 批次当前生效的 flush 窗口；正文增量到达时收紧，见 runtimeDeltaFlushMs。 */
+  windowMs: number;
   timer: ReturnType<typeof setTimeout>;
 };
+
+/** assistant 正文走 16ms 快窗口（打字机直出）；thinking/reasoning 是 ticker 渐进显示，
+ * 现场超长推理 run 的增量中位间隔 79ms、峰值每秒十几条，16ms 合并不掉条数，投递账本
+ * 与 v3 客户端消费都被频率打爆（重连回放风暴→再背压的断联循环）。慢窗口只损失
+ * ticker 粒度，终态全文仍由 item 生命周期帧兜底。 */
+const RUNTIME_DELTA_FLUSH_FAST_MS = 16;
+const RUNTIME_DELTA_FLUSH_SLOW_MS = 400;
+
+function runtimeDeltaFlushMs(event: SseEvent): number {
+  const stream = typeof event.data.stream === "string" ? event.data.stream.toLowerCase() : "";
+  return stream === "assistant" ? RUNTIME_DELTA_FLUSH_FAST_MS : RUNTIME_DELTA_FLUSH_SLOW_MS;
+}
 
 type RuntimeLiveListener = (event: SseEvent) => void;
 
@@ -246,22 +260,31 @@ class SseEmitterRegistry {
     if (existing && (existing.store !== store || existing.bytes + bytes > 128 * 1024)) {
       this.flushRuntimeV3Run(runId);
     }
+    const flushMs = runtimeDeltaFlushMs(event);
     const pending = this.pendingRuntimeDeltas.get(runId);
     if (pending) {
       // 同一 run 的正文/推理/候选更新可交错；原始类型和顺序保存在 batch 中。
       pending.eventType = eventType;
       pending.bytes += bytes;
       pending.events.push(event);
+      // 慢窗口批次一旦出现正文增量立即收紧：正文延迟不能被 thinking 批次拖慢。
+      if (flushMs < pending.windowMs) {
+        pending.windowMs = flushMs;
+        clearTimeout(pending.timer);
+        pending.timer = setTimeout(() => this.flushRuntimeV3Run(runId), flushMs);
+        pending.timer.unref();
+      }
       if (pending.events.length >= 32) this.flushRuntimeV3Run(runId);
       return;
     }
-    const timer = setTimeout(() => this.flushRuntimeV3Run(runId), 16);
+    const timer = setTimeout(() => this.flushRuntimeV3Run(runId), flushMs);
     timer.unref();
     this.pendingRuntimeDeltas.set(runId, {
       store,
       eventType,
       events: [event],
       bytes,
+      windowMs: flushMs,
       timer,
     });
   }

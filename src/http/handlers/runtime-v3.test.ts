@@ -44,6 +44,7 @@ class MockRes extends EventEmitter {
 class BackpressuredRes extends EventEmitter {
   statusCode = 0;
   writes: string[] = [];
+  ended = false;
   private blocked = false;
   private writeCount = 0;
   setHeader(): void {}
@@ -59,6 +60,7 @@ class BackpressuredRes extends EventEmitter {
     this.emit("drain");
   }
   end(): void {
+    this.ended = true;
     this.emit("finish");
   }
 }
@@ -218,6 +220,42 @@ describe("runtime protocol v3", () => {
     response.release();
     expect(response.writes.filter((chunk) => chunk.includes("event: runtime"))).toHaveLength(3);
     request.emit("close");
+  });
+
+  it("ends a wedged connection whose socket never drains instead of stalling until the app watchdog", async () => {
+    vi.useFakeTimers();
+    try {
+      configure();
+      const store = getRuntimeV3Store();
+      const run = store.acceptCommand({
+        clientRequestId: "wedged-drain",
+        deviceId: "PHONE-1",
+        sessionKey: "agent:main:wedged-drain",
+        agentId: "main",
+        text: "hello",
+        attachments: [],
+      }).run!;
+      store.appendRunEvent(run.runId, "run.started", {});
+      store.appendRunEvent(run.runId, "assistant.delta", { text: "one" });
+      store.appendRunEvent(run.runId, "assistant.delta", { text: "two" });
+      const request = Object.assign(new EventEmitter(), {
+        method: "GET",
+        url: "/friday-next/v3/events?deviceId=PHONE-1",
+        headers: { authorization: "Bearer tok" },
+      }) as unknown as IncomingMessage;
+      const response = new BackpressuredRes();
+
+      await handleRuntimeV3Events(request, response as unknown as ServerResponse);
+
+      // replay 把 socket 写满后进入背压；客户端永远不来 drain。
+      expect(response.writes.filter((chunk) => chunk.includes("event: runtime"))).toHaveLength(1);
+      await vi.advanceTimersByTimeAsync(60_000);
+      // 服务端须在 App 的 60s 无字节看门狗之前主动断开，让客户端带 Last-Event-ID 干净重连。
+      expect(response.ended).toBe(true);
+      request.emit("close");
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("returns a reconstructable session snapshot with transcript, segments and stable revision", async () => {

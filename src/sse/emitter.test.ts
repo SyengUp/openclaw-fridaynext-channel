@@ -358,6 +358,84 @@ describe("sseEmitter", () => {
     expect(source.data.text).toBeUndefined();
   });
 
+  it("coalesces thinking deltas on a slow flush window so long reasoning runs stop flooding the ledger", async () => {
+    vi.useFakeTimers();
+    setRuntimeV3RootForTest(path.join(tmp, "runtime-v3-thinking-slow"));
+    const store = getRuntimeV3Store();
+    const run = store.acceptCommand({
+      clientRequestId: "thinking-slow",
+      deviceId: "DEVICE-THINKING-SLOW",
+      sessionKey: "agent:main:thinking-slow",
+      agentId: "main",
+      text: "test",
+      attachments: [],
+    }).run!;
+    // 现场：超长推理 run 的 thinking 增量中位间隔 79ms、峰值每秒十几条。
+    for (let seq = 1; seq <= 6; seq++) {
+      sseEmitter.broadcastToRun(run.runId, {
+        type: "agent",
+        data: {
+          runId: run.runId,
+          seq,
+          sessionKey: run.sessionKey,
+          stream: "thinking",
+          data: { delta: `段${seq}` },
+        },
+      });
+    }
+    // 16ms 是 assistant 正文的快窗口；thinking 不应被它拆批。
+    await vi.advanceTimersByTimeAsync(16);
+    expect(store.eventsForRun(run.runId)).toHaveLength(0);
+    await vi.advanceTimersByTimeAsync(500);
+    const events = store.eventsForRun(run.runId);
+    expect(events).toHaveLength(1);
+    expect(events[0].payload._sourceEventBatch).toHaveLength(6);
+  });
+
+  it("tightens a slow thinking batch back to the fast window when assistant text arrives", async () => {
+    vi.useFakeTimers();
+    setRuntimeV3RootForTest(path.join(tmp, "runtime-v3-thinking-tighten"));
+    const store = getRuntimeV3Store();
+    const run = store.acceptCommand({
+      clientRequestId: "thinking-tighten",
+      deviceId: "DEVICE-THINKING-TIGHTEN",
+      sessionKey: "agent:main:thinking-tighten",
+      agentId: "main",
+      text: "test",
+      attachments: [],
+    }).run!;
+    for (let seq = 1; seq <= 3; seq++) {
+      sseEmitter.broadcastToRun(run.runId, {
+        type: "agent",
+        data: {
+          runId: run.runId,
+          seq,
+          sessionKey: run.sessionKey,
+          stream: "thinking",
+          data: { delta: `思${seq}` },
+        },
+      });
+    }
+    // 仍在 thinking 慢窗口内：不得提前落账。
+    await vi.advanceTimersByTimeAsync(300);
+    expect(store.eventsForRun(run.runId)).toHaveLength(0);
+    // 正文增量到达：批次整体收紧到 16ms 快窗口，打字机延迟不被 thinking 批次拖慢。
+    sseEmitter.broadcastToRun(run.runId, {
+      type: "agent",
+      data: {
+        runId: run.runId,
+        seq: 4,
+        sessionKey: run.sessionKey,
+        stream: "assistant",
+        data: { delta: "正文" },
+      },
+    });
+    await vi.advanceTimersByTimeAsync(16);
+    const events = store.eventsForRun(run.runId);
+    expect(events).toHaveLength(1);
+    expect(events[0].payload._sourceEventBatch).toHaveLength(4);
+  });
+
   it("keeps the cumulative thinking text when a frame carries no delta", () => {
     setRuntimeV3RootForTest(path.join(tmp, "runtime-v3-keep"));
     const store = getRuntimeV3Store();

@@ -71,6 +71,7 @@ export async function handleRuntimeV3Events(
 
   let lastSent = afterEventId;
   let waitingDrain = false;
+  let drainStuckSince: number | null = null;
   let replaying = true;
   let closed = false;
   let replayedCount = 0;
@@ -84,6 +85,7 @@ export async function handleRuntimeV3Events(
   function markBackpressure(): void {
     if (waitingDrain) return;
     waitingDrain = true;
+    drainStuckSince = Date.now();
     logger.warn(
       `backpressure device=${deviceId} lastSent=${lastSent} pendingLive=${pendingLive.length}`,
     );
@@ -162,6 +164,7 @@ export async function handleRuntimeV3Events(
 
   const handleDrain = (): void => {
     waitingDrain = false;
+    drainStuckSince = null;
     if (replaying) pumpReplay();
     else pumpLive();
   };
@@ -190,7 +193,25 @@ export async function handleRuntimeV3Events(
   pumpReplay();
 
   const keepalive = setInterval(() => {
-    if (closed || waitingDrain) return;
+    if (closed) return;
+    if (waitingDrain) {
+      // 客户端 TCP 长时间不读（后台挂起/弱网）时，连接既送不出事件也发不了 keepalive。
+      // 与其挂着僵尸连接等 App 的 60s 无字节看门狗，不如服务端先断：客户端立即带
+      // Last-Event-ID 重连，回放窗口有界，重连风暴更短。
+      if (drainStuckSince !== null && Date.now() - drainStuckSince >= 45_000) {
+        logger.warn(
+          `drain-timeout device=${deviceId} lastSent=${lastSent} pendingLive=${pendingLive.length}`,
+        );
+        closed = true;
+        clearInterval(keepalive);
+        try {
+          res.end();
+        } catch {
+          // Socket may already be destroyed; req close handles cleanup.
+        }
+      }
+      return;
+    }
     if (!res.write(": keepalive\n\n")) {
       markBackpressure();
       replaying = true;
