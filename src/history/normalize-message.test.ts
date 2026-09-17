@@ -297,6 +297,44 @@ describe("normalizeHistoryMessage", () => {
 });
 
 describe("normalizeHistoryMessages", () => {
+  // Realtime Talk consults are written with `transcript: { display: false }`
+  // (core `startTalkRealtimeAgentConsult`): the user record is the consult
+  // command (question + "Context:"/"Spoken style:" scaffolding), and the final
+  // assistant answer is hidden because speech owns it. ControlUI drops every
+  // `display === false` record in its chat-display projection; without the same
+  // drop here the app renders the consult command as a user bubble on rebuild.
+  it("drops display:false records (talk consult command + hidden consult answer)", () => {
+    const result = normalizeHistoryMessages([
+      {
+        role: "user",
+        display: false,
+        excludeFromContext: true,
+        content: "查询北京近期天气\n\nContext:\n用户说「帮我查查天气吧」。",
+        __openclaw: { id: "consult-cmd", seq: 1 },
+      },
+      {
+        role: "assistant",
+        display: false,
+        content: [{ type: "text", text: "北京最近三天晴朗。" }],
+        __openclaw: { id: "consult-answer", seq: 2 },
+      },
+      {
+        role: "toolResult",
+        display: false,
+        toolName: "exec",
+        content: "internal",
+        __openclaw: { id: "consult-tool", seq: 3 },
+      },
+      {
+        role: "user",
+        content: [{ type: "text", text: "说话吗" }],
+        provenance: { kind: "realtime_voice", sourceChannel: "talk" },
+        __openclaw: { id: "spoken", seq: 4 },
+      },
+    ]);
+    expect(result.map((m) => m.id)).toEqual(["spoken"]);
+  });
+
   it("drops unparseable entries and sorts by seq", () => {
     const result = normalizeHistoryMessages([
       { role: "assistant", content: "b", __openclaw: { id: "b", seq: 2 } },

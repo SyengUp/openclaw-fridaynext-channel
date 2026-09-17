@@ -309,6 +309,14 @@ export function normalizeHistoryMessage(raw: unknown, index: number): FridayHist
   const record = asRecord(raw);
   if (!record) return null;
 
+  // `display: false` marks core records that must never render — realtime Talk
+  // consult commands (`startTalkRealtimeAgentConsult` writes the question +
+  // "Context:"/"Spoken style:" scaffolding with `transcript: { display: false }`),
+  // their speech-owned final answers, goal-resume replays, and other internal
+  // scaffolding. ControlUI's chat-display projection drops them; without the same
+  // drop the app renders the consult command as a user bubble on history rebuild.
+  if (record.display === false) return null;
+
   const meta = asRecord(record.__openclaw);
   const role = normalizeRole(record.role);
   const parsed = parseContent(record.content);
