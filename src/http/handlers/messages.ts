@@ -83,6 +83,7 @@ import {
   setRunMetadata,
 } from "../../run-metadata.js";
 import { createFridayNextLogger, setFridayNextLogLevel } from "../../logging.js";
+import { clampThinkingLevelForRef } from "../../thinking-levels.js";
 import { maybeGenerateSessionTitle } from "../../session/session-title-generator.js";
 import { getRuntimeV3Store } from "../../runtime-v3/runtime-store.js";
 import type { DurableRunStore } from "../../runtime-v3/durable-run-store.js";
@@ -708,7 +709,15 @@ export async function handleMessages(req: IncomingMessage, res: ServerResponse):
 
   const modelRef = payload.modelRef ?? defaultModel;
   const reasoningLevel = payload.reasoningLevel ?? "stream";
-  const thinkingLevel = payload.thinkingLevel ?? defaultThinking;
+  // The agent's configured `thinkingDefault` (or a session default) can be a level the effective
+  // model does not support after a model switch (e.g. `high` on a binary off/on provider). Core
+  // accepts an unsupported level silently for *defaults* — it clamps them — but hard-rejects an
+  // unsupported explicit per-turn override, and `thinkingLevelOverride` below is explicit. Clamp
+  // once here so the stored setting, the override and the level the composer shows agree.
+  const thinkingLevel = clampThinkingLevelForRef(
+    modelRef,
+    payload.thinkingLevel ?? defaultThinking,
+  );
 
   const settings: FridaySessionSettingsUpdate = {};
   if (modelRef) {

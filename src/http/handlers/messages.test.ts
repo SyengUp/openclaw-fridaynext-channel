@@ -22,6 +22,11 @@ import {
   __resetFridayQuestionsForTest,
   noteFridayQuestionPrompt,
 } from "../../question/friday-question.js";
+import {
+  resetFridayAgentForwardRuntimeForTest,
+  setFridayAgentForwardRuntime,
+} from "../../agent-forward-runtime.js";
+import { getSessionSettings, toSessionStoreKey } from "../../session/session-manager.js";
 
 const saveMediaBufferMock = vi.hoisted(() => vi.fn());
 vi.mock("openclaw/plugin-sdk/media-store", () => ({
@@ -533,5 +538,157 @@ describe("handleMessages serial-queue question bypass", () => {
     await vi.waitFor(() => {
       expect(calls).toBe(1);
     });
+  });
+});
+
+describe("handleMessages thinking level clamping", () => {
+  const SESSION_KEY = "agent:trader:fridaynext:mu52zj7o";
+  const BINARY_LEVELS = [
+    { id: "off", label: "off" },
+    { id: "low", label: "on" },
+  ];
+  const TERNARY_LEVELS = [
+    { id: "off", label: "off" },
+    { id: "medium", label: "medium" },
+    { id: "high", label: "high" },
+  ];
+
+  afterEach(() => {
+    clearFridayNextRuntime();
+    resetFridayAgentForwardRuntimeForTest();
+    __resetMockFridayDispatchForTests();
+    resetActiveRunsForTest();
+    vi.restoreAllMocks();
+  });
+
+  /** Trader runs kimi (binary off/on) but its configured thinkingDefault is still `high`. */
+  function setAgentDefaultRuntime(): void {
+    setFridayAgentForwardRuntime({
+      runtime: {
+        agent: {
+          session: { resolveStorePath: () => "", loadSessionStore: () => ({}) },
+          resolveThinkingPolicy: (params: { provider?: string | null; model?: string | null }) =>
+            params.model === "kimi-for-coding"
+              ? { levels: BINARY_LEVELS }
+              : { levels: TERNARY_LEVELS, defaultLevel: "high" },
+        },
+        config: {
+          current: () => ({
+            agents: {
+              defaults: { thinkingDefault: "high", model: { primary: "openai/gpt-5.6-luna" } },
+              entries: {
+                trader: { model: "moonshot/kimi-for-coding", thinkingDefault: "high" },
+              },
+            },
+          }),
+        },
+      },
+    } as never);
+  }
+
+  function tempHistoryDir(): string {
+    const base = fs.mkdtempSync(path.join(os.tmpdir(), "friday-next-clamp-"));
+    const historyDir = path.join(base, ".openclaw", "friday-next", "history");
+    fs.mkdirSync(historyDir, { recursive: true });
+    // A pre-existing sessions.json is what the legacy JSON write path upserts into (it never
+    // creates the file); the SDK/SQLite path is absent in these tests.
+    const sessionsDir = path.join(base, ".openclaw", "agents", "trader", "sessions");
+    fs.mkdirSync(sessionsDir, { recursive: true });
+    fs.writeFileSync(path.join(sessionsDir, "sessions.json"), "{}", "utf-8");
+    return historyDir;
+  }
+
+  async function postMessage(body: Record<string, unknown>): Promise<void> {
+    const req = new PassThrough() as unknown as IncomingMessage;
+    req.method = "POST";
+    req.headers = { authorization: "Bearer test-token" };
+    const res = new MockRes() as unknown as ServerResponse;
+    const p = handleMessages(req, res);
+    req.end(JSON.stringify(body));
+    await p;
+  }
+
+  function captureDispatch(): Array<{ replyOptions?: { thinkingLevelOverride?: string } }> {
+    const calls: Array<{ replyOptions?: { thinkingLevelOverride?: string } }> = [];
+    __setMockFridayDispatchForTests((args) => {
+      calls.push(args as never);
+      return Promise.resolve();
+    });
+    return calls;
+  }
+
+  it("clamps an unsupported agent thinking default instead of erroring on send", async () => {
+    const historyDir = tempHistoryDir();
+    setMockRuntime({ historyDir });
+    setAgentDefaultRuntime();
+    const calls = captureDispatch();
+
+    await postMessage({ deviceId: "AA11", text: "你好", sessionKey: SESSION_KEY });
+
+    await vi.waitFor(() => {
+      expect(calls.length).toBe(1);
+    });
+    expect(calls[0].replyOptions?.thinkingLevelOverride).toBe("low");
+    expect(getSessionSettings(SESSION_KEY, historyDir).thinkingLevel).toBe("low");
+  });
+
+  it("clamps an explicitly requested unsupported level to the model's set", async () => {
+    const historyDir = tempHistoryDir();
+    setMockRuntime({ historyDir });
+    setAgentDefaultRuntime();
+    const calls = captureDispatch();
+
+    await postMessage({
+      deviceId: "AA11",
+      text: "你好",
+      sessionKey: SESSION_KEY,
+      modelRef: "moonshot/kimi-for-coding",
+      thinkingLevel: "high",
+    });
+
+    await vi.waitFor(() => {
+      expect(calls.length).toBe(1);
+    });
+    expect(calls[0].replyOptions?.thinkingLevelOverride).toBe("low");
+  });
+
+  it("leaves a supported level untouched", async () => {
+    const historyDir = tempHistoryDir();
+    setMockRuntime({ historyDir });
+    setAgentDefaultRuntime();
+    const calls = captureDispatch();
+
+    await postMessage({
+      deviceId: "AA11",
+      text: "你好",
+      sessionKey: "agent:main:fridaynext:mu4u4ige",
+      modelRef: "openai/gpt-5.6-luna",
+      thinkingLevel: "high",
+    });
+
+    await vi.waitFor(() => {
+      expect(calls.length).toBe(1);
+    });
+    expect(calls[0].replyOptions?.thinkingLevelOverride).toBe("high");
+  });
+
+  it("uses the app-requested model, not the agent default, for the clamp", async () => {
+    const historyDir = tempHistoryDir();
+    setMockRuntime({ historyDir });
+    setAgentDefaultRuntime();
+    const calls = captureDispatch();
+
+    await postMessage({
+      deviceId: "AA11",
+      text: "你好",
+      sessionKey: SESSION_KEY,
+      modelRef: "openai/gpt-5.6-luna",
+    });
+
+    await vi.waitFor(() => {
+      expect(calls.length).toBe(1);
+    });
+    expect(calls[0].replyOptions?.thinkingLevelOverride).toBe("high");
+    expect(toSessionStoreKey(SESSION_KEY)).toBe(SESSION_KEY);
   });
 });

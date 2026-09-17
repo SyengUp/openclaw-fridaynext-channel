@@ -68,3 +68,27 @@ export function isThinkingLevelSupportedForRef(
 ): boolean {
   return resolveModelThinkingForRef(modelRef).levels.some((l) => l.id === level);
 }
+
+/**
+ * Clamp `level` to what `modelRef` actually supports, mirroring the app's displayed effective
+ * level: keep a supported level, else use the model's own default, else `medium`, else the
+ * lowest non-`off` level. Core hard-errors when an explicit per-turn override (which this plugin
+ * feeds from the resolved thinking level) is unsupported, so an agent configured `thinkingDefault`
+ * the chosen model no longer supports (`high` on a binary off/on provider) would otherwise fail
+ * the whole run instead of running at the level the app shows.
+ *
+ * Unchanged when the gateway reports no per-model policy (legacy fallback is the base five levels,
+ * which include the request) so old hosts keep today's behavior.
+ */
+export function clampThinkingLevelForRef(
+  modelRef: string | undefined | null,
+  level: string | undefined,
+): string | undefined {
+  if (!level) return level;
+  const { levels, default: modelDefault } = resolveModelThinkingForRef(modelRef);
+  if (levels.length === 0 || levels.some((l) => l.id === level)) return level;
+  const ids = levels.map((l) => l.id);
+  if (modelDefault && ids.includes(modelDefault)) return modelDefault;
+  if (ids.includes("medium")) return "medium";
+  return ids.find((id) => id !== "off") ?? ids[0];
+}

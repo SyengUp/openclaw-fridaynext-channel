@@ -3,6 +3,7 @@ import {
   resolveModelThinking,
   resolveModelThinkingForRef,
   isThinkingLevelSupportedForRef,
+  clampThinkingLevelForRef,
 } from "./thinking-levels.js";
 import {
   setFridayAgentForwardRuntime,
@@ -139,5 +140,65 @@ describe("isThinkingLevelSupportedForRef", () => {
     }));
     expect(isThinkingLevelSupportedForRef("deepseek/deepseek-v4", "max")).toBe(true);
     expect(isThinkingLevelSupportedForRef("deepseek/deepseek-v4", "xhigh")).toBe(false);
+  });
+});
+
+describe("clampThinkingLevelForRef", () => {
+  afterEach(() => {
+    resetFridayAgentForwardRuntimeForTest();
+  });
+
+  it("keeps a level the model supports", () => {
+    setThinkingPolicy(() => ({
+      levels: [
+        { id: "off", label: "off" },
+        { id: "medium", label: "medium" },
+        { id: "high", label: "high" },
+      ],
+    }));
+    expect(clampThinkingLevelForRef("openai/gpt-5.6-luna", "high")).toBe("high");
+  });
+
+  it("falls back to the lowest non-off level for a binary model (high → low)", () => {
+    setThinkingPolicy(() => ({
+      levels: [
+        { id: "off", label: "off" },
+        { id: "low", label: "on" },
+      ],
+    }));
+    expect(clampThinkingLevelForRef("moonshot/kimi-for-coding", "high")).toBe("low");
+  });
+
+  it("prefers the model's reported default when the requested level is unsupported", () => {
+    setThinkingPolicy(() => ({
+      levels: [
+        { id: "off", label: "off" },
+        { id: "low", label: "on" },
+        { id: "high", label: "high" },
+      ],
+      defaultLevel: "low",
+    }));
+    expect(clampThinkingLevelForRef("deepseek/deepseek-v4", "max")).toBe("low");
+  });
+
+  it("prefers medium when the model supports it and reports no default", () => {
+    setThinkingPolicy(() => ({
+      levels: [
+        { id: "off", label: "off" },
+        { id: "medium", label: "medium" },
+        { id: "high", label: "high" },
+      ],
+    }));
+    expect(clampThinkingLevelForRef("deepseek/deepseek-v4", "max")).toBe("medium");
+  });
+
+  it("leaves the level unchanged when the runtime reports no per-model policy (base fallback)", () => {
+    const result = clampThinkingLevelForRef("moonshot/kimi-for-coding", "high");
+    expect(result).toBe("high");
+  });
+
+  it("passes an empty or missing level through unchanged", () => {
+    expect(clampThinkingLevelForRef("moonshot/kimi-for-coding", undefined)).toBeUndefined();
+    expect(clampThinkingLevelForRef("moonshot/kimi-for-coding", "")).toBe("");
   });
 });
