@@ -156,7 +156,12 @@ export function resolveSessionTitle(sessionKey: string): string | undefined {
   return entryString(entry, "displayName") ?? entryString(entry, "label");
 }
 
-export function transcriptRecordsToRawMessages(records: unknown[], limit: number): unknown[] {
+/**
+ * Message records with their `__openclaw` envelope. `seq` is the GLOBAL position
+ * over the full filtered transcript (1..N), so slices from different offset
+ * pages still share one stable ordering key when the app concatenates them.
+ */
+function messageRecordsWithGlobalEnvelope(records: unknown[]): unknown[] {
   const raw: unknown[] = [];
   let seq = 0;
   for (const recUnknown of records) {
@@ -180,14 +185,40 @@ export function transcriptRecordsToRawMessages(records: unknown[], limit: number
       },
     });
   }
-  return limit > 0 && raw.length > limit ? raw.slice(raw.length - limit) : raw;
+  return raw;
 }
 
+export function transcriptRecordsToRawMessages(records: unknown[], limit: number): unknown[] {
+  return transcriptRecordsToRawMessagePage(records, limit, 0).rawMessages;
+}
+
+/** One offset page over the filtered message records (same semantics as gateway `chat.history`). */
+export type TranscriptMessagePage = {
+  rawMessages: unknown[];
+  /** Total filtered message records in the transcript (across all pages). */
+  totalRecords: number;
+};
+
 /**
- * Returns raw transcript message objects (newest tail up to `limit`), each with
- * an `__openclaw: { id, seq, recordTimestampMs }` envelope. Empty on any failure.
+ * Slices one page of raw message records counting BACKWARDS from the newest
+ * record: `offset` skips that many newest records first, then up to `limit`
+ * older records are returned (still in storage order). `offset: 0` is the
+ * newest tail page — identical to the legacy `limit`-only behavior.
  */
-export function readSessionTranscriptRawMessages(sessionKey: string, limit: number): unknown[] {
+export function transcriptRecordsToRawMessagePage(
+  records: unknown[],
+  limit: number,
+  offset: number,
+): TranscriptMessagePage {
+  const all = messageRecordsWithGlobalEnvelope(records);
+  const totalRecords = all.length;
+  const end = Math.max(0, totalRecords - Math.max(0, offset));
+  const start = Math.max(0, end - Math.max(0, limit));
+  if (end <= start) return { rawMessages: [], totalRecords };
+  return { rawMessages: all.slice(start, end), totalRecords };
+}
+
+function readTranscriptRecordsForSessionKey(sessionKey: string): unknown[] {
   const row = findSessionStoreRow(sessionKey);
   if (!row) return [];
   const rt = getFridayAgentForwardRuntime();
@@ -199,11 +230,31 @@ export function readSessionTranscriptRawMessages(sessionKey: string, limit: numb
   } catch {
     storePath = undefined;
   }
-  const records = readTranscriptRecords({
+  return readTranscriptRecords({
     entry: row.entry,
     sessionKey: row.sessionKey,
     agentId: agentIdFromSessionKey(row.sessionKey),
     storePath,
   });
-  return transcriptRecordsToRawMessages(records, limit);
+}
+
+/**
+ * Returns raw transcript message objects (newest tail up to `limit`), each with
+ * an `__openclaw: { id, seq, recordTimestampMs }` envelope. Empty on any failure.
+ */
+export function readSessionTranscriptRawMessages(sessionKey: string, limit: number): unknown[] {
+  return readSessionTranscriptRawMessagePage(sessionKey, limit, 0).rawMessages;
+}
+
+/** Offset-paged variant of {@link readSessionTranscriptRawMessages}. */
+export function readSessionTranscriptRawMessagePage(
+  sessionKey: string,
+  limit: number,
+  offset: number,
+): TranscriptMessagePage {
+  return transcriptRecordsToRawMessagePage(
+    readTranscriptRecordsForSessionKey(sessionKey),
+    limit,
+    offset,
+  );
 }

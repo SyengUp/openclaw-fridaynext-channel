@@ -1,9 +1,14 @@
 /**
- * GET /friday-next/history/messages?sessionKey=&agentId=&limit=
+ * GET /friday-next/history/messages?sessionKey=&agentId=&limit=&offset=
  *
  * Returns a session's transcript history as a flat, normalized message stream.
  * The Friday app groups these into rounds itself (by role transitions) and uses
  * each message's stable `id` (the upstream transcript entry id) as its sync key.
+ *
+ * `offset` pages BACKWARDS over the raw transcript records (0 = newest tail,
+ * same semantics as gateway `chat.history`); the response carries
+ * `pagination: { offset, limit, totalRecords, hasMore, nextOffset? }` so the
+ * app can load earlier history on demand. `seq` stays global across pages.
  *
  * Reads via the gateway `sessions.get` method (exposed to plugins as
  * `runtime.subagent.getSessionMessages`), which already resolves the active
@@ -17,7 +22,7 @@ import { getFridayNextRuntime } from "../../runtime.js";
 import { extractBearerToken } from "../middleware/auth.js";
 import { normalizeHistoryMessages } from "../../history/normalize-message.js";
 import {
-  readSessionTranscriptRawMessages,
+  readSessionTranscriptRawMessagePage,
   resolveSessionId,
   resolveSessionTitle,
 } from "../../history/read-transcript.js";
@@ -27,6 +32,15 @@ import type { FridayHistoryMessage } from "../../history/normalize-message.js";
 
 const DEFAULT_LIMIT = 200;
 const MAX_LIMIT = 1000;
+
+/** Offset-page metadata over RAW transcript records (chat.history semantics). */
+type HistoryPagination = {
+  offset: number;
+  limit: number;
+  totalRecords: number;
+  hasMore: boolean;
+  nextOffset?: number;
+};
 
 type SubagentSessionApi = {
   getSessionMessages?: (params: {
@@ -128,17 +142,45 @@ export async function handleHistoryMessages(
     Number.isFinite(limitParam) && limitParam > 0
       ? Math.min(Math.floor(limitParam), MAX_LIMIT)
       : DEFAULT_LIMIT;
+  // offset 从最新记录往回数（0 = 尾页），与 gateway `chat.history` 的分页语义一致。
+  const offsetParam = Number(url.searchParams.get("offset"));
+  if (
+    url.searchParams.has("offset") &&
+    (!Number.isFinite(offsetParam) || !Number.isSafeInteger(offsetParam) || offsetParam < 0)
+  ) {
+    res.statusCode = 400;
+    res.setHeader("Content-Type", "application/json");
+    res.end(
+      JSON.stringify({ error: "offset must be a non-negative integer (records from newest)" }),
+    );
+    return true;
+  }
+  const offset = Number.isSafeInteger(offsetParam) && offsetParam > 0 ? offsetParam : 0;
 
   // Primary path: read the transcript file directly (works from an HTTP route).
-  let rawMessages: unknown[] = readSessionTranscriptRawMessages(sessionKey, limit);
+  const page = readSessionTranscriptRawMessagePage(sessionKey, limit, offset);
+  let rawMessages: unknown[] = page.rawMessages;
+  const hasMore = offset + page.rawMessages.length < page.totalRecords;
+  let pagination: HistoryPagination | undefined = {
+    offset,
+    limit,
+    totalRecords: page.totalRecords,
+    hasMore,
+    ...(hasMore ? { nextOffset: offset + page.rawMessages.length } : {}),
+  };
 
   // Fallback: the request-scoped gateway method (only works in some contexts).
-  if (rawMessages.length === 0) {
+  // It returns the NEWEST TAIL only — never usable for an offset page.
+  if (rawMessages.length === 0 && offset === 0) {
     const sessionApi = resolveSubagentApi();
     if (sessionApi?.getSessionMessages) {
       try {
         const response = await sessionApi.getSessionMessages({ sessionKey, limit });
         rawMessages = Array.isArray(response?.messages) ? response.messages : [];
+        if (rawMessages.length > 0) {
+          // 回退路径没有可靠的记录总数/nextOffset —— 省略分页元数据，客户端退回旧行为。
+          pagination = undefined;
+        }
       } catch {
         // Best-effort: an unreadable/unknown session yields an empty history
         // rather than an error, so the app degrades gracefully.
@@ -176,6 +218,7 @@ export async function handleHistoryMessages(
       ...(sessionTitle ? { title: sessionTitle } : {}),
       totalMessages: messages.length,
       messages,
+      ...(pagination ? { pagination } : {}),
       ...(sessionUsage ? { sessionUsage } : {}),
     }),
   );

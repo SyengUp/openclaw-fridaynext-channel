@@ -392,6 +392,149 @@ describe("handleHistoryMessages", () => {
     fs.rmSync(srcDir, { recursive: true, force: true });
   });
 
+  it("reports pagination metadata on the tail page (offset 0)", async () => {
+    const file = writeTranscript("page-tail.jsonl", [
+      { type: "session", version: 1, sessionId: "s" },
+      ...[1, 2, 3, 4, 5].map((n) => ({
+        type: "message",
+        id: `m${n}`,
+        timestamp: `2026-01-01T00:00:0${n}.000Z`,
+        message: { role: "user", content: `msg ${n}` },
+      })),
+    ]);
+    setForward({ "agent:main:main": { sessionId: "s", sessionFile: file } });
+
+    const res = new MockRes();
+    await handleHistoryMessages(
+      makeReq("/friday-next/history/messages?sessionKey=agent:main:main", AUTH),
+      res as any,
+    );
+    const body = JSON.parse(res.body);
+    expect(body.pagination).toEqual({
+      offset: 0,
+      limit: 200,
+      totalRecords: 5,
+      hasMore: false,
+    });
+  });
+
+  it("pages backwards through raw records with offset, keeping global seq", async () => {
+    const file = writeTranscript("page-back.jsonl", [
+      ...[1, 2, 3, 4, 5].map((n) => ({
+        type: "message",
+        id: `m${n}`,
+        timestamp: `2026-01-01T00:00:0${n}.000Z`,
+        message: { role: "user", content: `msg ${n}` },
+      })),
+    ]);
+    setForward({ "agent:main:main": { sessionId: "s", sessionFile: file } });
+
+    const first = new MockRes();
+    await handleHistoryMessages(
+      makeReq("/friday-next/history/messages?sessionKey=agent:main:main&limit=2", AUTH),
+      first as any,
+    );
+    const firstBody = JSON.parse(first.body);
+    expect(firstBody.messages.map((m: any) => m.id)).toEqual(["m4", "m5"]);
+    // seq 是全量记录上的全局序号（m1..m5 → 1..5），跨页拼接后仍可稳定排序。
+    expect(firstBody.messages.map((m: any) => m.seq)).toEqual([4, 5]);
+    expect(firstBody.pagination).toEqual({
+      offset: 0,
+      limit: 2,
+      totalRecords: 5,
+      hasMore: true,
+      nextOffset: 2,
+    });
+
+    const second = new MockRes();
+    await handleHistoryMessages(
+      makeReq(
+        "/friday-next/history/messages?sessionKey=agent:main:main&limit=2&offset=2",
+        AUTH,
+      ),
+      second as any,
+    );
+    const secondBody = JSON.parse(second.body);
+    expect(secondBody.messages.map((m: any) => m.id)).toEqual(["m2", "m3"]);
+    expect(secondBody.pagination.nextOffset).toBe(4);
+
+    const third = new MockRes();
+    await handleHistoryMessages(
+      makeReq(
+        "/friday-next/history/messages?sessionKey=agent:main:main&limit=2&offset=4",
+        AUTH,
+      ),
+      third as any,
+    );
+    const thirdBody = JSON.parse(third.body);
+    expect(thirdBody.messages.map((m: any) => m.id)).toEqual(["m1"]);
+    expect(thirdBody.pagination).toEqual({
+      offset: 4,
+      limit: 2,
+      totalRecords: 5,
+      hasMore: false,
+    });
+  });
+
+  it("returns an empty page when offset reaches past the oldest record", async () => {
+    const file = writeTranscript("page-past.jsonl", [
+      { type: "message", id: "m1", message: { role: "user", content: "only" } },
+    ]);
+    setForward({ "agent:main:main": { sessionId: "s", sessionFile: file } });
+
+    const res = new MockRes();
+    await handleHistoryMessages(
+      makeReq(
+        "/friday-next/history/messages?sessionKey=agent:main:main&offset=99",
+        AUTH,
+      ),
+      res as any,
+    );
+    const body = JSON.parse(res.body);
+    expect(body.messages).toEqual([]);
+    expect(body.pagination).toEqual({
+      offset: 99,
+      limit: 200,
+      totalRecords: 1,
+      hasMore: false,
+    });
+  });
+
+  it("rejects a negative or fractional offset with 400", async () => {
+    for (const bad of ["-1", "1.5", "abc"]) {
+      const res = new MockRes();
+      await handleHistoryMessages(
+        makeReq(
+          `/friday-next/history/messages?sessionKey=agent:main:main&offset=${bad}`,
+          AUTH,
+        ),
+        res as any,
+      );
+      expect(res.statusCode).toBe(400);
+    }
+  });
+
+  it("never uses the tail-only subagent fallback for an offset page", async () => {
+    // 旧宿主回退（sessions.get 尾部语义）不能服务 offset 页：拿到的会是错误的窗口。
+    const getSessionMessages = vi.fn(async () => ({
+      messages: [{ role: "assistant", content: "fallback", __openclaw: { id: "a1", seq: 1 } }],
+    }));
+    setForward({}); // 无 transcript 行 → 主路径空
+    setRuntime(getSessionMessages);
+
+    const res = new MockRes();
+    await handleHistoryMessages(
+      makeReq(
+        "/friday-next/history/messages?sessionKey=agent:main:main&offset=200",
+        AUTH,
+      ),
+      res as any,
+    );
+    const body = JSON.parse(res.body);
+    expect(body.messages).toEqual([]);
+    expect(getSessionMessages).not.toHaveBeenCalled();
+  });
+
   it("falls back to getSessionMessages when the transcript is not on disk", async () => {
     setForward({}); // no entry → disk read yields nothing
     setRuntime(async () => ({
