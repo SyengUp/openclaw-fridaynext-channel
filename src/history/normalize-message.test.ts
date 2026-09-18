@@ -455,3 +455,78 @@ describe("normalizeHistoryMessages", () => {
     expect(result.map((m) => m.id)).toEqual(["u1", "a1", "u2"]);
   });
 });
+
+describe("detail truncation (history pages)", () => {
+  const longText = "x".repeat(20_000);
+  const longThinking = "y".repeat(20_000);
+
+  it("truncates oversized text/thinking/toolResult text and flags truncated", () => {
+    const out = normalizeHistoryMessage(
+      {
+        role: "assistant",
+        content: [
+          { type: "thinking", thinking: longThinking },
+          { type: "text", text: longText },
+        ],
+        __openclaw: { id: "a-big", seq: 1 },
+      },
+      0,
+    );
+    expect(out?.text?.length).toBeLessThanOrEqual(8000);
+    expect(out?.thinking?.length).toBeLessThanOrEqual(8000);
+    expect(out?.truncated).toBe(true);
+  });
+
+  it("does not flag truncated for small messages", () => {
+    const out = normalizeHistoryMessage(
+      { role: "assistant", content: [{ type: "text", text: "fine" }], __openclaw: { id: "a", seq: 1 } },
+      0,
+    );
+    expect(out?.truncated).toBeUndefined();
+  });
+
+  it("truncates toolResult text and flags truncated", () => {
+    const out = normalizeHistoryMessage(
+      {
+        role: "toolResult",
+        toolCallId: "tc",
+        toolName: "exec",
+        content: [{ type: "text", text: longText }],
+        __openclaw: { id: "tr-big", seq: 2 },
+      },
+      0,
+    );
+    expect(out?.toolResult?.text?.length).toBeLessThanOrEqual(8000);
+    expect(out?.truncated).toBe(true);
+  });
+
+  it("replaces oversized tool arguments with a flagged preview", () => {
+    const args = { blob: "z".repeat(20_000) };
+    const out = normalizeHistoryMessage(
+      {
+        role: "assistant",
+        content: [{ type: "toolCall", id: "tc-big", name: "exec", arguments: args }],
+        __openclaw: { id: "a-args", seq: 3 },
+      },
+      0,
+    );
+    const call = out?.toolCalls?.[0];
+    expect(call?.argumentsTruncated).toBe(true);
+    expect(JSON.stringify(call?.arguments).length).toBeLessThanOrEqual(4_100);
+    expect(out?.truncated).toBe(true);
+  });
+
+  it("keeps full detail when truncateText option is disabled (message-detail endpoint)", () => {
+    const out = normalizeHistoryMessage(
+      {
+        role: "assistant",
+        content: [{ type: "text", text: longText }],
+        __openclaw: { id: "a-full", seq: 4 },
+      },
+      0,
+      { fullText: true },
+    );
+    expect(out?.text).toBe(longText);
+    expect(out?.truncated).toBeUndefined();
+  });
+});

@@ -10,6 +10,14 @@ export type SessionTranscriptEventLoader = (params: {
   storePath?: string;
 }) => unknown[];
 
+/** O(1) transcript counters without materializing event rows (2026.9+ SDK). */
+export type SessionTranscriptStatsReader = (params: {
+  agentId?: string;
+  sessionId: string;
+  sessionKey?: string;
+  storePath?: string;
+}) => { eventCount: number; maxSeq: number; sizeBytes: number } | undefined;
+
 export type FridayAgentForwardRuntime = {
   /** Control UI-equivalent session projection (`sessions.list`). */
   gatewayIsAvailable?: () => Promise<boolean>;
@@ -56,6 +64,8 @@ export type FridayAgentForwardRuntime = {
    * and this export does not exist.
    */
   loadTranscriptEventsSync?: SessionTranscriptEventLoader;
+  /** Transcript counters (2026.9+). Optional: older hosts don't expose it. */
+  readTranscriptStatsSync?: SessionTranscriptStatsReader;
   /** 按会话身份写入规范存储；权限、置顶等会话属性都应优先走此路径。 */
   patchSessionEntry?: (params: {
     sessionKey: string;
@@ -102,9 +112,30 @@ function resolveLoadTranscriptEventsSync(
   try {
     const mod = requireSdk("openclaw/plugin-sdk/session-store-runtime") as {
       loadTranscriptEventsSync?: SessionTranscriptEventLoader;
+      readTranscriptStatsSync?: SessionTranscriptStatsReader;
     };
     return typeof mod.loadTranscriptEventsSync === "function"
       ? mod.loadTranscriptEventsSync
+      : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/** Same SDK module, same rules as the transcript loader above. */
+function resolveReadTranscriptStatsSync(
+  session: Record<string, unknown>,
+): SessionTranscriptStatsReader | undefined {
+  if (typeof session.readTranscriptStatsSync === "function") {
+    return session.readTranscriptStatsSync as SessionTranscriptStatsReader;
+  }
+  if (process.env.VITEST === "true") return undefined;
+  try {
+    const mod = requireSdk("openclaw/plugin-sdk/session-store-runtime") as {
+      readTranscriptStatsSync?: SessionTranscriptStatsReader;
+    };
+    return typeof mod.readTranscriptStatsSync === "function"
+      ? mod.readTranscriptStatsSync
       : undefined;
   } catch {
     return undefined;
@@ -143,6 +174,7 @@ export function setFridayAgentForwardRuntime(api: OpenClawPluginApi): void {
     listSessionEntries:
       session.listSessionEntries as FridayAgentForwardRuntime["listSessionEntries"],
     loadTranscriptEventsSync: resolveLoadTranscriptEventsSync(session),
+    readTranscriptStatsSync: resolveReadTranscriptStatsSync(session),
     patchSessionEntry: session.patchSessionEntry as FridayAgentForwardRuntime["patchSessionEntry"],
     resolveAgentWorkspaceDir: (api.runtime.agent as Record<string, unknown>)
       .resolveAgentWorkspaceDir as FridayAgentForwardRuntime["resolveAgentWorkspaceDir"],

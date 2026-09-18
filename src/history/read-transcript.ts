@@ -18,7 +18,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { getFridayAgentForwardRuntime } from "../agent-forward-runtime.js";
-import { agentIdFromSessionKey } from "../session/session-manager.js";
+import { agentIdFromSessionKey, toSessionStoreKey } from "../session/session-manager.js";
 import { findSessionStoreRow } from "./session-store-access.js";
 
 function entryString(entry: unknown, key: string): string | undefined {
@@ -257,4 +257,98 @@ export function readSessionTranscriptRawMessagePage(
     limit,
     offset,
   );
+}
+
+/** Finds one raw message by its stable transcript entry id (full detail). */
+export function readSessionTranscriptRawMessageById(
+  sessionKey: string,
+  messageId: string,
+): Record<string, unknown> | undefined {
+  const all = messageRecordsWithGlobalEnvelope(readTranscriptRecordsForSessionKey(sessionKey));
+  return all.find(
+    (raw) => asRecord(asRecord(raw)?.__openclaw)?.id === messageId,
+  ) as Record<string, unknown> | undefined;
+}
+
+function asRecord(value: unknown): Record<string, unknown> | undefined {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : undefined;
+}
+
+/** Offset page served through the gateway's bounded read (null = unavailable). */
+export type TranscriptGatewayPage = {
+  rawMessages: unknown[];
+  /** 近似计数：优先 stats.eventCount（含非 message 事件），否则下界。App 只用
+   *  hasMore/nextOffset 驱动翻页，该值不参与逻辑。 */
+  totalRecords: number;
+  hasMore: boolean;
+  nextOffset: number;
+};
+
+/**
+ * Serves one offset page via the gateway `sessions.get` RPC instead of reading
+ * the whole transcript locally: the gateway reads a bounded message window with
+ * an index range query + byte budget (never materializing the full session),
+ * and its messages carry the same `__openclaw` envelope our normalizer eats.
+ *
+ * Windowing: request the newest `offset + limit` records (tail pages add one
+ * probe record to detect `hasMore`), then slice `[max(0, n-offset-limit),
+ * max(0, n-offset))`. Returns null when the gateway surface is unavailable —
+ * callers fall back to the local full read (identical wire output).
+ */
+export async function readSessionTranscriptPageViaGateway(
+  sessionKey: string,
+  limit: number,
+  offset: number,
+): Promise<TranscriptGatewayPage | null> {
+  const rt = getFridayAgentForwardRuntime();
+  if (!rt?.gatewayRequest) return null;
+  const requestCount = offset === 0 ? limit + 1 : offset + limit;
+  let payload: unknown;
+  try {
+    const available = rt.gatewayIsAvailable ? await rt.gatewayIsAvailable() : true;
+    if (!available) return null;
+    payload = await rt.gatewayRequest(
+      "sessions.get",
+      { key: toSessionStoreKey(sessionKey), limit: requestCount },
+      { timeoutMs: 4_000, scopes: ["operator.read"] },
+    );
+  } catch {
+    // COMPAT(older hosts): in-process gateway RPC surface missing/failing → local read.
+    return null;
+  }
+  const messages = asRecord(payload)?.messages;
+  if (!Array.isArray(messages) || messages.length === 0) return null;
+
+  const n = messages.length;
+  const end = Math.max(0, n - Math.max(0, offset));
+  const start = Math.max(0, end - Math.max(0, limit));
+  const rawMessages = end <= start ? [] : messages.slice(start, end);
+  const hasMore = start > 0 || n >= requestCount;
+  const nextOffset = Math.max(0, offset) + rawMessages.length;
+
+  let totalRecords: number | undefined;
+  const row = findSessionStoreRow(sessionKey);
+  const sessionId = entryString(row?.entry, "sessionId");
+  if (rt.readTranscriptStatsSync && sessionId) {
+    try {
+      const stats = rt.readTranscriptStatsSync({
+        sessionId,
+        sessionKey: row?.sessionKey ?? sessionKey,
+        ...(agentIdFromSessionKey(row?.sessionKey ?? sessionKey)
+          ? { agentId: agentIdFromSessionKey(row?.sessionKey ?? sessionKey) }
+          : {}),
+      });
+      if (stats && Number.isFinite(stats.eventCount)) totalRecords = stats.eventCount;
+    } catch {
+      // 近似值拿不到就用下界。
+    }
+  }
+  return {
+    rawMessages,
+    totalRecords: totalRecords ?? nextOffset + (hasMore ? 1 : 0),
+    hasMore,
+    nextOffset,
+  };
 }

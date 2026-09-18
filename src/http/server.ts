@@ -29,7 +29,7 @@ import { handleAgentToolsCatalog } from "./handlers/agent-tools-catalog.js";
 import { handleHistorySessions } from "./handlers/history-sessions.js";
 import { handleNotifications, handleNotificationDelete } from "./handlers/notifications.js";
 import { handleInbox } from "./handlers/inbox.js";
-import { handleHistoryMessages } from "./handlers/history-messages.js";
+import { handleHistoryMessageDetail, handleHistoryMessages } from "./handlers/history-messages.js";
 import { handleProgressCardGet } from "./handlers/progress-card.js";
 import { handleHistorySetTitle } from "./handlers/history-set-title.js";
 import { handleSessionsPin } from "./handlers/sessions-pin.js";
@@ -293,9 +293,15 @@ async function handleFridayNextRoute(req: IncomingMessage, res: ServerResponse):
     return await handleNotificationDelete(req, res, seqRaw);
   }
 
-  // Route: GET /friday-next/history/messages?sessionKey=&agentId=&limit=
+  // Route: GET /friday-next/history/messages?sessionKey=&agentId=&limit=&offset=
   if (req.method === "GET" && pathname === "/friday-next/history/messages") {
     return await handleHistoryMessages(req, res);
+  }
+
+  // Route: GET /friday-next/history/message-detail?sessionKey=&id= (full-fidelity
+  // single entry — on-demand counterpart of truncated history pages)
+  if (req.method === "GET" && pathname === "/friday-next/history/message-detail") {
+    return await handleHistoryMessageDetail(req, res);
   }
 
   // Route: GET /friday-next/progress-card?sessionKey= (authoritative session progress card)

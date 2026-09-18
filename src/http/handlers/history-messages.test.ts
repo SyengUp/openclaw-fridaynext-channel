@@ -4,7 +4,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { handleHistoryMessages, serverLocalPathForImageUrl } from "./history-messages.js";
+import { handleHistoryMessages, handleHistoryMessageDetail, serverLocalPathForImageUrl } from "./history-messages.js";
 import { setFridayNextRuntime } from "../../runtime.js";
 import {
   setFridayAgentForwardRuntime,
@@ -535,6 +535,88 @@ describe("handleHistoryMessages", () => {
     expect(getSessionMessages).not.toHaveBeenCalled();
   });
 
+  it("serves the tail page via gateway sessions.get with a +1 hasMore probe", async () => {
+    // 会话共 5 条；请求 limit=2 → gateway 收到 limit+1=3，返回尾部 3 条。
+    const gatewayRequest = vi.fn(async (method: string, params: any) => {
+      if (method !== "sessions.get") throw new Error(`unexpected ${method}`);
+      const all = [1, 2, 3, 4, 5].map((n) => ({
+        role: "user",
+        content: `msg ${n}`,
+        __openclaw: { id: `m${n}`, seq: n },
+      }));
+      expect(params.key).toBe("agent:main:main");
+      return { messages: all.slice(Math.max(0, all.length - params.limit)) };
+    });
+    setForward({}, { gatewayRequest });
+
+    const res = new MockRes();
+    await handleHistoryMessages(
+      makeReq("/friday-next/history/messages?sessionKey=agent:main:main&limit=2", AUTH),
+      res as any,
+    );
+    const body = JSON.parse(res.body);
+    expect(body.messages.map((m: any) => m.id)).toEqual(["m4", "m5"]);
+    expect(body.pagination.hasMore).toBe(true);
+    expect(body.pagination.nextOffset).toBe(2);
+  });
+
+  it("serves an offset page by windowing the gateway tail read", async () => {
+    const gatewayRequest = vi.fn(async (_method: string, params: any) => {
+      const all = [1, 2, 3, 4, 5].map((n) => ({
+        role: "user",
+        content: `msg ${n}`,
+        __openclaw: { id: `m${n}`, seq: n },
+      }));
+      return { messages: all.slice(Math.max(0, all.length - params.limit)) };
+    });
+    setForward({}, { gatewayRequest });
+
+    const res = new MockRes();
+    await handleHistoryMessages(
+      makeReq(
+        "/friday-next/history/messages?sessionKey=agent:main:main&limit=2&offset=2",
+        AUTH,
+      ),
+      res as any,
+    );
+    const body = JSON.parse(res.body);
+    // offset=2 → gateway 取尾部 4 条，切窗 [m2, m3]。
+    expect(body.messages.map((m: any) => m.id)).toEqual(["m2", "m3"]);
+    expect(body.pagination.hasMore).toBe(true);
+    expect(body.pagination.nextOffset).toBe(4);
+
+    const last = new MockRes();
+    await handleHistoryMessages(
+      makeReq(
+        "/friday-next/history/messages?sessionKey=agent:main:main&limit=2&offset=4",
+        AUTH,
+      ),
+      last as any,
+    );
+    const lastBody = JSON.parse(last.body);
+    expect(lastBody.messages.map((m: any) => m.id)).toEqual(["m1"]);
+    expect(lastBody.pagination.hasMore).toBe(false);
+  });
+
+  it("falls back to the local transcript read when gateway sessions.get fails", async () => {
+    const file = writeTranscript("gw-fallback.jsonl", [
+      { type: "message", id: "m1", message: { role: "user", content: "local" } },
+    ]);
+    const gatewayRequest = vi.fn(async () => {
+      throw new Error("gateway unavailable");
+    });
+    setForward({ "agent:main:main": { sessionId: "s", sessionFile: file } }, { gatewayRequest });
+
+    const res = new MockRes();
+    await handleHistoryMessages(
+      makeReq("/friday-next/history/messages?sessionKey=agent:main:main", AUTH),
+      res as any,
+    );
+    const body = JSON.parse(res.body);
+    expect(body.messages.map((m: any) => m.text)).toEqual(["local"]);
+    expect(body.pagination.totalRecords).toBe(1);
+  });
+
   it("falls back to getSessionMessages when the transcript is not on disk", async () => {
     setForward({}); // no entry → disk read yields nothing
     setRuntime(async () => ({
@@ -621,6 +703,77 @@ describe("handleHistoryMessages", () => {
     );
     expect(res.statusCode).toBe(200);
     expect(JSON.parse(res.body).title).toBeUndefined();
+  });
+});
+
+describe("handleHistoryMessageDetail", () => {
+  beforeEach(() => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "friday-hist-"));
+    setRuntime();
+  });
+  afterEach(() => {
+    resetFridayAgentForwardRuntimeForTest();
+    try {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    } catch {
+      /* ignore */
+    }
+  });
+
+  it("returns one entry at full fidelity (no truncation)", async () => {
+    const file = writeTranscript("detail.jsonl", [
+      {
+        type: "message",
+        id: "big-1",
+        message: {
+          role: "toolResult",
+          toolCallId: "tc",
+          toolName: "exec",
+          content: [{ type: "text", text: "z".repeat(20_000) }],
+        },
+      },
+    ]);
+    setForward({ "agent:main:main": { sessionId: "s", sessionFile: file } });
+
+    const res = new MockRes();
+    await handleHistoryMessageDetail(
+      makeReq(
+        "/friday-next/history/message-detail?sessionKey=agent:main:main&id=big-1",
+        AUTH,
+      ),
+      res as any,
+    );
+    expect(res.statusCode).toBe(200);
+    const body = JSON.parse(res.body);
+    expect(body.ok).toBe(true);
+    expect(body.message.toolResult.text.length).toBe(20_000);
+    expect(body.message.truncated).toBeUndefined();
+  });
+
+  it("404s for an unknown id", async () => {
+    const file = writeTranscript("detail-miss.jsonl", [
+      { type: "message", id: "m1", message: { role: "user", content: "hi" } },
+    ]);
+    setForward({ "agent:main:main": { sessionId: "s", sessionFile: file } });
+
+    const res = new MockRes();
+    await handleHistoryMessageDetail(
+      makeReq(
+        "/friday-next/history/message-detail?sessionKey=agent:main:main&id=nope",
+        AUTH,
+      ),
+      res as any,
+    );
+    expect(res.statusCode).toBe(404);
+  });
+
+  it("400s when sessionKey or id is missing", async () => {
+    const res = new MockRes();
+    await handleHistoryMessageDetail(
+      makeReq("/friday-next/history/message-detail?sessionKey=agent:main:main", AUTH),
+      res as any,
+    );
+    expect(res.statusCode).toBe(400);
   });
 });
 

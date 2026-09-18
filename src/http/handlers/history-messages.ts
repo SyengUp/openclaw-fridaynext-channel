@@ -20,8 +20,10 @@ import { isAbsolute } from "node:path";
 import { fileURLToPath } from "node:url";
 import { getFridayNextRuntime } from "../../runtime.js";
 import { extractBearerToken } from "../middleware/auth.js";
-import { normalizeHistoryMessages } from "../../history/normalize-message.js";
+import { normalizeHistoryMessage, normalizeHistoryMessages } from "../../history/normalize-message.js";
 import {
+  readSessionTranscriptPageViaGateway,
+  readSessionTranscriptRawMessageById,
   readSessionTranscriptRawMessagePage,
   resolveSessionId,
   resolveSessionTitle,
@@ -157,21 +159,37 @@ export async function handleHistoryMessages(
   }
   const offset = Number.isSafeInteger(offsetParam) && offsetParam > 0 ? offsetParam : 0;
 
-  // Primary path: read the transcript file directly (works from an HTTP route).
-  const page = readSessionTranscriptRawMessagePage(sessionKey, limit, offset);
-  let rawMessages: unknown[] = page.rawMessages;
-  const hasMore = offset + page.rawMessages.length < page.totalRecords;
-  let pagination: HistoryPagination | undefined = {
-    offset,
-    limit,
-    totalRecords: page.totalRecords,
-    hasMore,
-    ...(hasMore ? { nextOffset: offset + page.rawMessages.length } : {}),
-  };
+  // Primary path: the gateway `sessions.get` bounded read (index window + byte
+  // budget on the host — never materializes the whole transcript). Falls back to
+  // reading the transcript file directly (older hosts / gateway RPC unavailable).
+  const gatewayPage = await readSessionTranscriptPageViaGateway(sessionKey, limit, offset);
+  let rawMessages: unknown[];
+  let pagination: HistoryPagination | undefined;
+  if (gatewayPage) {
+    rawMessages = gatewayPage.rawMessages;
+    pagination = {
+      offset,
+      limit,
+      totalRecords: gatewayPage.totalRecords,
+      hasMore: gatewayPage.hasMore,
+      ...(gatewayPage.hasMore ? { nextOffset: gatewayPage.nextOffset } : {}),
+    };
+  } else {
+    const page = readSessionTranscriptRawMessagePage(sessionKey, limit, offset);
+    rawMessages = page.rawMessages;
+    const hasMore = offset + page.rawMessages.length < page.totalRecords;
+    pagination = {
+      offset,
+      limit,
+      totalRecords: page.totalRecords,
+      hasMore,
+      ...(hasMore ? { nextOffset: offset + page.rawMessages.length } : {}),
+    };
+  }
 
   // Fallback: the request-scoped gateway method (only works in some contexts).
   // It returns the NEWEST TAIL only — never usable for an offset page.
-  if (rawMessages.length === 0 && offset === 0) {
+  if (rawMessages.length === 0 && offset === 0 && gatewayPage === null) {
     const sessionApi = resolveSubagentApi();
     if (sessionApi?.getSessionMessages) {
       try {
@@ -222,5 +240,62 @@ export async function handleHistoryMessages(
       ...(sessionUsage ? { sessionUsage } : {}),
     }),
   );
+  return true;
+}
+
+/**
+ * GET /friday-next/history/message-detail?sessionKey=&id=
+ *
+ * One transcript entry at FULL fidelity (no history-page truncation) — the
+ * on-demand counterpart of `truncated: true` messages. 404 when the id is not
+ * in the session.
+ *
+ * CLEANUP: currently scans the local full read for the id. Fine for an
+ * explicit, low-frequency tap; swap to the host's single-message read
+ * (`chat.message.get`-style RPC) when one is exposed to plugins.
+ */
+export async function handleHistoryMessageDetail(
+  req: IncomingMessage,
+  res: ServerResponse,
+): Promise<boolean> {
+  if (req.method !== "GET") {
+    res.statusCode = 405;
+    res.setHeader("Content-Type", "application/json");
+    res.end(JSON.stringify({ error: "Method Not Allowed" }));
+    return true;
+  }
+
+  const token = extractBearerToken(req);
+  if (!token) {
+    res.statusCode = 401;
+    res.setHeader("Content-Type", "application/json");
+    res.end(JSON.stringify({ error: "Unauthorized: bearer token mismatch" }));
+    return true;
+  }
+
+  const url = new URL(req.url ?? "/", "http://localhost");
+  const sessionKey = url.searchParams.get("sessionKey")?.trim();
+  const messageId = url.searchParams.get("id")?.trim();
+  if (!sessionKey || !messageId) {
+    res.statusCode = 400;
+    res.setHeader("Content-Type", "application/json");
+    res.end(JSON.stringify({ error: "Missing required query params: sessionKey, id" }));
+    return true;
+  }
+
+  const raw = readSessionTranscriptRawMessageById(sessionKey, messageId);
+  const message = raw ? normalizeHistoryMessage(raw, 0, { fullText: true }) : null;
+  if (!message) {
+    res.statusCode = 404;
+    res.setHeader("Content-Type", "application/json");
+    res.end(JSON.stringify({ ok: false, error: "message not found" }));
+    return true;
+  }
+  resolveHistoryMessageMedia([message]);
+
+  res.statusCode = 200;
+  res.setHeader("Cache-Control", "no-store");
+  res.setHeader("Content-Type", "application/json; charset=utf-8");
+  res.end(JSON.stringify({ ok: true, sessionKey, message }));
   return true;
 }

@@ -25,6 +25,8 @@ export interface FridayHistoryToolCall {
   id: string;
   name: string;
   arguments?: Record<string, unknown>;
+  /** true = `arguments` 已被预览替换（原 JSON 超预算），全文走 message-detail。 */
+  argumentsTruncated?: boolean;
 }
 
 export interface FridayHistoryToolResult {
@@ -63,6 +65,24 @@ export interface FridayHistoryMessage {
   kind?: "compaction";
   /** True when `id` was synthesized because upstream had no stable id. */
   synthetic?: boolean;
+  /** true = 任一明细字段（text/thinking/toolResult.text/toolCall 参数）超预算被
+   *  截断；全文走 `GET /friday-next/history/message-detail` 按需拉取。
+   *  ControlUI chat.history 同款策略（默认 8000 字符/条）。 */
+  truncated?: boolean;
+}
+
+/** 历史页明细截断预算（UTF-16 字符）。message-detail 端点不受限。 */
+export const HISTORY_TEXT_MAX_CHARS = 8_000;
+export const HISTORY_TOOL_ARGS_MAX_CHARS = 4_000;
+
+export type NormalizeOptions = {
+  /** true = 关闭截断（单条详情端点）。 */
+  fullText?: boolean;
+};
+
+function clampText(value: string): { text: string; truncated: boolean } {
+  if (value.length <= HISTORY_TEXT_MAX_CHARS) return { text: value, truncated: false };
+  return { text: value.slice(0, HISTORY_TEXT_MAX_CHARS), truncated: true };
 }
 
 type RawRecord = Record<string, unknown>;
@@ -301,11 +321,40 @@ function normalizeRole(raw: unknown): FridayHistoryRole {
   }
 }
 
+/** 历史页预算内裁剪工具调用参数：原 JSON 超预算时替换为预览并打标。 */
+function clampToolCalls(
+  calls: FridayHistoryToolCall[],
+  fullText: boolean,
+): { calls: FridayHistoryToolCall[]; anyTruncated: boolean } {
+  let anyTruncated = false;
+  const out = calls.map((call) => {
+    if (fullText || !call.arguments) return call;
+    let json: string;
+    try {
+      json = JSON.stringify(call.arguments);
+    } catch {
+      return call;
+    }
+    if (json.length <= HISTORY_TOOL_ARGS_MAX_CHARS) return call;
+    anyTruncated = true;
+    return {
+      ...call,
+      arguments: { preview: json.slice(0, HISTORY_TOOL_ARGS_MAX_CHARS) },
+      argumentsTruncated: true,
+    };
+  });
+  return { calls: out, anyTruncated };
+}
+
 /**
  * Normalize one raw transcript message. `index` is the position in the returned
  * batch, used only to synthesize a stable-ish id when upstream omits one.
  */
-export function normalizeHistoryMessage(raw: unknown, index: number): FridayHistoryMessage | null {
+export function normalizeHistoryMessage(
+  raw: unknown,
+  index: number,
+  opts: NormalizeOptions = {},
+): FridayHistoryMessage | null {
   const record = asRecord(raw);
   if (!record) return null;
 
@@ -342,6 +391,8 @@ export function normalizeHistoryMessage(raw: unknown, index: number): FridayHist
     return message;
   }
 
+  const fullText = opts.fullText === true;
+
   if (role === "toolResult") {
     const split = splitMediaLines(parsed.text);
     const toolName = readString(record.toolName);
@@ -357,25 +408,37 @@ export function normalizeHistoryMessage(raw: unknown, index: number): FridayHist
     const keepInlineImages = toolName ? IMAGE_PRODUCING_TOOLS.has(toolName) : false;
     const images = keepInlineImages ? parsed.images : [];
     const mediaPaths = toolName === "canvas" ? [] : split.paths;
+    const clamped = fullText
+      ? { text: split.text, truncated: false }
+      : clampText(split.text);
     const toolResult: FridayHistoryToolResult = {
       ...(readString(record.toolCallId) ? { toolCallId: readString(record.toolCallId) } : {}),
       ...(toolName ? { toolName } : {}),
       ...(record.isError === true ? { isError: true } : {}),
-      ...(split.text ? { text: split.text } : {}),
+      ...(clamped.text ? { text: clamped.text } : {}),
       ...(images.length ? { images } : {}),
     };
     message.toolResult = toolResult;
     if (mediaPaths.length) message.mediaPaths = mediaPaths;
+    if (clamped.truncated) message.truncated = true;
     return message;
   }
 
   const visibleText = role === "user" ? stripMediaMarkers(parsed.text) : parsed.text;
   const split = splitMediaLines(visibleText);
-  if (split.text) message.text = split.text;
+  const clampedText = fullText ? { text: split.text, truncated: false } : clampText(split.text);
+  const clampedThinking = fullText
+    ? { text: parsed.thinking, truncated: false }
+    : clampText(parsed.thinking);
+  const clampedCalls = clampToolCalls(parsed.toolCalls, fullText);
+  if (clampedText.text) message.text = clampedText.text;
   if (split.paths.length) message.mediaPaths = split.paths;
-  if (parsed.thinking) message.thinking = parsed.thinking;
-  if (parsed.toolCalls.length) message.toolCalls = parsed.toolCalls;
+  if (clampedThinking.text) message.thinking = clampedThinking.text;
+  if (clampedCalls.calls.length) message.toolCalls = clampedCalls.calls;
   if (parsed.images.length) message.images = parsed.images;
+  if (clampedText.truncated || clampedThinking.truncated || clampedCalls.anyTruncated) {
+    message.truncated = true;
+  }
 
   const model = readString(record.model) ?? readString(record.responseModel);
   if (model) message.model = model;
@@ -398,7 +461,10 @@ export function normalizeHistoryMessage(raw: unknown, index: number): FridayHist
  * them (OpenClaw 8.1 inbound+run-start replica, or a model-error restart
  * mirror with an empty assistant in between — see `collapseMirroredUserPrompts`).
  */
-export function normalizeHistoryMessages(rawMessages: unknown[]): FridayHistoryMessage[] {
+export function normalizeHistoryMessages(
+  rawMessages: unknown[],
+  opts: NormalizeOptions = {},
+): FridayHistoryMessage[] {
   const out: FridayHistoryMessage[] = [];
   const seenIdempotencyKeys = new Set<string>();
   for (let i = 0; i < rawMessages.length; i += 1) {
@@ -407,7 +473,7 @@ export function normalizeHistoryMessages(rawMessages: unknown[]): FridayHistoryM
       if (seenIdempotencyKeys.has(idempotencyKey)) continue;
       seenIdempotencyKeys.add(idempotencyKey);
     }
-    const normalized = normalizeHistoryMessage(rawMessages[i], i);
+    const normalized = normalizeHistoryMessage(rawMessages[i], i, opts);
     if (normalized) out.push(normalized);
   }
   out.sort((a, b) => a.seq - b.seq);
