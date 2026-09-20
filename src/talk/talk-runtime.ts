@@ -9,6 +9,8 @@ export type TalkSdkSessionHandle = {
   sessionId?: string;
   sendAudio: (pcm: Buffer) => void | Promise<void>;
   cancelOutput?: (reason?: string) => void | Promise<void>;
+  /** 播放排空后的 mark 回执；宿主未提供时 App 侧按 no-op 处理。 */
+  acknowledgeMark?: (markName: string) => void | Promise<void>;
   close: () => void | Promise<void>;
 };
 

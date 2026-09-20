@@ -470,6 +470,36 @@ describe("handleTalk", () => {
       expect(again.captured.statusCode).toBe(404);
     });
 
+    it("acknowledges a realtime relay mark", async () => {
+      dispatchGatewayMethod.mockResolvedValue({ ok: true, payload: { sessionId: "sess-3" } });
+      await invoke("POST", "/friday-next-admin/talk/session", { deviceId: "phone-1" });
+      dispatchGatewayMethod.mockResolvedValue({ ok: true, payload: {} });
+      const acked = await invoke("POST", "/friday-next-admin/talk/session/mark", {
+        sessionId: "sess-3",
+        markName: "m-1",
+      });
+      expect(acked.captured.statusCode).toBe(200);
+      expect(dispatchGatewayMethod).toHaveBeenLastCalledWith("talk.session.acknowledgeMark", {
+        sessionId: "sess-3",
+        markName: "m-1",
+      });
+    });
+
+    it("rejects a mark without sessionId or markName", async () => {
+      const missingSession = await invoke("POST", "/friday-next-admin/talk/session/mark", {
+        markName: "m-1",
+      });
+      expect(missingSession.captured.statusCode).toBe(400);
+      const missingMark = await invoke("POST", "/friday-next-admin/talk/session/mark", {
+        sessionId: "sess-3",
+      });
+      expect(missingMark.captured.statusCode).toBe(400);
+      expect(dispatchGatewayMethod).not.toHaveBeenCalledWith(
+        "talk.session.acknowledgeMark",
+        expect.anything(),
+      );
+    });
+
     it("rejects a public session create without an attest token when required", async () => {
       setFridayNextRuntime({
         config: {

@@ -64,6 +64,7 @@ const SESSION_PATH = "/friday-next-admin/talk/session";
 const SESSION_AUDIO_PATH = "/friday-next-admin/talk/session/audio";
 const SESSION_TOOL_CALL_PATH = "/friday-next-admin/talk/session/tool-call";
 const SESSION_CANCEL_PATH = "/friday-next-admin/talk/session/cancel";
+const SESSION_MARK_PATH = "/friday-next-admin/talk/session/mark";
 const SESSION_CLOSE_PATH = "/friday-next-admin/talk/session/close";
 
 const TALK_PATHS = new Set([
@@ -75,6 +76,7 @@ const TALK_PATHS = new Set([
   SESSION_AUDIO_PATH,
   SESSION_TOOL_CALL_PATH,
   SESSION_CANCEL_PATH,
+  SESSION_MARK_PATH,
   SESSION_CLOSE_PATH,
 ]);
 
@@ -285,6 +287,10 @@ export async function handleTalk(req: IncomingMessage, res: ServerResponse): Pro
   if (pathname === SESSION_CANCEL_PATH) {
     if (req.method !== "POST") return json(res, 405, { error: "Method Not Allowed" });
     return await handleTalkSessionCancel(res, await readJsonBody(req));
+  }
+  if (pathname === SESSION_MARK_PATH) {
+    if (req.method !== "POST") return json(res, 405, { error: "Method Not Allowed" });
+    return await handleTalkSessionMark(res, await readJsonBody(req));
   }
   if (req.method !== "POST") return json(res, 405, { error: "Method Not Allowed" });
   return await handleTalkSessionClose(res, await readJsonBody(req));
@@ -510,6 +516,47 @@ async function handleTalkSessionCancel(
   const params: Record<string, unknown> = { sessionId };
   if (reason) params.reason = reason;
   return await dispatchTalk(res, "talk.session.cancelOutput", params);
+}
+
+async function handleTalkSessionMark(
+  res: ServerResponse,
+  body: Record<string, unknown> | null,
+): Promise<true> {
+  if (!body) return json(res, 400, { ok: false, error: "invalid JSON body" });
+  const sessionId = optionalNonEmptyString(body.sessionId);
+  const markName = optionalNonEmptyString(body.markName);
+  if (!sessionId)
+    return json(res, 400, { ok: false, error: "talk.session.acknowledgeMark requires sessionId" });
+  if (!markName)
+    return json(res, 400, { ok: false, error: "talk.session.acknowledgeMark requires markName" });
+  const entry = lookupTalkSession(sessionId);
+  if (!entry) return json(res, 404, { ok: false, error: "unknown talk session" });
+
+  if (entry.kind === "sdk") {
+    // SDK 句柄没有 mark 回执能力：同 connId 桥接分支一样直接回 ok，
+    // 不能因此让 App 的播放排空流程失败。
+    if (typeof entry.handle?.acknowledgeMark !== "function") {
+      return json(res, 200, { ok: true, via: "sdk-noop" });
+    }
+    try {
+      await entry.handle.acknowledgeMark(markName);
+      return json(res, 200, { ok: true });
+    } catch (err) {
+      return json(res, 500, {
+        ok: false,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+  }
+
+  if (!entry.connId || !attachTalkOwnerConnId(entry.connId)) {
+    return json(res, 503, {
+      ok: false,
+      code: "UNAVAILABLE",
+      error: "Talk session unavailable (no gateway request scope)",
+    });
+  }
+  return await dispatchTalk(res, "talk.session.acknowledgeMark", { sessionId, markName });
 }
 
 async function handleTalkSessionClose(
