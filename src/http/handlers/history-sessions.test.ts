@@ -6,6 +6,7 @@ import path from "node:path";
 import { handleHistorySessions } from "./history-sessions.js";
 import { setMockRuntime } from "../../test-support/mock-runtime.js";
 import {
+  getFridayAgentForwardRuntime,
   setFridayAgentForwardRuntime,
   resetFridayAgentForwardRuntimeForTest,
 } from "../../agent-forward-runtime.js";
@@ -71,13 +72,9 @@ function setForward(
   config: unknown,
   storesByAgent: Record<string, Record<string, unknown>>,
   opts?: {
+    readSessionTranscriptEvents?: (params: { sessionId: string }) => Promise<unknown[]>;
     /** Prefer identity list (SQLite). Rows may omit `sessionFile`. */
     useListEntries?: boolean;
-    loadTranscriptEventsSync?: (params: {
-      sessionId: string;
-      sessionKey?: string;
-      agentId?: string;
-    }) => unknown[];
   },
 ): void {
   const loadSessionStore = (p: string) => {
@@ -101,14 +98,12 @@ function setForward(
             path.join(tmpDir, `${opts?.agentId ?? "main"}.json`),
           loadSessionStore,
           ...(listSessionEntries ? { listSessionEntries } : {}),
-          ...(opts?.loadTranscriptEventsSync
-            ? { loadTranscriptEventsSync: opts.loadTranscriptEventsSync }
-            : {}),
         },
       },
       config: { current: () => config },
     },
   } as any);
+  getFridayAgentForwardRuntime()!.readSessionTranscriptEvents = opts?.readSessionTranscriptEvents;
 }
 
 describe("handleHistorySessions", () => {
@@ -555,8 +550,27 @@ describe("handleHistorySessions", () => {
     ]);
   });
 
-  it("inspects cron transcripts from loadTranscriptEventsSync when there is no JSONL", async () => {
+  it("inspects async cron transcripts when there is no JSONL", async () => {
     const now = Date.now();
+    const readEvents = ({ sessionId }: { sessionId: string }) => {
+      if (sessionId !== "cron-sid") return [];
+      return [
+        { type: "session", id: "cron-sid" },
+        {
+          type: "message",
+          id: "u",
+          message: {
+            role: "user",
+            content: "[cron:job-sql 每日趣闻] 查询趣闻 Current time: X",
+          },
+        },
+        {
+          type: "message",
+          id: "a",
+          message: { role: "assistant", content: "今日趣闻正文" },
+        },
+      ];
+    };
     setForward(
       { agents: { entries: { main: {} } } },
       {
@@ -569,25 +583,7 @@ describe("handleHistorySessions", () => {
       },
       {
         useListEntries: true,
-        loadTranscriptEventsSync: ({ sessionId }) => {
-          if (sessionId !== "cron-sid") return [];
-          return [
-            { type: "session", id: "cron-sid" },
-            {
-              type: "message",
-              id: "u",
-              message: {
-                role: "user",
-                content: "[cron:job-sql 每日趣闻] 查询趣闻 Current time: X",
-              },
-            },
-            {
-              type: "message",
-              id: "a",
-              message: { role: "assistant", content: "今日趣闻正文" },
-            },
-          ];
-        },
+        readSessionTranscriptEvents: async (params: { sessionId: string }) => readEvents(params),
       },
     );
     const res = new MockRes();

@@ -1,8 +1,8 @@
 /**
  * Reads a session's transcript.
  *
- * OpenClaw 2026.8.1+ stores events in SQLite (`loadTranscriptEventsSync` by
- * `{agentId, sessionId}`). Older hosts keep `sessions.json` → `entry.sessionFile`
+ * Current hosts expose `readSessionTranscriptEvents` by session identity.
+ * Hosts before SQLite keep `sessions.json` → `entry.sessionFile`
  * → `.jsonl`. We do NOT use `runtime.subagent.getSessionMessages` as the primary
  * path: that dispatches gateway `sessions.get`, which is only valid inside a
  * gateway request scope and returns empty from a plugin HTTP route.
@@ -113,31 +113,38 @@ export type TranscriptReadScope = {
   maxBytes?: number;
 };
 
+type TranscriptReadResult = {
+  records: unknown[];
+  /** Async host reads are final, including empty results and read failures. */
+  authoritative: boolean;
+};
+
 /**
- * Transcript records in storage order. SQLite first when the host exposes
- * `loadTranscriptEventsSync`; otherwise the JSONL file.
+ * Transcript records in storage order. Prefer the async host reader; retain
+ * JSONL reads only for supported hosts predating that API.
  */
-export function readTranscriptRecords(scope: TranscriptReadScope): unknown[] {
+export async function readTranscriptRecords(scope: TranscriptReadScope): Promise<TranscriptReadResult> {
   const sessionId = entryString(scope.entry, "sessionId");
   const rt = getFridayAgentForwardRuntime();
-  if (sessionId && typeof rt?.loadTranscriptEventsSync === "function") {
+  if (rt?.readSessionTranscriptEvents) {
+    if (!sessionId) return { records: [], authoritative: true };
     try {
-      const events = rt.loadTranscriptEventsSync({
+      const records = await rt.readSessionTranscriptEvents({
         sessionId,
         sessionKey: scope.sessionKey,
         ...(scope.agentId ? { agentId: scope.agentId } : {}),
         ...(scope.storePath ? { storePath: scope.storePath } : {}),
       });
-      if (Array.isArray(events) && events.length > 0) return events;
+      return { records, authoritative: true };
     } catch {
-      // Fall through to JSONL (COMPAT / incomplete SQLite bind).
+      return { records: [], authoritative: true };
     }
   }
 
-  if (!scope.storePath) return [];
+  if (!scope.storePath) return { records: [], authoritative: false };
   const filePath = resolveTranscriptPath(scope.entry, scope.storePath);
-  if (!filePath) return [];
-  return recordsFromJsonlFile(filePath, scope.maxBytes);
+  if (!filePath) return { records: [], authoritative: false };
+  return { records: recordsFromJsonlFile(filePath, scope.maxBytes), authoritative: false };
 }
 
 /** Resolves the real server-side session id for a session key, or undefined. */
@@ -218,10 +225,10 @@ export function transcriptRecordsToRawMessagePage(
   return { rawMessages: all.slice(start, end), totalRecords };
 }
 
-function readTranscriptRecordsForSessionKey(sessionKey: string): unknown[] {
+async function readTranscriptRecordsForSessionKey(sessionKey: string): Promise<TranscriptReadResult> {
   const row = findSessionStoreRow(sessionKey);
-  if (!row) return [];
   const rt = getFridayAgentForwardRuntime();
+  if (!row) return { records: [], authoritative: Boolean(rt?.readSessionTranscriptEvents) };
   let storePath: string | undefined;
   try {
     storePath = rt?.resolveStorePath(undefined, {
@@ -242,29 +249,33 @@ function readTranscriptRecordsForSessionKey(sessionKey: string): unknown[] {
  * Returns raw transcript message objects (newest tail up to `limit`), each with
  * an `__openclaw: { id, seq, recordTimestampMs }` envelope. Empty on any failure.
  */
-export function readSessionTranscriptRawMessages(sessionKey: string, limit: number): unknown[] {
-  return readSessionTranscriptRawMessagePage(sessionKey, limit, 0).rawMessages;
+export async function readSessionTranscriptRawMessages(
+  sessionKey: string,
+  limit: number,
+): Promise<unknown[]> {
+  return (await readSessionTranscriptRawMessagePage(sessionKey, limit, 0)).rawMessages;
 }
 
 /** Offset-paged variant of {@link readSessionTranscriptRawMessages}. */
-export function readSessionTranscriptRawMessagePage(
+export async function readSessionTranscriptRawMessagePage(
   sessionKey: string,
   limit: number,
   offset: number,
-): TranscriptMessagePage {
-  return transcriptRecordsToRawMessagePage(
-    readTranscriptRecordsForSessionKey(sessionKey),
-    limit,
-    offset,
-  );
+): Promise<TranscriptMessagePage & { authoritative: boolean }> {
+  const result = await readTranscriptRecordsForSessionKey(sessionKey);
+  return {
+    ...transcriptRecordsToRawMessagePage(result.records, limit, offset),
+    authoritative: result.authoritative,
+  };
 }
 
 /** Finds one raw message by its stable transcript entry id (full detail). */
-export function readSessionTranscriptRawMessageById(
+export async function readSessionTranscriptRawMessageById(
   sessionKey: string,
   messageId: string,
-): Record<string, unknown> | undefined {
-  const all = messageRecordsWithGlobalEnvelope(readTranscriptRecordsForSessionKey(sessionKey));
+): Promise<Record<string, unknown> | undefined> {
+  const { records } = await readTranscriptRecordsForSessionKey(sessionKey);
+  const all = messageRecordsWithGlobalEnvelope(records);
   return all.find(
     (raw) => asRecord(asRecord(raw)?.__openclaw)?.id === messageId,
   ) as Record<string, unknown> | undefined;

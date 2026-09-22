@@ -22,6 +22,7 @@ import {
 import { sseEmitter } from "../../sse/emitter.js";
 import { restoreDurableRuntimeV3 } from "../../runtime-v3/runtime-recovery.js";
 import {
+  getFridayAgentForwardRuntime,
   resetFridayAgentForwardRuntimeForTest,
   setFridayAgentForwardRuntime,
 } from "../../agent-forward-runtime.js";
@@ -258,7 +259,7 @@ describe("runtime protocol v3", () => {
     }
   });
 
-  it("returns a reconstructable session snapshot with transcript, segments and stable revision", async () => {
+  it.each(["jsonl", "async"])("returns a reconstructable %s session snapshot with transcript, segments and stable revision", async (mode) => {
     const root = configure();
     const sessionKey = "agent:main:snapshot";
     const transcriptFile = path.join(root, "snapshot.jsonl");
@@ -289,13 +290,21 @@ describe("runtime protocol v3", () => {
           session: {
             resolveStorePath: () => path.join(root, "sessions.json"),
             loadSessionStore: () => ({
-              [sessionKey]: { sessionId: "snapshot-session", sessionFile: transcriptFile },
+              [sessionKey]: {
+                sessionId: "snapshot-session",
+                ...(mode === "jsonl" ? { sessionFile: transcriptFile } : {}),
+              },
             }),
           },
         },
         config: { current: () => ({}) },
       },
     } as never);
+    getFridayAgentForwardRuntime()!.readSessionTranscriptEvents = undefined;
+    if (mode === "async") {
+      getFridayAgentForwardRuntime()!.readSessionTranscriptEvents = async () =>
+        fs.readFileSync(transcriptFile, "utf8").trim().split("\n").map((line) => JSON.parse(line));
+    }
     const store = getRuntimeV3Store();
     const run = store.acceptCommand({
       clientRequestId: "snapshot-request",
@@ -382,6 +391,7 @@ describe("runtime protocol v3", () => {
         config: { current: () => ({}) },
       },
     } as never);
+    getFridayAgentForwardRuntime()!.readSessionTranscriptEvents = undefined;
 
     const store = getRuntimeV3Store();
     const historical = store.acceptCommand({
@@ -496,7 +506,7 @@ describe("runtime protocol v3", () => {
     setRuntimeV3RootForTest(path.join(root, "runtime-v3"));
     await restoreDurableRuntimeV3({
       isRunActive: async () => false,
-      transcriptProvesCompletion: () => false,
+      transcriptProvesCompletion: async () => false,
     });
 
     const recovered = getRuntimeV3Store();
@@ -520,10 +530,34 @@ describe("runtime protocol v3", () => {
     setRuntimeV3RootForTest(path.join(root, "runtime-v3"));
     await restoreDurableRuntimeV3({
       isRunActive: async () => false,
-      transcriptProvesCompletion: () => true,
+      transcriptProvesCompletion: async () => true,
     });
 
     expect(getRuntimeV3Store().run(accepted.runId)?.phase).toBe("completed");
+  });
+
+  it("preserves a terminal event received while recovery awaits transcript evidence", async () => {
+    configure();
+    const store = getRuntimeV3Store();
+    const run = store.acceptCommand({
+      clientRequestId: "finishing-during-recovery",
+      deviceId: "PHONE-1",
+      sessionKey: "agent:main:finishing",
+      agentId: "main",
+      text: "finish task",
+      attachments: [],
+    }).run!;
+    store.transition(run.runId, "running");
+    await restoreDurableRuntimeV3({
+      isRunActive: async () => false,
+      transcriptProvesCompletion: async () => {
+        store.appendRunEvent(run.runId, "run.completed", {});
+        return false;
+      },
+    });
+    expect(store.run(run.runId)?.phase).toBe("completed");
+    expect(store.eventsForRun(run.runId).filter((event) => event.eventType === "run.completed")).toHaveLength(1);
+    expect(store.eventsForRun(run.runId).some((event) => event.eventType === "run.failed")).toBe(false);
   });
 
   it("returns the original run for duplicate clientRequestId and rejects changed payloads", async () => {

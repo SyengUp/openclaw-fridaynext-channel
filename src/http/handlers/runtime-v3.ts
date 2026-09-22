@@ -332,7 +332,7 @@ export async function handleRuntimeV3SessionSnapshot(
     .sort((a, b) => a.occurredAt - b.occurredAt || a.runSeq - b.runSeq);
   const transcriptLimit = Math.min(500, Math.max(1, integerQuery(url, "transcriptLimit", 110)));
   const transcript = normalizeHistoryMessages(
-    readSessionTranscriptRawMessages(key, transcriptLimit),
+    await readSessionTranscriptRawMessages(key, transcriptLimit),
   );
   resolveHistoryMessageMedia(transcript);
   const sessionUsage = await readSessionUsageSnapshot(key);

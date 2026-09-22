@@ -49,7 +49,7 @@ async function replayQueuedCommand(runId: string): Promise<boolean> {
 
 export type RuntimeRecoveryDeps = {
   isRunActive: (run: DurableRunRecord) => Promise<boolean>;
-  transcriptProvesCompletion: (run: DurableRunRecord) => boolean;
+  transcriptProvesCompletion: (run: DurableRunRecord) => Promise<boolean>;
 };
 
 async function defaultIsRunActive(run: DurableRunRecord): Promise<boolean> {
@@ -84,8 +84,8 @@ function messageTimestamp(message: Record<string, unknown>): number | undefined 
   return typeof timestamp === "number" && Number.isFinite(timestamp) ? timestamp : undefined;
 }
 
-function defaultTranscriptProvesCompletion(run: DurableRunRecord): boolean {
-  const messages = readSessionTranscriptRawMessages(run.sessionKey, 200).filter(
+async function defaultTranscriptProvesCompletion(run: DurableRunRecord): Promise<boolean> {
+  const messages = (await readSessionTranscriptRawMessages(run.sessionKey, 200)).filter(
     (value): value is Record<string, unknown> =>
       !!value && typeof value === "object" && !Array.isArray(value),
   );
@@ -133,7 +133,9 @@ async function reconcileInterruptedRun(
     store.transition(run.runId, "cancelled", "plugin_restart_cancelled");
     return;
   }
-  if (deps.transcriptProvesCompletion(run)) {
+  const completed = await deps.transcriptProvesCompletion(run);
+  if (store.run(run.runId)?.phase !== "reconciling") return;
+  if (completed) {
     store.appendRunEvent(run.runId, "run.completed", {
       recoveredFromTranscript: true,
       previousPhase: originalPhase,
