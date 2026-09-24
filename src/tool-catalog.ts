@@ -2,19 +2,28 @@
  * Build an agent's tool-permission catalog for the app's toolbox editor — the same
  * tools/categories/descriptions/profiles ControlUI shows.
  *
- * The catalog (core + plugin tools, grouped, with descriptions and per-tool
- * `defaultProfiles`) is produced by core's `buildToolsCatalogResult({cfg, agentId})`.
- * That builder lives only in a hash-named dist chunk (no stable plugin-sdk export) and
- * the catalog is CODE, not scannable data — so unlike skill discovery we can't avoid
- * importing it. We locate the chunk RESILIENTLY (scan `<openclaw>/dist/*.{mjs,js}` for the one
- * defining `buildToolsCatalogResult`, then dynamic-import it — Node returns the gateway's
- * already-loaded module instance, so no side effects), cache it, and degrade gracefully
- * (null) if the layout changes. Per-tool `enabled`/`inProfile` are then resolved here from
- * the agent's `tools` config so the app can render simple toggles.
+ * Two builders, because the host surface decides which one is reachable:
+ *
+ * - `buildAgentToolsCatalog` (current): dispatches the gateway `tools.catalog` method
+ *   through the supported plugin SDK (`openclaw/plugin-sdk/gateway-method-runtime`).
+ *   The gateway method runs core's real builder and returns the same result, without
+ *   importing a hash-named core dist chunk. Use it from a gateway-authed route (the
+ *   admin sibling prefix), which carries an operator scope.
+ *
+ * - `buildAgentToolsCatalogLegacy`: the old deep-import path. OpenClaw's external-plugin
+ *   generation capture only mirrors the host's static dependency closure, so importing a
+ *   captured core chunk that transitively needs `jiti` (via `jiti-factory`) fails with
+ *   `ERR_MODULE_NOT_FOUND: jiti` on 2026.9.5+. It still works on ≤2026.9.4 and is kept for
+ *   the plugin-authed `/friday-next/agents/{id}/tools/catalog` route that un-upgraded apps
+ *   call (that route has an empty operator scope list, so it can't dispatch scoped methods).
+ *
+ * Both share `projectAgentTools`, which resolves per-tool `enabled`/`inProfile` from the
+ * agent's `tools` config so the app can render simple toggles.
  */
 
 import fs from "node:fs";
 import path from "node:path";
+import { dispatchGatewayMethod } from "openclaw/plugin-sdk/gateway-method-runtime";
 import { importAbsoluteModule } from "./import-absolute-module.js";
 import { resolveOpenClawRoot } from "./skills-discovery.js";
 import { findAgentRosterConfig } from "./agent-roster.js";
@@ -44,7 +53,121 @@ type BuildFn = (params: {
   includePlugins?: boolean;
 }) => CoreCatalogResult;
 
-let cachedBuildFn: BuildFn | null | undefined;
+export interface AgentToolsConfigShape {
+  profile?: string;
+  allow?: string[];
+  alsoAllow?: string[];
+  deny?: string[];
+}
+
+export interface AgentCatalogTool {
+  id: string;
+  label: string;
+  description: string;
+  source: string;
+  /** Effective state under the agent's current tools config. */
+  enabled: boolean;
+  /** Whether the active profile grants this tool (drives the app's allow/deny delta). */
+  inProfile: boolean;
+}
+export interface AgentCatalogGroup {
+  id: string;
+  label: string;
+  source: string;
+  pluginId?: string;
+  tools: AgentCatalogTool[];
+}
+export interface AgentToolsCatalog {
+  /** The agent's configured profile (null when unset). */
+  profile: string | null;
+  profiles: Array<{ id: string; label: string }>;
+  groups: AgentCatalogGroup[];
+}
+
+function readStringArray(value: unknown): string[] {
+  return Array.isArray(value) ? value.filter((v): v is string => typeof v === "string") : [];
+}
+
+/** Read an agent's `tools` config block from the host config. */
+function findAgentTools(cfg: unknown, agentId: string): AgentToolsConfigShape | undefined {
+  const entry = findAgentRosterConfig(cfg, agentId);
+  return entry?.tools as AgentToolsConfigShape | undefined;
+}
+
+/** Resolve per-tool effective `enabled`/`inProfile` from the agent's `tools` config. */
+function projectAgentTools(
+  core: CoreCatalogResult,
+  cfg: unknown,
+  agentId: string,
+): AgentToolsCatalog {
+  const tools = findAgentTools(cfg, agentId);
+  const profile =
+    typeof tools?.profile === "string" && tools.profile.trim() ? tools.profile.trim() : null;
+  const allow = new Set(readStringArray(tools?.allow));
+  const alsoAllow = new Set(readStringArray(tools?.alsoAllow));
+  const deny = new Set(readStringArray(tools?.deny));
+  // No profile + no explicit allow == core's "allow all (except deny)".
+  const allowAll = profile === "full" || allow.has("*") || (!profile && allow.size === 0);
+
+  const groups: AgentCatalogGroup[] = core.groups.map((g) => ({
+    id: g.id,
+    label: g.label,
+    source: g.source,
+    pluginId: g.pluginId,
+    tools: g.tools.map((t) => {
+      const inProfile = allowAll ? true : profile ? t.defaultProfiles.includes(profile) : false;
+      let enabled: boolean;
+      if (deny.has(t.id)) enabled = false;
+      else if (allowAll) enabled = true;
+      else enabled = inProfile || allow.has(t.id) || alsoAllow.has(t.id);
+      return {
+        id: t.id,
+        label: t.label,
+        description: t.description,
+        source: t.source,
+        enabled,
+        inProfile,
+      };
+    }),
+  }));
+
+  return { profile, profiles: core.profiles, groups };
+}
+
+function isCoreCatalogResult(value: unknown): value is CoreCatalogResult {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    Array.isArray((value as { groups?: unknown }).groups) &&
+    Array.isArray((value as { profiles?: unknown }).profiles)
+  );
+}
+
+/**
+ * The agent's full tool catalog with per-tool effective state, or null if the gateway
+ * `tools.catalog` method is unavailable (outside a plugin request scope, host error).
+ * Requires a gateway-authed route: `tools.catalog` needs `operator.read`.
+ */
+export async function buildAgentToolsCatalog(
+  cfg: unknown,
+  agentId: string,
+): Promise<AgentToolsCatalog | null> {
+  let core: unknown;
+  try {
+    const response = await dispatchGatewayMethod("tools.catalog", {
+      agentId,
+      includePlugins: true,
+    });
+    if (!response.ok) return null;
+    core = response.payload;
+  } catch {
+    return null;
+  }
+  if (!isCoreCatalogResult(core)) return null;
+  return projectAgentTools(core, cfg, agentId);
+}
+
+/* ─────────────────────────── Legacy (≤2026.9.4) deep-import path ─────────────────────────── */
 
 /**
  * OpenClaw 2026.9.3 moved its bundled chunks from `.js` to `.mjs`. Prefer the
@@ -72,6 +195,8 @@ export function orderOpenClawDistModuleCandidates(
     })
     .map(({ file }) => file);
 }
+
+let cachedBuildFn: BuildFn | null | undefined;
 
 async function loadBuildFn(): Promise<BuildFn | null> {
   if (cachedBuildFn !== undefined) return cachedBuildFn;
@@ -209,52 +334,12 @@ async function locateBuildFn(): Promise<BuildFn | null> {
   return null;
 }
 
-export interface AgentToolsConfigShape {
-  profile?: string;
-  allow?: string[];
-  alsoAllow?: string[];
-  deny?: string[];
-}
-
-export interface AgentCatalogTool {
-  id: string;
-  label: string;
-  description: string;
-  source: string;
-  /** Effective state under the agent's current tools config. */
-  enabled: boolean;
-  /** Whether the active profile grants this tool (drives the app's allow/deny delta). */
-  inProfile: boolean;
-}
-export interface AgentCatalogGroup {
-  id: string;
-  label: string;
-  source: string;
-  pluginId?: string;
-  tools: AgentCatalogTool[];
-}
-export interface AgentToolsCatalog {
-  /** The agent's configured profile (null when unset). */
-  profile: string | null;
-  profiles: Array<{ id: string; label: string }>;
-  groups: AgentCatalogGroup[];
-}
-
-function readStringArray(value: unknown): string[] {
-  return Array.isArray(value) ? value.filter((v): v is string => typeof v === "string") : [];
-}
-
-/** Read an agent's `tools` config block from the host config. */
-function findAgentTools(cfg: unknown, agentId: string): AgentToolsConfigShape | undefined {
-  const entry = findAgentRosterConfig(cfg, agentId);
-  return entry?.tools as AgentToolsConfigShape | undefined;
-}
-
 /**
- * The agent's full tool catalog with per-tool effective state, or null if the core
- * catalog builder can't be located.
+ * Legacy catalog builder: deep-imports core's dist chunk. Works on ≤2026.9.4; fails on
+ * 2026.9.5+ (captured generation lacks `jiti`). Kept for the plugin-authed route that
+ * un-upgraded apps call.
  */
-export async function buildAgentToolsCatalog(
+export async function buildAgentToolsCatalogLegacy(
   cfg: unknown,
   agentId: string,
 ): Promise<AgentToolsCatalog | null> {
@@ -286,42 +371,10 @@ export async function buildAgentToolsCatalog(
       }
     }
   }
-
-  const tools = findAgentTools(cfg, agentId);
-  const profile =
-    typeof tools?.profile === "string" && tools.profile.trim() ? tools.profile.trim() : null;
-  const allow = new Set(readStringArray(tools?.allow));
-  const alsoAllow = new Set(readStringArray(tools?.alsoAllow));
-  const deny = new Set(readStringArray(tools?.deny));
-  // No profile + no explicit allow == core's "allow all (except deny)".
-  const allowAll = profile === "full" || allow.has("*") || (!profile && allow.size === 0);
-
-  const groups: AgentCatalogGroup[] = core.groups.map((g) => ({
-    id: g.id,
-    label: g.label,
-    source: g.source,
-    pluginId: g.pluginId,
-    tools: g.tools.map((t) => {
-      const inProfile = allowAll ? true : profile ? t.defaultProfiles.includes(profile) : false;
-      let enabled: boolean;
-      if (deny.has(t.id)) enabled = false;
-      else if (allowAll) enabled = true;
-      else enabled = inProfile || allow.has(t.id) || alsoAllow.has(t.id);
-      return {
-        id: t.id,
-        label: t.label,
-        description: t.description,
-        source: t.source,
-        enabled,
-        inProfile,
-      };
-    }),
-  }));
-
-  return { profile, profiles: core.profiles, groups };
+  return projectAgentTools(core, cfg, agentId);
 }
 
-/** Test-only: reset the cached catalog builder. */
+/** Test-only: reset the cached legacy catalog builder. */
 export function resetToolCatalogCacheForTest(): void {
   cachedBuildFn = undefined;
 }

@@ -26,6 +26,7 @@ import { handleAgentConfig } from "./handlers/agent-config.js";
 import { handleAgentGreeting } from "./handlers/agent-greetings.js";
 import { handleAgentFiles } from "./handlers/agent-files.js";
 import { handleAgentToolsCatalog } from "./handlers/agent-tools-catalog.js";
+import { handleAdminToolCatalog } from "./handlers/admin-tool-catalog.js";
 import { handleHistorySessions } from "./handlers/history-sessions.js";
 import { handleNotifications, handleNotificationDelete } from "./handlers/notifications.js";
 import { handleInbox } from "./handlers/inbox.js";
@@ -445,6 +446,18 @@ export function registerFridayNextHttpRoutes(api: {
   api.registerHttpRoute({
     path: "/friday-next-admin/models",
     handler: handleAdminModelsList,
+    auth: "gateway",
+    match: "exact",
+  });
+
+  // Agent tool catalog for the toolbox editor. Same sibling-prefix + least-privilege
+  // reasoning as `/friday-next-admin/commands`: `tools.catalog` only needs
+  // `operator.read`, satisfied by the default surface's `operator.write`. Replaces the
+  // legacy plugin-authed deep-import path, which executed a captured core dist chunk
+  // needing `jiti` and broke on 2026.9.5+.
+  api.registerHttpRoute({
+    path: "/friday-next-admin/tool-catalog",
+    handler: handleAdminToolCatalog,
     auth: "gateway",
     match: "exact",
   });

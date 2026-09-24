@@ -1,16 +1,23 @@
 /**
  * GET /friday-next/agents/{id}/tools/catalog
  *
- * Returns the agent's full tool catalog (core + plugin tools, grouped by category,
- * with descriptions, profiles, and per-tool effective `enabled`/`inProfile` state) for
- * the app's toolbox editor — mirroring ControlUI. Edits are saved via the existing
- * `PUT /agents/{id}/config` (tools.{profile,allow,alsoAllow,deny}).
+ * LEGACY (plugin-authed) route, kept for un-upgraded apps. Returns the agent's full tool
+ * catalog (core + plugin tools, grouped by category, with descriptions, profiles, and
+ * per-tool effective `enabled`/`inProfile` state) for the app's toolbox editor.
+ *
+ * It uses the deep-import builder because a plugin-authed route gets an EMPTY operator
+ * scope list, so it cannot dispatch the scoped `tools.catalog` gateway method. That
+ * deep-import works on ≤2026.9.4 but fails on 2026.9.5+. Current apps should call the
+ * gateway-authed `GET /friday-next-admin/tool-catalog?agentId=` instead (see
+ * `admin-tool-catalog.ts`).
+ *
+ * Edits are saved via the existing `PUT /agents/{id}/config` (tools.{profile,allow,alsoAllow,deny}).
  */
 
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { getFridayAgentForwardRuntime } from "../../agent-forward-runtime.js";
 import { normalizeAgentId } from "../../agent-id.js";
-import { buildAgentToolsCatalog } from "../../tool-catalog.js";
+import { buildAgentToolsCatalogLegacy } from "../../tool-catalog.js";
 import { extractBearerToken } from "../middleware/auth.js";
 
 function json(res: ServerResponse, status: number, body: unknown): true {
@@ -34,7 +41,7 @@ export async function handleAgentToolsCatalog(
 
   const agentId = normalizeAgentId(rawAgentId);
   const cfg = getFridayAgentForwardRuntime()?.getConfig();
-  const catalog = await buildAgentToolsCatalog(cfg, agentId);
+  const catalog = await buildAgentToolsCatalogLegacy(cfg, agentId);
   if (!catalog) {
     return json(res, 503, { error: "Tool catalog unavailable" });
   }
