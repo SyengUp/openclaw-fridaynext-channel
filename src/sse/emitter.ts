@@ -625,4 +625,24 @@ class SseEmitterRegistry {
   }
 }
 
-export const sseEmitter = new SseEmitterRegistry();
+const SSE_EMITTER_KEY = Symbol.for("@syengup/friday-channel-next/sse-emitter-registry");
+
+/**
+ * Process-global singleton, not module-local.
+ *
+ * OpenClaw 2026.9.5+ can load an external plugin as more than one module instance in
+ * the same realm (gateway route registration vs. tool resolution via the generation
+ * capture). A module-local emitter would give the device tools a registry with no
+ * connections, so `sseEmitter.broadcast(...)` would never reach the connected iPhone
+ * and the online gate would read "offline". Keying on `globalThis` keeps one registry
+ * for every instance.
+ */
+function resolveSseEmitterRegistry(): SseEmitterRegistry {
+  const existing = Reflect.get(globalThis, SSE_EMITTER_KEY) as SseEmitterRegistry | undefined;
+  if (existing) return existing;
+  const created = new SseEmitterRegistry();
+  Reflect.set(globalThis, SSE_EMITTER_KEY, created);
+  return created;
+}
+
+export const sseEmitter = resolveSseEmitterRegistry();

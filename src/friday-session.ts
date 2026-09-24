@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { processMap, processRef } from "./process-state.js";
 import { sseEmitter } from "./sse/emitter.js";
 import { sessionReplayBuffer } from "./sse/session-replay-buffer.js";
 import { getFridayAgentForwardRuntime } from "./agent-forward-runtime.js";
@@ -89,13 +90,22 @@ export function deviceIdFromSessionKey(sessionKey: string): string | null {
  * sub-agent / announce runs still emit `onAgentEvent` with that store key — not `friday-{deviceId}`.
  * Each POST /friday-next/messages registers both the raw and store keys so forwards and tool hooks resolve.
  */
-const sessionKeyToDeviceId = new Map<string, string>();
+const sessionKeyToDeviceId = processMap<string, string>(
+  Symbol.for("@syengup/friday-channel-next/session-key-to-device"),
+);
 /** Gateway / store session keys → app's history `sessionKey` (verbatim from POST). */
-const gatewayKeyToHistorySessionKey = new Map<string, string>();
+const gatewayKeyToHistorySessionKey = processMap<string, string>(
+  Symbol.for("@syengup/friday-channel-next/gateway-key-to-history-session"),
+);
 /** deviceId → latest app history sessionKey (verbatim from POST). */
-const deviceIdToLatestHistorySessionKey = new Map<string, string>();
+const deviceIdToLatestHistorySessionKey = processMap<string, string>(
+  Symbol.for("@syengup/friday-channel-next/device-to-history-session"),
+);
 /** Last device that called POST /friday-next/messages (same gateway process). Used for cron/outbound when `to` is placeholder and the app is offline (no SSE). */
-let lastRegisteredFridayDeviceId: string | undefined;
+const lastRegisteredFridayDeviceIdRef = processRef<string | undefined>(
+  Symbol.for("@syengup/friday-channel-next/last-registered-device"),
+  undefined,
+);
 
 /**
  * Devices that explicitly BOUND to a session (`POST /friday-next/sessions/bind`),
@@ -107,7 +117,9 @@ let lastRegisteredFridayDeviceId: string | undefined;
  * POST (which is the only registration path of `sessionKeyToDeviceId`). Bindings
  * survive gateway restarts via `session-binds.json`.
  */
-const watchedSessionKeyToDeviceIds = new Map<string, Set<string>>();
+const watchedSessionKeyToDeviceIds = processMap<string, Set<string>>(
+  Symbol.for("@syengup/friday-channel-next/watched-session-to-devices"),
+);
 
 /**
  * Durable copy of watched-session bindings (`deviceId → sessionKeys`), written on
@@ -261,7 +273,7 @@ export function resetSessionBindingsForTest(): void {
   sessionKeyToDeviceId.clear();
   gatewayKeyToHistorySessionKey.clear();
   deviceIdToLatestHistorySessionKey.clear();
-  lastRegisteredFridayDeviceId = undefined;
+  lastRegisteredFridayDeviceIdRef.value = undefined;
   bindStateLoaded = false;
   replayWatermarkByDevice.clear();
 }
@@ -319,7 +331,7 @@ let lastDeviceStateFileOverride: string | null | undefined;
 /** Vitest-only: `null` disables persistence, a path redirects it. Also resets in-memory state. */
 export function setLastDeviceStateFileForTest(p: string | null): void {
   lastDeviceStateFileOverride = p;
-  lastRegisteredFridayDeviceId = undefined;
+  lastRegisteredFridayDeviceIdRef.value = undefined;
 }
 
 function lastDeviceStateFile(): string | null {
@@ -355,8 +367,8 @@ function readPersistedLastSeenFridayDeviceId(): string | undefined {
 export function noteFridayDeviceSeen(deviceId: string): void {
   const did = deviceId.trim().toUpperCase();
   if (!did) return;
-  if (lastRegisteredFridayDeviceId !== did) {
-    lastRegisteredFridayDeviceId = did;
+  if (lastRegisteredFridayDeviceIdRef.value !== did) {
+    lastRegisteredFridayDeviceIdRef.value = did;
     persistLastSeenFridayDeviceId(did);
   }
 }
@@ -393,10 +405,10 @@ export function registerFridaySessionDeviceMapping(rawSessionKey: string, device
  * the app connects and the file appears. Reads are rare (delivery resolution only).
  */
 export function getLastRegisteredFridayDeviceId(): string | undefined {
-  if (!lastRegisteredFridayDeviceId) {
-    lastRegisteredFridayDeviceId = readPersistedLastSeenFridayDeviceId();
+  if (!lastRegisteredFridayDeviceIdRef.value) {
+    lastRegisteredFridayDeviceIdRef.value = readPersistedLastSeenFridayDeviceId();
   }
-  return lastRegisteredFridayDeviceId;
+  return lastRegisteredFridayDeviceIdRef.value;
 }
 
 /** Resolve device for gateway `sessionKey` (friday-style or last POST mapping). */
@@ -599,7 +611,7 @@ export function resolveFridayDeviceIdForOutbound(
   }
   const sole = sseEmitter.getSoleConnectedDeviceId();
   if (sole) return sole;
-  if (lastRegisteredFridayDeviceId) return lastRegisteredFridayDeviceId;
+  if (lastRegisteredFridayDeviceIdRef.value) return lastRegisteredFridayDeviceIdRef.value;
   return trimmed || "friday-next";
 }
 
