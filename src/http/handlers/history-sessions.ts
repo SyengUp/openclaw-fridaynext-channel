@@ -183,13 +183,13 @@ function assistantRecordHasVisibleReply(message: Record<string, unknown>): boole
  * The final reply is the LAST assistant record, so we scan the whole file (bounded)
  * with an early exit once a visible reply is confirmed.
  */
-function inspectCronTranscript(
+async function inspectCronTranscript(
   entry: Record<string, unknown>,
   sessionKey: string,
   agentId: string,
   storePath: string,
-): CronTranscriptInfo {
-  const records = readTranscriptRecords({
+): Promise<CronTranscriptInfo> {
+  const { records } = await readTranscriptRecords({
     entry,
     sessionKey,
     agentId,
@@ -254,7 +254,7 @@ function userMessageText(content: unknown): string | undefined {
   return undefined;
 }
 
-function readAgentSessions(agentId: string): FridayHistorySessionSummary[] {
+async function readAgentSessions(agentId: string): Promise<FridayHistorySessionSummary[]> {
   const rt = getFridayAgentForwardRuntime();
   if (!rt) return [];
   const storePath = (() => {
@@ -296,7 +296,7 @@ function readAgentSessions(agentId: string): FridayHistorySessionSummary[] {
     // screen in the app (only a collapsed thought trace, no bubble body).
     let title: string | undefined;
     if (isCron) {
-      const info = inspectCronTranscript(entry, canonicalKey, agentId, storePath);
+      const info = await inspectCronTranscript(entry, canonicalKey, agentId, storePath);
       if (!info.hasVisibleReply) continue;
       title = info.title ?? readString(entry.displayName) ?? readString(entry.label);
     } else {
@@ -344,7 +344,7 @@ export async function handleHistorySessions(
 
   const sessions: FridayHistorySessionSummary[] = [];
   for (const agentId of agentIds) {
-    sessions.push(...readAgentSessions(agentId));
+    sessions.push(...(await readAgentSessions(agentId)));
   }
   const deduped = dedupeCronSessionsByTitle(sessions);
   deduped.sort((a, b) => (b.updatedAt ?? 0) - (a.updatedAt ?? 0));
