@@ -47,7 +47,12 @@ After that, the iterate loop is just: `pnpm build` → `openclaw gateway restart
 
 拓扑：网关机 `192.168.100.133`（免密 SSH），openclaw 装在 `/opt/homebrew/lib/node_modules/openclaw`，gateway = launchd `ai.openclaw.gateway`（端口 18789）。插件为 npm **拷贝**安装于 `~/.openclaw/npm/projects/syengup-friday-channel-next-*/node_modules/@syengup/friday-channel-next`，脚本覆盖其 `dist/`（旧版留 `dist.prev`，回滚=拷回+重启）。健康检查断言 `/friday-next/agents` 返回 JSON 而非 Control UI HTML（stale copy 信号）。
 
-网关版本约束（2026-09-19 实证）：**网关机锁 OpenClaw 2026.9.4**。9.5 的外装插件 staging 只镜像核心 dist 的静态依赖闭包，而核心 `jiti-factory` 用运行时 `moduleResolve("jiti")` 动态解析，staging 里没有 jiti，外装插件（friday-next/feishu/codex）的 tool-discovery 旁路加载（App 打开工具箱 / agent 解析插件工具）报 `ERR_MODULE_NOT_FOUND: jiti`，症状是工具箱与 agent 缺这些插件工具。已在隔离环境用 `openclaw@2026.9.5` + npm 安装的 friday-next 清场复现（2026.9.4 同环境正常）。`~/.openclaw/node_modules` 指向 openclaw 的符号链接不是修复：实测只会把错误变成 `Plugin module .../jiti/lib/jiti.cjs was not captured`（capture 边界拒绝），工具依然缺失。另注意 9.5 会把 agent DB 前向迁移到 schema 21、9.4 拒绝运行——**升级任何 OpenClaw 前先备份 `~/.openclaw` 的 DB/state**（9.5→9.4 回滚实测只能搁置旧 DB，会话历史暂不可见）。等上游修复 staging 闭包后再升 9.5。
+网关版本约束（2026-09-24 更新）：**网关机已升 OpenClaw 2026.9.6**。9.5+ 有两处外装插件行为必须知道：
+
+1. **双模块实例**——网关注册 HTTP 路由/事件用一个实例，`tool-discovery` 冷加载（`registerFull` 不调 `setRuntime`）另起一个实例跑插件工具；两者同进程同 realm，但**模块级单例各自一份**。所以插件内跨实例必须一致的运行时状态一律走 `globalThis[Symbol.for(...)]` 共享（见 `src/process-state.ts`；`sseEmitter`、v3 store、`friday-session` 映射表、插件运行时存储 `runtime.ts` 均已改）。曾导致 `fridaynext_*` device 工具（位置/健康/日历）误报「iPhone 未连接」。
+2. **捕获闭包缺 jiti**——外装插件 tool-discovery 的旧深导入会报 `ERR_MODULE_NOT_FOUND: jiti`（staging 只镜像核心 dist 静态依赖闭包，而 `jiti-factory` 运行时 `moduleResolve("jiti")`）。工具箱目录已改走 gateway-auth 的 `GET /friday-next-admin/tool-catalog?agentId=`（App ≥1.5.2 按插件版本门控）；`/friday-next/agents/{id}/tools/catalog` 仅留给 ≤9.4 的旧 App。
+
+升级任何 OpenClaw 前仍须备份 `~/.openclaw` 的 DB/state（9.5+ 前向迁移到 schema 21，9.4 拒绝运行）；本次备份在网关机 `~/openclaw-backup-pre96-20260924`。
 
 ## Architecture
 
