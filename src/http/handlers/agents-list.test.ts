@@ -47,6 +47,9 @@ describe("handleAgentsList", () => {
 
   beforeEach(() => {
     setMockRuntime();
+    // 固定宿主版本：多数用例沿用 pre-2026.8.1 的 list 形态夹具与"无权限目录"预期，
+    // 不能随测试机装的是哪个 OpenClaw SDK 快照漂移；需要别的版本时用例内自行覆盖。
+    setOpenClawVersionOverrideForTest("2026.7.1");
     // 隔离 greeting store，避免读到测试机上的真实 greetings.json（agent 列表会合并它）。
     greetingsDir = fs.mkdtempSync(path.join(os.tmpdir(), "fn-agents-greetings-"));
     setAgentGreetingsBaseDirForTest(greetingsDir);

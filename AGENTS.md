@@ -36,7 +36,7 @@ openclaw plugins install . --link    # symlink dev dir (cannot combine with --fo
 
 After that, the iterate loop is just: `pnpm build` → `openclaw gateway restart`. Verify a route returns JSON (not HTML), e.g. `curl -s -H "Authorization: Bearer <token>" http://127.0.0.1:<port>/friday-next/agents`. Port + token come from `~/.openclaw/openclaw.json` (`gateway.port`, `gateway.auth.token`).
 
-### 一键部署到网关（开发机 → 192.168.100.133 Mac mini）
+### 一键部署到网关（开发机 → 192.168.1.133 Mac mini）
 
 ```bash
 ./scripts/deploy-gateway.sh                # 本地 tsc 构建 → rsync → 备份+覆盖安装目录 → 重启 → 健康检查
@@ -45,14 +45,18 @@ After that, the iterate loop is just: `pnpm build` → `openclaw gateway restart
 ./scripts/deploy-gateway.sh --skip-verify  # 跳过健康检查
 ```
 
-拓扑：网关机 `192.168.100.133`（免密 SSH），openclaw 装在 `/opt/homebrew/lib/node_modules/openclaw`，gateway = launchd `ai.openclaw.gateway`（端口 18789）。插件为 npm **拷贝**安装于 `~/.openclaw/npm/projects/syengup-friday-channel-next-*/node_modules/@syengup/friday-channel-next`，脚本覆盖其 `dist/`（旧版留 `dist.prev`，回滚=拷回+重启）。健康检查断言 `/friday-next/agents` 返回 JSON 而非 Control UI HTML（stale copy 信号）。
+拓扑：网关机 `192.168.1.133`（免密 SSH；2026-10 从 `192.168.100.133` 换网段），openclaw 装在 `/opt/homebrew/lib/node_modules/openclaw`，gateway = launchd `ai.openclaw.gateway`（端口 18789）。插件为 npm **拷贝**安装于 `~/.openclaw/npm/projects/syengup-friday-channel-next-*/node_modules/@syengup/friday-channel-next`，脚本覆盖其 `dist/`（旧版留 `dist.prev`，回滚=拷回+重启）。健康检查断言 `/friday-next/agents` 返回 JSON 而非 Control UI HTML（stale copy 信号）。
 
-网关版本约束（2026-09-24 更新）：**网关机已升 OpenClaw 2026.9.6**。9.5+ 有两处外装插件行为必须知道：
+网关版本约束（2026-10-12 更新）：**网关机已升 OpenClaw 2026.10.1（插件 2026.10.1 起适配）**。9.5+ 有两处外装插件行为必须知道：
 
 1. **双模块实例**——网关注册 HTTP 路由/事件用一个实例，`tool-discovery` 冷加载（`registerFull` 不调 `setRuntime`）另起一个实例跑插件工具；两者同进程同 realm，但**模块级单例各自一份**。所以插件内跨实例必须一致的运行时状态一律走 `globalThis[Symbol.for(...)]` 共享（见 `src/process-state.ts`；`sseEmitter`、v3 store、`friday-session` 映射表、插件运行时存储 `runtime.ts` 均已改）。曾导致 `fridaynext_*` device 工具（位置/健康/日历）误报「iPhone 未连接」。
 2. **捕获闭包缺 jiti**——外装插件 tool-discovery 的旧深导入会报 `ERR_MODULE_NOT_FOUND: jiti`（staging 只镜像核心 dist 静态依赖闭包，而 `jiti-factory` 运行时 `moduleResolve("jiti")`）。工具箱目录已改走 gateway-auth 的 `GET /friday-next-admin/tool-catalog?agentId=`（App ≥1.5.2 按插件版本门控）；`/friday-next/agents/{id}/tools/catalog` 仅留给 ≤9.4 的旧 App。
 
-升级任何 OpenClaw 前仍须备份 `~/.openclaw` 的 DB/state（9.5+ 前向迁移到 schema 21，9.4 拒绝运行）；本次备份在网关机 `~/openclaw-backup-pre96-20260924`。
+**2026.10.1 破坏性变更（插件 2026.10.1 修复）**：OpenClaw 于 2026-09-30/10-02 提前退休 8 个 SDK 兼容子路径——`channel-lifecycle`、`channel-message`、`channel-reply-pipeline`、`config-runtime`、`infra-runtime`、`command-auth`、`discord`、`telegram-account`。任何**静态 import** 都会以 `ERR_PACKAGE_PATH_NOT_EXPORTED` 让整个插件加载失败（App 全部 `/friday-next/*` 路由消失，doctor 报 `plugin failed during load`）。迁移：`runPassiveAccountLifecycle` 原样迁至 `channel-outbound`（≥6.9 存在，`src/channel-lifecycle-compat.ts` 做新旧宿主动态 import + 本地兜底）；cron 存储读取改用 hook ctx 公开的 `getCron().list()`（`cron-store-runtime` 是宿主私有，不要 import）。`src/sdk-subpath-guard.test.ts` 会扫描源码阻止再引入静态 import。
+
+2026.10.1 另一处**行为破坏**（实测复现）：plain `abortAgentHarnessRun` 不再把 reply operation 标成 `aborted_by_user`，被停的 run 会触发核心 no-visible-reply fallback——App 停止后多出一条「⚠️ OpenClaw couldn't produce or deliver a reply」。修法：`POST /cancel` 走 `abortSessionRunTargetWithOutcome`（core `/stop` 同链路，深导入见 `src/agent/session-abort-bridge.ts`）。回归验证：live 停止（早停/流中停）后无任何 deliver/lifecycle error 帧。
+
+升级任何 OpenClaw 前仍须备份 `~/.openclaw` 的 DB/state（9.5+ 前向迁移到 schema 21，9.4 拒绝运行）；2026.9.6 备份在网关机 `~/openclaw-backup-pre96-20260924`。
 
 ## Architecture
 
@@ -110,7 +114,7 @@ iOS App ←--HTTP/SSE--→ Friday Plugin ←--OpenClaw Plugin API--→ Gateway +
 15. **`src/agent/media-bridge.ts`** — `saveInboundMediaBuffer`: saves attachment buffers via `openclaw/plugin-sdk/media-store` (with tempdir fallback for tests).
 16. **`src/http/handlers/files.ts`** — Central file store: `attachments/` directory under plugin root, in-memory index, `storeFile`/`readFile`/`resolveMediaUrl`/`resolveMediaAttachment`. Handles `file://` URI resolution and `~/` expansion for agent-provided paths. The HTTP route handlers are split out: **`files-upload.ts`** (`handleFilesUpload`, multipart `POST`) and **`files-download.ts`** (`handleFilesDownload`, `GET /files/:id`).
 17. **`src/agent/run-usage-accumulator.ts`** — Per-`runId` token-usage accumulator fed by the `llm_output` hook (`accumulateRunUsage`). `consumeRunUsage(runId)` drains it into a `FridaySessionUsagePayload` (with `tokens.totalFresh`) for terminal lifecycle frames.
-18. **`src/agent/abort-run.ts`** — `abortRun(runId)` dynamically imports `openclaw/plugin-sdk/agent-harness` and calls `abortAgentHarnessRun`; backs `POST /cancel`. No-op under Vitest.
+18. **`src/agent/abort-run.ts`** — `abortRunForSessionKey(sessionKey)` backs `POST /cancel`. 首选 **canonical 会话停止**（`src/agent/session-abort-bridge.ts` resilient 深导入 core 的 `abortSessionRunTargetWithOutcome`，即 `/stop` 命令同链路：先把 reply operation 标 `aborted_by_user` → SILENT，再 plain abort 嵌入式 run）；桥不可用（旧核心）回退旧的 `resolveActiveEmbeddedRunSessionId` → `abortAgentHarnessRun` plain abort。2026.10.1 起只做 plain abort 会落进核心 no-visible-reply fallback（App 停止后弹「⚠️ couldn't produce or deliver a reply」），故必须走 canonical 链路。No-op under Vitest（deps 注入测试）。
 19. **`src/agent/node-pairing-bridge.ts`** — `loadNodePairingModule` lazy-loads OpenClaw's node-pairing module. Resolves the OpenClaw `dist/` cross-platform: `OPENCLAW_DIST` env → walk `PATH` for the `openclaw` binary → `realpathSync` → `dist/` → platform-standard install paths. Backs `GET /health` and `POST /nodes-approve`.
 
 ### Supporting modules

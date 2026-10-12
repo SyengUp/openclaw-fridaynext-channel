@@ -1,4 +1,3 @@
-import { loadCronStore, resolveCronStorePath } from "openclaw/plugin-sdk/config-runtime";
 import { createFridayNextLogger } from "../logging.js";
 import {
   readCronDeliveryTarget,
@@ -47,6 +46,38 @@ function hookJob(event: Record<string, unknown>): Record<string, unknown> | unde
     : undefined;
 }
 
+/**
+ * 回退读取原始 cron job（含 `delivery`）：`cron_changed` 事件快照由 core 的
+ * `toPluginCronJob()` 生成、不含 `delivery`，需要原始 job 时走 hook ctx 上
+ * 公开的 cron 服务 `getCron().list()`。2026.10.1 起 SDK 移除了
+ * `config-runtime` 且 `cron-store-runtime` 是宿主私有，禁止再读存储层；
+ * 拿不到服务就保持 unknown（fail closed）。
+ */
+async function readRawCronJobFromContext(
+  jobId: string,
+  ctx: unknown,
+): Promise<Record<string, unknown> | undefined> {
+  try {
+    const getCron = (ctx as { getCron?: () => unknown } | null | undefined)?.getCron;
+    const service = (typeof getCron === "function" ? getCron.call(ctx) : undefined) as
+      | { list?: (opts?: { includeDisabled?: boolean }) => Promise<unknown> }
+      | undefined;
+    const list = service?.list;
+    if (typeof list !== "function") return undefined;
+    const jobs: unknown = await list.call(service, { includeDisabled: true });
+    if (!Array.isArray(jobs)) return undefined;
+    for (const job of jobs as unknown[]) {
+      if ((job as { id?: unknown } | null)?.id !== jobId) continue;
+      return typeof job === "object" && job !== null && !Array.isArray(job)
+        ? (job as Record<string, unknown>)
+        : undefined;
+    }
+    return undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 async function resolveCurrentFacts(
   jobId: string,
   event: Record<string, unknown>,
@@ -55,15 +86,9 @@ async function resolveCurrentFacts(
   let delivery = resolveCronDeliveryFromHook(jobId, event, ctx);
   let storedJob: Record<string, unknown> | undefined;
   if (delivery.deliversToFridayNext === null || !stringValue(hookJob(event)?.name)) {
-    try {
-      const store = await loadCronStore(resolveCronStorePath());
-      const found = store.jobs.find((job) => job?.id === jobId);
-      if (found && typeof found === "object") {
-        storedJob = found as unknown as Record<string, unknown>;
-        if (delivery.deliversToFridayNext === null) delivery = readCronDeliveryTarget(found);
-      }
-    } catch {
-      /* 无法读取即保持 unknown；分类必须 fail closed。 */
+    storedJob = await readRawCronJobFromContext(jobId, ctx);
+    if (storedJob && delivery.deliversToFridayNext === null) {
+      delivery = readCronDeliveryTarget(storedJob);
     }
   }
   const eventJob = hookJob(event);

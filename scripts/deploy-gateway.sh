@@ -12,7 +12,7 @@
 #   ./scripts/deploy-gateway.sh --skip-verify  # 跳过部署后健康检查
 #
 # 环境变量（可覆盖）：
-#   GATEWAY_HOST   网关机 SSH 地址（默认 192.168.100.133，免密）
+#   GATEWAY_HOST   网关机 SSH 地址（默认 192.168.1.133，免密；2026-10 从 192.168.100.133 换段）
 #   GATEWAY_TMP    网关侧临时同步目录（默认 /tmp/friday-plugin-dist）
 #
 # 网关拓扑（详见 .claude-memory/plugin-hotpatch-deploy.md）：
@@ -27,7 +27,7 @@ set -euo pipefail
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$REPO_ROOT"
 
-HOST="${GATEWAY_HOST:-192.168.100.133}"
+HOST="${GATEWAY_HOST:-192.168.1.133}"
 GATEWAY_TMP="${GATEWAY_TMP:-/tmp/friday-plugin-dist}"
 DO_BUILD=1
 DO_RESTART=1

@@ -121,4 +121,57 @@ describe("captureCronChanged", () => {
     ).toBeNull();
     expect(cronResultStore.readAfter("phone-a", 0)).toEqual([]);
   });
+
+  it("事件快照缺 delivery 时回退 ctx.getCron().list() 读原始 job（公开 API）", async () => {
+    const listCalls: Array<{ includeDisabled?: boolean } | undefined> = [];
+    const ctx = {
+      getCron: () => ({
+        list: async (opts?: { includeDisabled?: boolean }) => {
+          listCalls.push(opts);
+          return [
+            { id: "other", name: "别的任务", delivery: { mode: "announce", channel: "telegram" } },
+            {
+              id: "job-1",
+              name: "晨报",
+              agentId: "writer",
+              delivery: { mode: "announce", channel: "friday-next", to: "phone-a" },
+            },
+          ];
+        },
+      }),
+    };
+
+    const record = await captureCronChanged(
+      {
+        action: "finished",
+        jobId: "job-1",
+        runId: "run-1",
+        runAtMs: 1_000,
+        status: "ok",
+        // core 的 toPluginCronJob() 快照不含 delivery
+        job: { name: "晨报", agentId: "writer" },
+      },
+      ctx,
+    );
+
+    expect(listCalls).toEqual([{ includeDisabled: true }]);
+    expect(record).toMatchObject({
+      deviceId: "PHONE-A",
+      jobId: "job-1",
+      jobName: "晨报",
+      agentId: "writer",
+    });
+  });
+
+  it("ctx 无 cron 服务且事件缺 delivery 时保持 fail-closed", async () => {
+    const record = await captureCronChanged({
+      action: "finished",
+      jobId: "job-1",
+      runId: "run-1",
+      status: "ok",
+      job: { name: "晨报" },
+    });
+    expect(record).toBeNull();
+    expect(cronResultStore.readAfter("phone-a", 0)).toEqual([]);
+  });
 });

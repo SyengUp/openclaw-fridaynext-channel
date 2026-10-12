@@ -1,6 +1,6 @@
 {
   "name": "@syengup/friday-channel-next",
-  "version": "2026.9.7",
+  "version": "2026.10.1",
   "description": "FridayNext is an independent iOS app for OpenClaw. It streams every answer live, shows you the thinking behind it, and keeps your agent one tap away — anywhere you go.",
   "keywords": [
     "openclaw",
@@ -87,7 +87,7 @@
       "pluginApi": ">=2026.5.12"
     },
     "build": {
-      "openclawVersion": "2026.7.1"
+      "openclawVersion": "2026.10.1"
     },
     "install": {
       "clawhubSpec": "@syengup/friday-channel-next",

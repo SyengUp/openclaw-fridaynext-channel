@@ -9,6 +9,7 @@ import {
   setFridayAgentForwardRuntime,
   resetFridayAgentForwardRuntimeForTest,
 } from "../agent-forward-runtime.js";
+import { setOpenClawVersionOverrideForTest } from "../skills-discovery.js";
 
 /**
  * Inject a fake host config into the forward runtime, which is what
@@ -38,10 +39,14 @@ describe("e2e agents list", () => {
   let historyDir = "";
 
   beforeEach(() => {
+    // 固定宿主版本：夹具是 pre-2026.8.1 的 list 形态且预期无权限目录，
+    // 不能随测试机装的 OpenClaw SDK 快照版本漂移。
+    setOpenClawVersionOverrideForTest("2026.7.1");
     historyDir = createTempHistoryDir();
   });
 
   afterEach(() => {
+    setOpenClawVersionOverrideForTest(undefined);
     resetFridayAgentForwardRuntimeForTest();
     removeTempHistoryDir(historyDir);
   });

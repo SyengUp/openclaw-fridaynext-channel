@@ -66,15 +66,6 @@ declare module "openclaw/plugin-sdk/media-store" {
   export const saveMediaBuffer: (...args: any[]) => any;
 }
 
-declare module "openclaw/plugin-sdk/channel-lifecycle" {
-  export const runPassiveAccountLifecycle: (params: {
-    abortSignal?: AbortSignal;
-    start: () => Promise<unknown>;
-    stop?: (handle: unknown) => void | Promise<void>;
-    onStop?: () => void | Promise<void>;
-  }) => Promise<void>;
-}
-
 declare module "openclaw/plugin-sdk/channel-contract" {
   export interface ChannelGatewayContext {
     accountId: string;
@@ -239,26 +230,4 @@ declare module "openclaw/plugin-sdk/status-helpers" {
   export const createDefaultChannelRuntimeState: (...args: any[]) => any;
 }
 
-declare module "openclaw/plugin-sdk/config-runtime" {
-  /** A single scheduled (cron) job — only the fields the channel reads. */
-  interface CronJob {
-    id: string;
-    name: string;
-    agentId?: string;
-    /** Where the job announces its result. Absent for jobs that deliver nothing by themselves
-     *  (their agent turn may still push via the `message` tool). */
-    delivery?: {
-      mode?: string;
-      channel?: string;
-      to?: string;
-    };
-  }
-  interface CronStoreFile {
-    version: number;
-    jobs: CronJob[];
-  }
-  /** Resolves the default cron-jobs store path (SQLite-backed). */
-  export const resolveCronStorePath: (storePath?: string) => string;
-  /** Loads the persisted cron job store. */
-  export const loadCronStore: (storePath: string) => Promise<CronStoreFile>;
-}
+

@@ -9,7 +9,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { createChatChannelPlugin } from "openclaw/plugin-sdk/core";
-import { runPassiveAccountLifecycle } from "openclaw/plugin-sdk/channel-lifecycle";
+import { loadRunPassiveAccountLifecycle } from "./channel-lifecycle-compat.js";
 import { registerChannelRuntimeContext } from "openclaw/plugin-sdk/channel-runtime-context";
 import { CHANNEL_APPROVAL_NATIVE_RUNTIME_CONTEXT_CAPABILITY } from "openclaw/plugin-sdk/approval-handler-adapter-runtime";
 import type { ChannelGatewayContext } from "openclaw/plugin-sdk/channel-contract";
@@ -167,6 +167,7 @@ const fridayGateway = {
     }
     // This passive HTTP/SSE lifecycle is the equivalent of Telegram returning its long-lived
     // provider monitor: core owns running/start/stop/error and abort is the sole normal exit.
+    const runPassiveAccountLifecycle = await loadRunPassiveAccountLifecycle();
     await runPassiveAccountLifecycle({
       abortSignal: ctx.abortSignal,
       start: async () => undefined,
