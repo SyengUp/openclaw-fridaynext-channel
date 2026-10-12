@@ -5,8 +5,10 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { handleHistoryMessages, handleHistoryMessageDetail, serverLocalPathForImageUrl } from "./history-messages.js";
+import { loadTalkConsultAssistantText } from "../../talk/talk-consult.js";
 import { setFridayNextRuntime } from "../../runtime.js";
 import {
+  getFridayAgentForwardRuntime,
   setFridayAgentForwardRuntime,
   resetFridayAgentForwardRuntimeForTest,
 } from "../../agent-forward-runtime.js";
@@ -54,7 +56,7 @@ function setForward(
   store: Record<string, unknown>,
   extra?: {
     getSessionEntry?: boolean;
-    loadTranscriptEventsSync?: (params: { sessionId: string; sessionKey?: string }) => unknown[];
+    readSessionTranscriptEvents?: (params: { sessionId: string; sessionKey?: string }) => Promise<unknown[]>;
     gatewayRequest?: ReturnType<typeof vi.fn>;
   },
 ): void {
@@ -79,14 +81,12 @@ function setForward(
                   (store[sessionKey] as Record<string, unknown> | undefined) ?? undefined,
               }
             : {}),
-          ...(extra?.loadTranscriptEventsSync
-            ? { loadTranscriptEventsSync: extra.loadTranscriptEventsSync }
-            : {}),
         },
       },
       config: { current: () => CFG },
     },
   } as any);
+  getFridayAgentForwardRuntime()!.readSessionTranscriptEvents = extra?.readSessionTranscriptEvents;
 }
 
 function writeTranscript(name: string, lines: unknown[]): string {
@@ -631,31 +631,24 @@ describe("handleHistoryMessages", () => {
     expect(body.messages.map((m: any) => m.id)).toEqual(["a1"]);
   });
 
-  it("reads SQLite transcript events when there is no JSONL file", async () => {
+  it("reads async SQLite transcript events when there is no JSONL file", async () => {
+    const readEvents = ({ sessionId }: { sessionId: string }) => {
+      if (sessionId !== "sid-sql") return [];
+      return [
+        { type: "session", id: "sid-sql" },
+        { type: "message", id: "u1", timestamp: "2026-01-01T00:00:00.000Z",
+          message: { role: "user", content: "from sqlite" } },
+        { type: "message", id: "a1", timestamp: "2026-01-01T00:00:01.000Z",
+          message: { role: "assistant", content: [{ type: "text", text: "ok" }] } },
+      ];
+    };
     setForward(
       {
         "agent:main:main": { sessionId: "sid-sql", updatedAt: 1 },
       },
       {
         getSessionEntry: true,
-        loadTranscriptEventsSync: ({ sessionId }) => {
-          if (sessionId !== "sid-sql") return [];
-          return [
-            { type: "session", id: "sid-sql" },
-            {
-              type: "message",
-              id: "u1",
-              timestamp: "2026-01-01T00:00:00.000Z",
-              message: { role: "user", content: "from sqlite" },
-            },
-            {
-              type: "message",
-              id: "a1",
-              timestamp: "2026-01-01T00:00:01.000Z",
-              message: { role: "assistant", content: [{ type: "text", text: "ok" }] },
-            },
-          ];
-        },
+        readSessionTranscriptEvents: async (params: { sessionId: string }) => readEvents(params),
       },
     );
     const res = new MockRes();
@@ -670,6 +663,38 @@ describe("handleHistoryMessages", () => {
       ["user", "from sqlite"],
       ["assistant", "ok"],
     ]);
+    const detail = new MockRes();
+    await handleHistoryMessageDetail(
+      makeReq("/friday-next/history/messages/detail?sessionKey=agent:main:main&id=a1", AUTH),
+      detail as any,
+    );
+    expect(detail.statusCode).toBe(200);
+    expect(JSON.parse(detail.body).message.text).toBe("ok");
+    expect(await loadTalkConsultAssistantText("agent:main:main")).toBe("ok");
+  });
+
+  it.each(["empty", "rejected"])("history and voice do not read stale legacy data after an async %s result", async (mode) => {
+    const sessionFile = writeTranscript("stale.jsonl", [
+      { type: "message", id: "stale", message: { role: "assistant", content: "stale" } },
+    ]);
+    const gatewayFallback = vi.fn(async () => ({
+      messages: [{ role: "assistant", content: "stale gateway result" }],
+    }));
+    setRuntime(gatewayFallback);
+    setForward({ "agent:main:main": { sessionId: "sid-sql", sessionFile } }, {
+      readSessionTranscriptEvents: async () => {
+        if (mode === "rejected") throw new Error("reader unavailable");
+        return [];
+      },
+    });
+    const res = new MockRes();
+    await handleHistoryMessages(
+      makeReq("/friday-next/history/messages?sessionKey=agent:main:main", AUTH), res as any,
+    );
+    expect(res.statusCode).toBe(200);
+    expect(JSON.parse(res.body).messages).toEqual([]);
+    expect(await loadTalkConsultAssistantText("agent:main:main")).toBeNull();
+    expect(gatewayFallback).not.toHaveBeenCalled();
   });
 
   it("returns the session displayName as title so the app can heal a missed AI title", async () => {

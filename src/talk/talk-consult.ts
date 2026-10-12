@@ -9,7 +9,7 @@
 
 import { dispatchGatewayMethod } from "openclaw/plugin-sdk/gateway-method-runtime";
 import { normalizeHistoryMessages } from "../history/normalize-message.js";
-import { readSessionTranscriptRawMessages } from "../history/read-transcript.js";
+import { readSessionTranscriptRawMessagePage } from "../history/read-transcript.js";
 import { getFridayNextRuntime } from "../runtime.js";
 import { createFridayNextLogger } from "../logging.js";
 import { asRecord } from "./talk-session-bridge.js";
@@ -151,8 +151,9 @@ export async function loadTalkConsultAssistantText(sessionKey: string): Promise<
   // Disk first: `getSessionMessages` dispatches `sessions.get`, which is empty
   // from a plugin HTTP route unless a gateway request scope is attached.
   try {
-    const fromDisk = assistantTextFromMessages(readSessionTranscriptRawMessages(sessionKey, 40));
-    if (fromDisk) return fromDisk;
+    const page = await readSessionTranscriptRawMessagePage(sessionKey, 40, 0);
+    const fromDisk = assistantTextFromMessages(page.rawMessages);
+    if (fromDisk || page.authoritative) return fromDisk;
   } catch (err) {
     logger.warn(
       `consult transcript file read failed session=${sessionKey} error=${err instanceof Error ? err.message : String(err)}`,

@@ -1,14 +1,15 @@
 import { createRequire } from "node:module";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
+import { importAbsoluteModule } from "./import-absolute-module.js";
 
 const requireSdk = createRequire(import.meta.url);
 
-export type SessionTranscriptEventLoader = (params: {
+export type SessionTranscriptEventReader = (params: {
   agentId?: string;
   sessionId: string;
   sessionKey?: string;
   storePath?: string;
-}) => unknown[];
+}) => Promise<unknown[]>;
 
 /** O(1) transcript counters without materializing event rows (2026.9+ SDK). */
 export type SessionTranscriptStatsReader = (params: {
@@ -59,11 +60,8 @@ export type FridayAgentForwardRuntime = {
     /** 2026.8.1+: skip writable DB lifecycle; safe for GET/introspection. */
     readOnly?: boolean;
   }) => Array<{ sessionKey: string; entry: Record<string, unknown> }>;
-  /**
-   * SQLite transcript rows (2026.8.1+). Optional: older hosts keep JSONL files
-   * and this export does not exist.
-   */
-  loadTranscriptEventsSync?: SessionTranscriptEventLoader;
+  /** Public async transcript reader; optional on older supported hosts. */
+  readSessionTranscriptEvents?: SessionTranscriptEventReader;
   /** Transcript counters (2026.9+). Optional: older hosts don't expose it. */
   readTranscriptStatsSync?: SessionTranscriptStatsReader;
   /** 按会话身份写入规范存储；权限、置顶等会话属性都应优先走此路径。 */
@@ -96,33 +94,26 @@ export type FridayAgentForwardRuntime = {
 
 let forwardRuntime: FridayAgentForwardRuntime | null = null;
 
-/**
- * Bind the 2026.8.1 SQLite transcript reader. `api.runtime.agent.session` does
- * not expose it — it lives on `plugin-sdk/session-store-runtime`. Skip the host
- * require under Vitest so unit tests cannot accidentally read this machine's
- * live OpenClaw install.
- */
-function resolveLoadTranscriptEventsSync(
-  session: Record<string, unknown>,
-): SessionTranscriptEventLoader | undefined {
-  if (typeof session.loadTranscriptEventsSync === "function") {
-    return session.loadTranscriptEventsSync as SessionTranscriptEventLoader;
-  }
-  if (process.env.VITEST === "true") return undefined;
+function resolveReadSessionTranscriptEvents(): SessionTranscriptEventReader | undefined {
+  let modulePath: string;
   try {
-    const mod = requireSdk("openclaw/plugin-sdk/session-store-runtime") as {
-      loadTranscriptEventsSync?: SessionTranscriptEventLoader;
-      readTranscriptStatsSync?: SessionTranscriptStatsReader;
-    };
-    return typeof mod.loadTranscriptEventsSync === "function"
-      ? mod.loadTranscriptEventsSync
-      : undefined;
-  } catch {
-    return undefined;
+    modulePath = requireSdk.resolve("openclaw/plugin-sdk/session-transcript-runtime");
+  } catch (error) {
+    if (error && typeof error === "object" && "code" in error &&
+      (error.code === "ERR_PACKAGE_PATH_NOT_EXPORTED" || error.code === "MODULE_NOT_FOUND")) {
+      return undefined;
+    }
+    throw error;
   }
+  return async (params) => {
+    const mod = await importAbsoluteModule(modulePath) as {
+      readSessionTranscriptEvents: SessionTranscriptEventReader;
+    };
+    return await mod.readSessionTranscriptEvents(params);
+  };
 }
 
-/** Same SDK module, same rules as the transcript loader above. */
+/** Optional counters from the session-store SDK; injected in unit fixtures. */
 function resolveReadTranscriptStatsSync(
   session: Record<string, unknown>,
 ): SessionTranscriptStatsReader | undefined {
@@ -145,6 +136,7 @@ function resolveReadTranscriptStatsSync(
 /** Called from `registerFull` so terminal lifecycle forwards can read the session store after persist. */
 export function setFridayAgentForwardRuntime(api: OpenClawPluginApi): void {
   const session = api.runtime.agent.session as Record<string, unknown>;
+  const readSessionTranscriptEvents = resolveReadSessionTranscriptEvents();
   const gateway = (
     api.runtime as unknown as {
       gateway?: {
@@ -173,7 +165,7 @@ export function setFridayAgentForwardRuntime(api: OpenClawPluginApi): void {
     getSessionEntry: session.getSessionEntry as FridayAgentForwardRuntime["getSessionEntry"],
     listSessionEntries:
       session.listSessionEntries as FridayAgentForwardRuntime["listSessionEntries"],
-    loadTranscriptEventsSync: resolveLoadTranscriptEventsSync(session),
+    readSessionTranscriptEvents,
     readTranscriptStatsSync: resolveReadTranscriptStatsSync(session),
     patchSessionEntry: session.patchSessionEntry as FridayAgentForwardRuntime["patchSessionEntry"],
     resolveAgentWorkspaceDir: (api.runtime.agent as Record<string, unknown>)

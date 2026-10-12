@@ -165,6 +165,7 @@ export async function handleHistoryMessages(
   const gatewayPage = await readSessionTranscriptPageViaGateway(sessionKey, limit, offset);
   let rawMessages: unknown[];
   let pagination: HistoryPagination | undefined;
+  let transcriptReadAuthoritative = false;
   if (gatewayPage) {
     rawMessages = gatewayPage.rawMessages;
     pagination = {
@@ -175,8 +176,9 @@ export async function handleHistoryMessages(
       ...(gatewayPage.hasMore ? { nextOffset: gatewayPage.nextOffset } : {}),
     };
   } else {
-    const page = readSessionTranscriptRawMessagePage(sessionKey, limit, offset);
+    const page = await readSessionTranscriptRawMessagePage(sessionKey, limit, offset);
     rawMessages = page.rawMessages;
+    transcriptReadAuthoritative = page.authoritative;
     const hasMore = offset + page.rawMessages.length < page.totalRecords;
     pagination = {
       offset,
@@ -189,7 +191,7 @@ export async function handleHistoryMessages(
 
   // Fallback: the request-scoped gateway method (only works in some contexts).
   // It returns the NEWEST TAIL only — never usable for an offset page.
-  if (rawMessages.length === 0 && offset === 0 && gatewayPage === null) {
+  if (rawMessages.length === 0 && offset === 0 && gatewayPage === null && !transcriptReadAuthoritative) {
     const sessionApi = resolveSubagentApi();
     if (sessionApi?.getSessionMessages) {
       try {
@@ -283,7 +285,7 @@ export async function handleHistoryMessageDetail(
     return true;
   }
 
-  const raw = readSessionTranscriptRawMessageById(sessionKey, messageId);
+  const raw = await readSessionTranscriptRawMessageById(sessionKey, messageId);
   const message = raw ? normalizeHistoryMessage(raw, 0, { fullText: true }) : null;
   if (!message) {
     res.statusCode = 404;
