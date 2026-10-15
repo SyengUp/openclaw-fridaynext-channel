@@ -20,6 +20,7 @@ import path from "node:path";
 import { getFridayAgentForwardRuntime } from "../agent-forward-runtime.js";
 import { agentIdFromSessionKey, toSessionStoreKey } from "../session/session-manager.js";
 import { findSessionStoreRow } from "./session-store-access.js";
+import { activeTranscriptIndices } from "./active-transcript.js";
 
 function entryString(entry: unknown, key: string): string | undefined {
   if (!entry || typeof entry !== "object") return undefined;
@@ -163,12 +164,14 @@ export function resolveSessionTitle(sessionKey: string): string | undefined {
  */
 function messageRecordsWithGlobalEnvelope(records: unknown[]): unknown[] {
   const raw: unknown[] = [];
+  const visible = activeTranscriptIndices(records);
   let seq = 0;
-  for (const recUnknown of records) {
+  for (const [index, recUnknown] of records.entries()) {
     if (!recUnknown || typeof recUnknown !== "object" || Array.isArray(recUnknown)) continue;
     const rec = recUnknown as Record<string, unknown>;
     if (rec.type === "session" || !rec.message || typeof rec.message !== "object") continue;
     seq += 1;
+    if (visible && !visible.has(index)) continue;
     const tsRaw = rec.timestamp;
     const ts =
       typeof tsRaw === "string"
@@ -265,9 +268,9 @@ export function readSessionTranscriptRawMessageById(
   messageId: string,
 ): Record<string, unknown> | undefined {
   const all = messageRecordsWithGlobalEnvelope(readTranscriptRecordsForSessionKey(sessionKey));
-  return all.find(
-    (raw) => asRecord(asRecord(raw)?.__openclaw)?.id === messageId,
-  ) as Record<string, unknown> | undefined;
+  return all.find((raw) => asRecord(asRecord(raw)?.__openclaw)?.id === messageId) as
+    | Record<string, unknown>
+    | undefined;
 }
 
 function asRecord(value: unknown): Record<string, unknown> | undefined {

@@ -1,0 +1,126 @@
+{
+  "source": "OpenClaw 2026.10.1 隔离测试，2026-10-15",
+  "records": [
+    {
+      "type": "session",
+      "version": 4,
+      "id": "4034b070-ed7c-4dc4-85db-c3f562bd782f",
+      "timestamp": "2026-10-15T06:38:41.231Z",
+      "cwd": "/Users/syengup/Projects/Friday-Next"
+    },
+    {
+      "type": "message",
+      "id": "0c991a1d-4e36-4a81-a2e4-2e81b86290d1",
+      "parentId": null,
+      "timestamp": "2026-10-15T06:34:38.761Z",
+      "message": {
+        "role": "user",
+        "content": [
+          {
+            "type": "text",
+            "text": "第一条"
+          }
+        ],
+        "timestamp": 1792046076444
+      }
+    },
+    {
+      "type": "message",
+      "id": "6d3fef12-b444-4163-a3b0-3a701be18355",
+      "parentId": "0c991a1d-4e36-4a81-a2e4-2e81b86290d1",
+      "timestamp": "2026-10-15T06:34:38.853Z",
+      "message": {
+        "role": "assistant",
+        "content": [
+          {
+            "type": "text",
+            "text": "第一答"
+          }
+        ],
+        "timestamp": 1792046078793,
+        "api": "openai-responses",
+        "provider": "fixture",
+        "model": "fixture",
+        "usage": {
+          "input": 1,
+          "output": 1,
+          "cacheRead": 0,
+          "cacheWrite": 0,
+          "totalTokens": 2,
+          "cost": {
+            "input": 0,
+            "output": 0,
+            "cacheRead": 0,
+            "cacheWrite": 0,
+            "total": 0
+          }
+        },
+        "stopReason": "stop"
+      }
+    },
+    {
+      "type": "message",
+      "id": "f1d8be52-1414-4425-a91f-21a9eaef3589",
+      "parentId": "6d3fef12-b444-4163-a3b0-3a701be18355",
+      "timestamp": "2026-10-15T06:34:38.877Z",
+      "message": {
+        "role": "user",
+        "content": [
+          {
+            "type": "text",
+            "text": "第二条"
+          }
+        ],
+        "timestamp": 1792046078863
+      }
+    },
+    {
+      "type": "message",
+      "id": "f63d3ae4-dfff-452c-bd5a-d0574fd50727",
+      "parentId": "f1d8be52-1414-4425-a91f-21a9eaef3589",
+      "timestamp": "2026-10-15T06:34:38.895Z",
+      "message": {
+        "role": "assistant",
+        "content": [
+          {
+            "type": "text",
+            "text": "第二答"
+          }
+        ],
+        "timestamp": 1792046078884,
+        "api": "openai-responses",
+        "provider": "fixture",
+        "model": "fixture",
+        "usage": {
+          "input": 1,
+          "output": 1,
+          "cacheRead": 0,
+          "cacheWrite": 0,
+          "totalTokens": 2,
+          "cost": {
+            "input": 0,
+            "output": 0,
+            "cacheRead": 0,
+            "cacheWrite": 0,
+            "total": 0
+          }
+        },
+        "stopReason": "stop"
+      }
+    },
+    {
+      "type": "leaf",
+      "id": "f2527967",
+      "parentId": "f63d3ae4-dfff-452c-bd5a-d0574fd50727",
+      "timestamp": "2026-10-15T06:38:41.217Z",
+      "targetId": "6d3fef12-b444-4163-a3b0-3a701be18355"
+    },
+    {
+      "type": "leaf",
+      "id": "a15e752e",
+      "parentId": "f2527967",
+      "timestamp": "2026-10-15T06:38:41.231Z",
+      "targetId": null
+    }
+  ]
+}
