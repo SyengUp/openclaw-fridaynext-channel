@@ -9,7 +9,10 @@ import { extractBearerToken } from "../middleware/auth.js";
 import { readJsonBody } from "../middleware/body.js";
 import { PLUGIN_VERSION } from "../../version.js";
 import { normalizeHistoryMessages } from "../../history/normalize-message.js";
-import { readSessionTranscriptRawMessages } from "../../history/read-transcript.js";
+import {
+  readSessionTranscriptRawMessages,
+  resolveSessionId,
+} from "../../history/read-transcript.js";
 import { resolveHistoryMessageMedia } from "./history-messages.js";
 import { readSessionUsageSnapshot } from "../../session-usage-store.js";
 import { sseEmitter } from "../../sse/emitter.js";
@@ -296,11 +299,13 @@ export async function handleRuntimeV3SessionSnapshot(
   req: IncomingMessage,
   res: ServerResponse,
   sessionKey: string,
+  identityAttempt = 0,
 ): Promise<boolean> {
   if (req.method !== "GET") return json(res, 405, { error: "Method Not Allowed" });
   if (!authenticate(req, res)) return true;
   const key = sessionKey.trim();
   if (!key) return json(res, 400, { error: "Missing session key" });
+  const sessionId = resolveSessionId(key);
   const store = getRuntimeV3Store();
   const runs = store.runs().filter((run) => run.sessionKey === key);
   const url = new URL(req.url ?? "/", "http://localhost");
@@ -336,11 +341,20 @@ export async function handleRuntimeV3SessionSnapshot(
   );
   resolveHistoryMessageMedia(transcript);
   const sessionUsage = await readSessionUsageSnapshot(key);
+  if (sessionId !== resolveSessionId(key)) {
+    if (identityAttempt === 0) return handleRuntimeV3SessionSnapshot(req, res, key, 1);
+    return json(res, 503, {
+      ok: false,
+      code: "UNAVAILABLE",
+      error: "Session changed while reading snapshot",
+    });
+  }
   const revision = crypto
     .createHash("sha256")
     .update(
       JSON.stringify({
         transcript: transcript.map((message) => [message.id, message.seq, message.ts]),
+        sessionId,
         runs: runs.map((run) => [run.runId, run.phase, run.lastRunSeq, run.updatedAt]),
         segmentHead: dedupedEvents.map((event) => [event.runId, event.runSeq, event.eventType]),
       }),
@@ -351,6 +365,7 @@ export async function handleRuntimeV3SessionSnapshot(
     protocolVersion: 3,
     serverInstanceId: store.serverInstanceId,
     sessionKey: key,
+    ...(sessionId ? { sessionId } : {}),
     revision,
     runs,
     transcript,

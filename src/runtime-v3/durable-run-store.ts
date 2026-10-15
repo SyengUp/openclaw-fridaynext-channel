@@ -40,6 +40,7 @@ export type DurableRunRecord = DurableRunCommand & {
   terminalReason?: string;
   rootRunId?: string;
   parentRunId?: string;
+  conversationId?: string;
 };
 
 export type ObserveRunInput = {
@@ -67,6 +68,7 @@ export type DurableRuntimeEvent = {
   eventType: string;
   occurredAt: number;
   payload: Record<string, unknown>;
+  conversationId?: string;
 };
 
 export type AcceptCommandResult = {
@@ -218,6 +220,7 @@ function isRunRecord(value: unknown): value is DurableRunRecord {
     typeof record.sessionKey === "string" &&
     typeof record.phase === "string" &&
     typeof record.updatedAt === "number" &&
+    (record.conversationId === undefined || typeof record.conversationId === "string") &&
     (record.origin === undefined || record.origin === "command" || record.origin === "observed") &&
     (record.deliveryDeviceIds === undefined ||
       (Array.isArray(record.deliveryDeviceIds) &&
@@ -519,6 +522,15 @@ export class DurableRunStore {
     return this.runsById.get(runId.trim());
   }
 
+  /** 绑定任务所属的核心会话身份；旧分支任务保留审计，客户端可据此隔离重放。 */
+  bindRunConversation(runId: string, conversationId: string): void {
+    const current = this.runsById.get(runId.trim());
+    if (!current || current.conversationId || !conversationId.trim()) return;
+    const next = { ...current, conversationId: conversationId.trim() };
+    this.persistRun(next);
+    this.runsById.set(next.runId, next);
+  }
+
   /**
    * Durably forgets every process artifact owned by a conversation. The deletion marker is
    * fsynced before any index or journal is rewritten: after a crash, reconstruction filters the
@@ -677,6 +689,7 @@ export class DurableRunStore {
         sessionKey: current.sessionKey,
         agentId: current.agentId,
         runId: current.runId,
+        ...(current.conversationId ? { conversationId: current.conversationId } : {}),
         ...(current.rootRunId ? { rootRunId: current.rootRunId } : {}),
         ...(current.parentRunId ? { parentRunId: current.parentRunId } : {}),
         ...(current.sourceKind ? { sourceKind: current.sourceKind } : {}),

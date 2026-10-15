@@ -20,7 +20,10 @@ import { isAbsolute } from "node:path";
 import { fileURLToPath } from "node:url";
 import { getFridayNextRuntime } from "../../runtime.js";
 import { extractBearerToken } from "../middleware/auth.js";
-import { normalizeHistoryMessage, normalizeHistoryMessages } from "../../history/normalize-message.js";
+import {
+  normalizeHistoryMessage,
+  normalizeHistoryMessages,
+} from "../../history/normalize-message.js";
 import {
   readSessionTranscriptPageViaGateway,
   readSessionTranscriptRawMessageById,
@@ -114,6 +117,7 @@ function resolveSubagentApi(): SubagentSessionApi | undefined {
 export async function handleHistoryMessages(
   req: IncomingMessage,
   res: ServerResponse,
+  identityAttempt = 0,
 ): Promise<boolean> {
   if (req.method !== "GET") {
     res.statusCode = 405;
@@ -139,6 +143,7 @@ export async function handleHistoryMessages(
     return true;
   }
   const agentId = url.searchParams.get("agentId")?.trim() || undefined;
+  const sessionId = resolveSessionId(sessionKey);
   const limitParam = Number(url.searchParams.get("limit"));
   const limit =
     Number.isFinite(limitParam) && limitParam > 0
@@ -214,8 +219,6 @@ export async function handleHistoryMessages(
   // live deliver path uses), then drop the raw paths from the wire.
   resolveHistoryMessageMedia(messages);
 
-  const sessionId = resolveSessionId(sessionKey);
-
   // The session's current displayName/label (AI title or user rename). The app
   // applies it to heal sessions still stuck in the pending-AI-title window — the
   // `session-title` push is a live nicety, this read is the deterministic catch-up.
@@ -224,6 +227,21 @@ export async function handleHistoryMessages(
   // Current prompt/context snapshot from the same projected `sessions.list` row
   // Control UI consumes. The transcript has no effective context-window figures.
   const sessionUsage = await readSessionUsageSnapshot(sessionKey);
+
+  // transcript 与身份必须属于同一条路径，不能把旧窗口贴到回退后的新 sessionId 上。
+  if (sessionId !== resolveSessionId(sessionKey)) {
+    if (identityAttempt === 0) return handleHistoryMessages(req, res, 1);
+    res.statusCode = 503;
+    res.setHeader("Content-Type", "application/json");
+    res.end(
+      JSON.stringify({
+        ok: false,
+        code: "UNAVAILABLE",
+        error: "Session changed while reading history",
+      }),
+    );
+    return true;
+  }
 
   res.statusCode = 200;
   res.setHeader("Content-Type", "application/json");

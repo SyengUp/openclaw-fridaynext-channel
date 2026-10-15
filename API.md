@@ -14,6 +14,27 @@ Token resolution order:
 2. `channels["friday-next"].authToken`
 3. `FRIDAY_NEXT_AUTH_TOKEN`
 
+## 消息回退与分叉（2026.10.2）
+
+| 接口 | 核心方法 | Gateway scope |
+|---|---|---|
+| `POST /friday-next-admin/sessions/rewind` | `sessions.rewind` | `trusted-operator` / `operator.admin` |
+| `POST /friday-next-admin/sessions/fork` | `sessions.fork` | 默认 `operator.write` |
+
+两个接口均使用 Gateway Bearer 鉴权，公网请求另外经过现有 App Attest 门。请求 JSON：
+
+```json
+{ "sessionKey": "agent:main:chat", "entryId": "user-transcript-entry", "agentId": "main" }
+```
+
+`agentId` 可省略，由核心解析归属。只接受活动路径中的用户消息；语义为目标消息之前。插件与核心均会拒绝运行中或排队中的切点。外部会话、归档及并发身份护栏由核心决定。
+
+成功返回 `200 { ok: true, editorText?, editorAttachments? }`，分叉另返回新 `sessionKey`；附件为 `{ mimeType, data }`，`data` 为 base64。回退保留旧分支，不撤销工具副作用。错误保留核心 `code` 和 `error`：`INVALID_REQUEST` 对应 400，`FORBIDDEN` 对应 403，`NOT_LINKED/NOT_PAIRED` 对应 409，`UNAVAILABLE` 对应 503，`AGENT_TIMEOUT` 对应 504，其他错误为 500。超时不得自动重放 POST，应先读取当前历史和会话列表对账。
+
+历史与 v3 恢复快照只提供活动路径。`GET /friday-next/v3/sessions/:key/snapshot` 增加可选 `sessionId`，它与 transcript 同一读身份；持续身份变化返回 `503 UNAVAILABLE`。v3 的 run/event 增加可选 `conversationId`，指明任务所属的核心会话身份，供回退后的客户端隔离旧回放；旧客户端可以忽略。
+
+回复功能使用普通消息中的 Markdown 块引用，不新增 `replyTo` 或线程协议。App 保留引用草稿并在发送安全入队后消费。
+
 ## SSE
 
 `GET /friday-next/events?deviceId=<deviceId>[&lastEventId=<n>]`

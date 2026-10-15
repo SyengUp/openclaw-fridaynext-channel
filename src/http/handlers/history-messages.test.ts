@@ -4,7 +4,11 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { handleHistoryMessages, handleHistoryMessageDetail, serverLocalPathForImageUrl } from "./history-messages.js";
+import {
+  handleHistoryMessages,
+  handleHistoryMessageDetail,
+  serverLocalPathForImageUrl,
+} from "./history-messages.js";
 import { setFridayNextRuntime } from "../../runtime.js";
 import {
   setFridayAgentForwardRuntime,
@@ -107,6 +111,53 @@ describe("handleHistoryMessages", () => {
     } catch {
       /* ignore */
     }
+  });
+
+  it("身份在读取期间轮换时重读，不能给旧分支贴上新 sessionId", async () => {
+    const key = "agent:main:identity-race";
+    const store: Record<string, unknown> = { [key]: { sessionId: "before" } };
+    const request = vi
+      .fn()
+      .mockImplementationOnce(async () => {
+        store[key] = { sessionId: "after" };
+        return {
+          messages: [{ role: "user", content: "旧路径", __openclaw: { id: "old", seq: 1 } }],
+        };
+      })
+      .mockResolvedValue({
+        messages: [{ role: "user", content: "当前路径", __openclaw: { id: "current", seq: 1 } }],
+      });
+    setForward(store, { gatewayRequest: request });
+    const response = new MockRes();
+    await handleHistoryMessages(
+      makeReq(`/friday-next/history/messages?sessionKey=${key}`, AUTH),
+      response as never,
+    );
+    expect(response.statusCode).toBe(200);
+    expect(JSON.parse(response.body)).toMatchObject({
+      sessionId: "after",
+      messages: [{ id: "current", text: "当前路径" }],
+    });
+    expect(request.mock.calls.filter(([method]) => method === "sessions.get")).toHaveLength(2);
+  });
+
+  it("连续身份变化返回可重试失败，不返回混合快照", async () => {
+    const key = "agent:main:identity-churn";
+    const store: Record<string, unknown> = { [key]: { sessionId: "before" } };
+    let turn = 0;
+    const request = vi.fn(async () => {
+      store[key] = { sessionId: `generation-${++turn}` };
+      return { messages: [{ role: "user", content: "内容", __openclaw: { id: "u", seq: 1 } }] };
+    });
+    setForward(store, { gatewayRequest: request });
+    const response = new MockRes();
+    await handleHistoryMessages(
+      makeReq(`/friday-next/history/messages?sessionKey=${key}`, AUTH),
+      response as never,
+    );
+    expect(response.statusCode).toBe(503);
+    expect(JSON.parse(response.body)).toMatchObject({ ok: false, code: "UNAVAILABLE" });
+    expect(request.mock.calls.filter(([method]) => method === "sessions.get")).toHaveLength(2);
   });
 
   it("rejects non-GET with 405", async () => {
@@ -448,10 +499,7 @@ describe("handleHistoryMessages", () => {
 
     const second = new MockRes();
     await handleHistoryMessages(
-      makeReq(
-        "/friday-next/history/messages?sessionKey=agent:main:main&limit=2&offset=2",
-        AUTH,
-      ),
+      makeReq("/friday-next/history/messages?sessionKey=agent:main:main&limit=2&offset=2", AUTH),
       second as any,
     );
     const secondBody = JSON.parse(second.body);
@@ -460,10 +508,7 @@ describe("handleHistoryMessages", () => {
 
     const third = new MockRes();
     await handleHistoryMessages(
-      makeReq(
-        "/friday-next/history/messages?sessionKey=agent:main:main&limit=2&offset=4",
-        AUTH,
-      ),
+      makeReq("/friday-next/history/messages?sessionKey=agent:main:main&limit=2&offset=4", AUTH),
       third as any,
     );
     const thirdBody = JSON.parse(third.body);
@@ -484,10 +529,7 @@ describe("handleHistoryMessages", () => {
 
     const res = new MockRes();
     await handleHistoryMessages(
-      makeReq(
-        "/friday-next/history/messages?sessionKey=agent:main:main&offset=99",
-        AUTH,
-      ),
+      makeReq("/friday-next/history/messages?sessionKey=agent:main:main&offset=99", AUTH),
       res as any,
     );
     const body = JSON.parse(res.body);
@@ -504,10 +546,7 @@ describe("handleHistoryMessages", () => {
     for (const bad of ["-1", "1.5", "abc"]) {
       const res = new MockRes();
       await handleHistoryMessages(
-        makeReq(
-          `/friday-next/history/messages?sessionKey=agent:main:main&offset=${bad}`,
-          AUTH,
-        ),
+        makeReq(`/friday-next/history/messages?sessionKey=agent:main:main&offset=${bad}`, AUTH),
         res as any,
       );
       expect(res.statusCode).toBe(400);
@@ -524,10 +563,7 @@ describe("handleHistoryMessages", () => {
 
     const res = new MockRes();
     await handleHistoryMessages(
-      makeReq(
-        "/friday-next/history/messages?sessionKey=agent:main:main&offset=200",
-        AUTH,
-      ),
+      makeReq("/friday-next/history/messages?sessionKey=agent:main:main&offset=200", AUTH),
       res as any,
     );
     const body = JSON.parse(res.body);
@@ -573,10 +609,7 @@ describe("handleHistoryMessages", () => {
 
     const res = new MockRes();
     await handleHistoryMessages(
-      makeReq(
-        "/friday-next/history/messages?sessionKey=agent:main:main&limit=2&offset=2",
-        AUTH,
-      ),
+      makeReq("/friday-next/history/messages?sessionKey=agent:main:main&limit=2&offset=2", AUTH),
       res as any,
     );
     const body = JSON.parse(res.body);
@@ -587,10 +620,7 @@ describe("handleHistoryMessages", () => {
 
     const last = new MockRes();
     await handleHistoryMessages(
-      makeReq(
-        "/friday-next/history/messages?sessionKey=agent:main:main&limit=2&offset=4",
-        AUTH,
-      ),
+      makeReq("/friday-next/history/messages?sessionKey=agent:main:main&limit=2&offset=4", AUTH),
       last as any,
     );
     const lastBody = JSON.parse(last.body);
@@ -737,10 +767,7 @@ describe("handleHistoryMessageDetail", () => {
 
     const res = new MockRes();
     await handleHistoryMessageDetail(
-      makeReq(
-        "/friday-next/history/message-detail?sessionKey=agent:main:main&id=big-1",
-        AUTH,
-      ),
+      makeReq("/friday-next/history/message-detail?sessionKey=agent:main:main&id=big-1", AUTH),
       res as any,
     );
     expect(res.statusCode).toBe(200);
@@ -758,10 +785,7 @@ describe("handleHistoryMessageDetail", () => {
 
     const res = new MockRes();
     await handleHistoryMessageDetail(
-      makeReq(
-        "/friday-next/history/message-detail?sessionKey=agent:main:main&id=nope",
-        AUTH,
-      ),
+      makeReq("/friday-next/history/message-detail?sessionKey=agent:main:main&id=nope", AUTH),
       res as any,
     );
     expect(res.statusCode).toBe(404);

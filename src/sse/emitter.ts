@@ -4,6 +4,7 @@ import { fridaySseOfflineQueue } from "./offline-queue.js";
 import { runtimeV3StoreIfInitialized } from "../runtime-v3/runtime-store.js";
 import type { DurableRunStore } from "../runtime-v3/durable-run-store.js";
 import { clearStructuredRunSource, structuredRunSource } from "../runtime-v3/run-source.js";
+import { resolveSessionId } from "../history/read-transcript.js";
 
 const logger = createFridayNextLogger("sse", "info");
 
@@ -345,6 +346,10 @@ class SseEmitterRegistry {
       run = store.attachDeviceToRun(runId, deviceId);
     }
     if (!run) return;
+    if (!run.conversationId) {
+      const conversationId = resolveSessionId(run.sessionKey);
+      if (conversationId) store.bindRunConversation(runId, conversationId);
+    }
     const sourceKey = this.runtimeSourceKey(mirror);
     if (sourceKey) {
       const seen = this.persistedRuntimeSourceKeys(store, runId);

@@ -31,6 +31,20 @@ afterEach(() => {
   }
 });
 
+describe("任务会话身份", () => {
+  it("绑定身份随账本和事件持久化，后续切点不能改写旧任务归属", () => {
+    const { root, store } = makeStore();
+    const run = store.acceptCommand(command()).run!;
+    store.bindRunConversation(run.runId, "before-rewind");
+    store.bindRunConversation(run.runId, "after-rewind");
+    const event = store.appendRunEvent(run.runId, "run.started", {});
+    expect(event.conversationId).toBe("before-rewind");
+    const reopened = new DurableRunStore(root);
+    expect(reopened.run(run.runId)?.conversationId).toBe("before-rewind");
+    expect(reopened.eventsForRun(run.runId)[0]?.conversationId).toBe("before-rewind");
+  });
+});
+
 describe("DurableRunStore", () => {
   it("durably purges one deleted session without disturbing another session", () => {
     const { root, store } = makeStore();

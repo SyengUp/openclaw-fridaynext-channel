@@ -49,6 +49,7 @@ import {
 import { verifySession } from "../attest/attest-store.js";
 import { attestGateDecision, ATTEST_REJECTION_BODY } from "../attest/attest-gate.js";
 import { handleSessionDelete } from "./handlers/session-delete.js";
+import { handleSessionFork, handleSessionRewind } from "./handlers/session-message-actions.js";
 import { handleSessionReadState } from "./handlers/session-read-state.js";
 import { handleAgentIdentity } from "./handlers/agent-identity.js";
 import { handleCommandsList } from "./handlers/commands-list.js";
@@ -411,6 +412,20 @@ export function registerFridayNextHttpRoutes(api: {
   // OpenClaw 原生会话未读状态。读取走 sessions.list，写入走 sessions.patch；
   // 两者都必须运行在 Gateway 鉴权请求作用域，不能从普通插件鉴权路由代调。
   // 不提升到 trusted-operator：这里的受限 patch 字段仅需 operator.write。
+  // 回退需要 admin；分叉只需 write，分别注册避免扩大分叉的权限面。
+  api.registerHttpRoute({
+    path: "/friday-next-admin/sessions/rewind",
+    handler: handleSessionRewind,
+    auth: "gateway",
+    match: "exact",
+    gatewayRuntimeScopeSurface: "trusted-operator",
+  });
+  api.registerHttpRoute({
+    path: "/friday-next-admin/sessions/fork",
+    handler: handleSessionFork,
+    auth: "gateway",
+    match: "exact",
+  });
   api.registerHttpRoute({
     path: "/friday-next-admin/sessions/state",
     handler: handleSessionReadState,
