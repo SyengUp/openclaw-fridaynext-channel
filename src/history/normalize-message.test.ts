@@ -294,6 +294,50 @@ describe("normalizeHistoryMessage", () => {
     expect(out?.kind).toBe("compaction");
     expect(out?.role).toBe("system");
   });
+
+  it("carries compaction boundary facts (tokens/runId/itemId) to the client", () => {
+    // Core persists `tokensBefore` on the boundary entry; gateways that project
+    // `tokensAfter` too let the client show "saved N tokens" (Control UI rule:
+    // only when both numbers exist). runId/itemId let the app match the live
+    // divider against this persisted marker instead of rendering two rows.
+    const out = normalizeHistoryMessage(
+      {
+        role: "system",
+        content: [{ type: "text", text: "Compaction" }],
+        __openclaw: {
+          id: "c2",
+          seq: 11,
+          kind: "compaction",
+          tokensBefore: 180_000,
+          tokensAfter: 24_000,
+          runId: "run-9",
+          itemId: "item-1",
+        },
+      },
+      0,
+    );
+    expect(out).toMatchObject({
+      kind: "compaction",
+      tokensBefore: 180_000,
+      tokensAfter: 24_000,
+      runId: "run-9",
+      itemId: "item-1",
+    });
+  });
+
+  it("reads boundary facts from the raw entry root when no envelope carries them", () => {
+    const out = normalizeHistoryMessage(
+      {
+        role: "system",
+        content: [{ type: "text", text: "Compaction" }],
+        tokensBefore: 90_000,
+        ...meta("c3", 12, { kind: "compaction" }),
+      },
+      0,
+    );
+    expect(out?.tokensBefore).toBe(90_000);
+    expect(out?.tokensAfter).toBeUndefined();
+  });
 });
 
 describe("normalizeHistoryMessages", () => {

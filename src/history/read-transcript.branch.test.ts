@@ -128,4 +128,53 @@ describe("活动分支历史投影", () => {
       ),
     ).toThrow("Invalid transcript leaf control");
   });
+
+  it("压缩边界投影成系统消息并带上 tokensBefore", () => {
+    // Core appends the boundary onto the live leaf and continues from it, so the
+    // records after it must be re-parented onto the boundary (a sibling would be
+    // an abandoned branch and correctly fall out of the active path).
+    const withCompaction = [
+      ...records.slice(0, 3),
+      {
+        type: "compaction",
+        id: "c1",
+        parentId: "a1",
+        timestamp: "2026-10-01T00:00:00.000Z",
+        summary: "早期对话摘要",
+        firstKeptEntryId: "u2",
+        tokensBefore: 185_000,
+        __openclaw: { runId: "run-7", itemId: "item-2" },
+      },
+      { ...records[3], parentId: "c1" },
+      records[4],
+    ];
+    const page = transcriptRecordsToRawMessagePage(withCompaction, 200, 0);
+    expect(ids(page.rawMessages)).toEqual(["u1", "a1", "c1", "u2", "a2"]);
+    expect(page.rawMessages[2]).toMatchObject({
+      role: "system",
+      content: [{ type: "text", text: "Compaction" }],
+      __openclaw: {
+        kind: "compaction",
+        id: "c1",
+        seq: 3,
+        runId: "run-7",
+        itemId: "item-2",
+        tokensBefore: 185_000,
+      },
+    });
+  });
+
+  it("被回退移出的压缩边界不进入当前历史窗口", () => {
+    const page = transcriptRecordsToRawMessagePage(
+      [
+        ...records.slice(0, 3),
+        { type: "compaction", id: "c-old", parentId: "u2", tokensBefore: 10 },
+        ...records.slice(3),
+        { type: "leaf", id: "rewind", parentId: "a2", targetId: "a1" },
+      ],
+      200,
+      0,
+    );
+    expect(ids(page.rawMessages)).toEqual(["u1", "a1"]);
+  });
 });

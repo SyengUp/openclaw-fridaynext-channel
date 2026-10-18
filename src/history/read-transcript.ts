@@ -158,6 +158,43 @@ export function resolveSessionTitle(sessionKey: string): string | undefined {
 }
 
 /**
+ * Compaction / reset boundaries as client-visible system messages.
+ *
+ * Gateway `sessions.get` already projects these rows onto a `role:"system"`
+ * message (core `projectTranscriptEntryMessage`) carrying `__openclaw.kind`;
+ * the local reader previously dropped them (`!rec.message`), so compaction
+ * feedback vanished whenever history fell back to the file/SQLite scan. Mirror
+ * the gateway shape here — and keep the boundary's own `tokensBefore`
+ * (persisted by core `appendCompaction`) so clients can report the savings the
+ * gateway projection cannot see.
+ */
+function boundaryRecordToRawMessage(
+  rec: Record<string, unknown>,
+  kind: "compaction" | "reset",
+  seq: number,
+  timestamp: number,
+): Record<string, unknown> {
+  const identity = asRecord(rec.__openclaw) ?? {};
+  const tokensBefore = readFiniteNumber(rec.tokensBefore);
+  const tokensAfter = readFiniteNumber(rec.tokensAfter);
+  return {
+    role: "system",
+    content: [{ type: "text", text: kind === "compaction" ? "Compaction" : "Reset" }],
+    ...(Number.isFinite(timestamp) ? { timestamp } : {}),
+    __openclaw: {
+      kind,
+      ...(typeof rec.id === "string" ? { id: rec.id } : {}),
+      seq,
+      ...(Number.isFinite(timestamp) ? { recordTimestampMs: timestamp } : {}),
+      ...(typeof identity.runId === "string" ? { runId: identity.runId } : {}),
+      ...(typeof identity.itemId === "string" ? { itemId: identity.itemId } : {}),
+      ...(tokensBefore !== undefined ? { tokensBefore } : {}),
+      ...(tokensAfter !== undefined ? { tokensAfter } : {}),
+    },
+  };
+}
+
+/**
  * Message records with their `__openclaw` envelope. `seq` is the GLOBAL position
  * over the full filtered transcript (1..N), so slices from different offset
  * pages still share one stable ordering key when the app concatenates them.
@@ -169,7 +206,11 @@ function messageRecordsWithGlobalEnvelope(records: unknown[]): unknown[] {
   for (const [index, recUnknown] of records.entries()) {
     if (!recUnknown || typeof recUnknown !== "object" || Array.isArray(recUnknown)) continue;
     const rec = recUnknown as Record<string, unknown>;
-    if (rec.type === "session" || !rec.message || typeof rec.message !== "object") continue;
+    if (rec.type === "session") continue;
+    const boundaryKind =
+      rec.type === "compaction" ? "compaction" : rec.type === "reset" ? "reset" : undefined;
+    const hasMessage = !!rec.message && typeof rec.message === "object";
+    if (!boundaryKind && !hasMessage) continue;
     seq += 1;
     if (visible && !visible.has(index)) continue;
     const tsRaw = rec.timestamp;
@@ -179,6 +220,10 @@ function messageRecordsWithGlobalEnvelope(records: unknown[]): unknown[] {
         : typeof tsRaw === "number"
           ? tsRaw
           : Number.NaN;
+    if (boundaryKind) {
+      raw.push(boundaryRecordToRawMessage(rec, boundaryKind, seq, ts));
+      continue;
+    }
     raw.push({
       ...(rec.message as Record<string, unknown>),
       __openclaw: {
@@ -277,6 +322,15 @@ function asRecord(value: unknown): Record<string, unknown> | undefined {
   return value && typeof value === "object" && !Array.isArray(value)
     ? (value as Record<string, unknown>)
     : undefined;
+}
+
+function readFiniteNumber(value: unknown): number | undefined {
+  if (typeof value === "number" && Number.isFinite(value)) return value;
+  if (typeof value === "string" && value.trim()) {
+    const n = Number(value);
+    if (Number.isFinite(n)) return n;
+  }
+  return undefined;
 }
 
 /** Offset page served through the gateway's bounded read (null = unavailable). */

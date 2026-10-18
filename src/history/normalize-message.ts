@@ -63,6 +63,16 @@ export interface FridayHistoryMessage {
   usage?: FridayHistoryUsage;
   /** Non-message records surfaced for context (e.g. compaction dividers). */
   kind?: "compaction";
+  /** Compaction boundary facts (core persists `tokensBefore` on the entry;
+   *  `tokensAfter` only exists when the host projects it). Clients render
+   *  "saved N tokens" only when both are present — same rule as Control UI. */
+  tokensBefore?: number;
+  tokensAfter?: number;
+  /** Run that performed the compaction (`__openclaw.runId`); lets a client
+   *  match its live divider against the persisted marker instead of showing two. */
+  runId?: string;
+  /** Compaction item id (`__openclaw.itemId`) for nested/manual operations. */
+  itemId?: string;
   /** True when `id` was synthesized because upstream had no stable id. */
   synthetic?: boolean;
   /** true = 任一明细字段（text/thinking/toolResult.text/toolCall 参数）超预算被
@@ -388,6 +398,17 @@ export function normalizeHistoryMessage(
 
   if (kind === "compaction") {
     message.text = parsed.text || "Compaction";
+    // Boundary facts travel either in the `__openclaw` envelope (gateway
+    // projection / local reader) or on the record root (raw core entry).
+    const tokensBefore =
+      readFiniteNumber(meta?.tokensBefore) ?? readFiniteNumber(record.tokensBefore);
+    const tokensAfter = readFiniteNumber(meta?.tokensAfter) ?? readFiniteNumber(record.tokensAfter);
+    const runId = readString(meta?.runId);
+    const itemId = readString(meta?.itemId);
+    if (tokensBefore !== undefined) message.tokensBefore = tokensBefore;
+    if (tokensAfter !== undefined) message.tokensAfter = tokensAfter;
+    if (runId) message.runId = runId;
+    if (itemId) message.itemId = itemId;
     return message;
   }
 
