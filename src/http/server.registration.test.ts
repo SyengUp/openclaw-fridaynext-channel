@@ -4,6 +4,17 @@ import { registerFridayNextHttpRoutes } from "./server.js";
 import { setMockRuntime } from "../test-support/mock-runtime.js";
 
 describe("FridayNext HTTP route registration", () => {
+  it("消息朗读使用网关鉴权和默认 operator 权限", () => {
+    setMockRuntime({ authToken: "test-token" });
+    const routes: Array<Record<string, unknown>> = [];
+    registerFridayNextHttpRoutes({
+      logger: { info: vi.fn(), warn: vi.fn() },
+      registerHttpRoute: (route) => routes.push(route),
+    });
+    const route = routes.find((route) => route.path === "/friday-next-admin/tts");
+    expect(route).toMatchObject({ auth: "gateway", match: "prefix" });
+    expect(route).not.toHaveProperty("gatewayRuntimeScopeSurface");
+  });
   it("消息切点按各自所需的 operator 权限注册", () => {
     setMockRuntime({ authToken: "test-token" });
     const routes: Array<Record<string, unknown>> = [];

@@ -642,6 +642,13 @@ sends; public requests additionally pass the App Attest gate.
 
   `{ "ok": true, "jobId": "…", "runs": [ /* run-log entries; core calls them `entries` */ ] }`.
 
+## Assistant message read-aloud (plugin 2026.10.3)
+
+- `GET /friday-next-admin/tts/config` returns `{ok:true,maxTextLength}` for splitting long messages at the core TTS limit. It does not expose credentials.
+- `POST /friday-next-admin/tts/speak` accepts `{text}` and calls the core `tts.speak` method. The response is `{ok:true,audioBase64,provider,outputFormat?,mimeType?}`. Provider, model, voice and credential overrides from the client are discarded; synthesis follows the gateway TTS configuration and core fallback policy. This is separate from the Talk configuration used by `talk.speak`. The host must provide `tts.speak` and the SDK `resolveTtsConfig` export.
+
+Both routes use gateway bearer authentication and the default operator surface, with App Attest required on the public surface. Invalid text returns 400, empty audio 502, and unavailable core TTS 503. Responses use `no-store` and do not expose server file paths.
+
 ## Removed endpoints
 
 - `GET` / `DELETE /friday-next/history` — **removed.** Build conversation state from the SSE stream on the client.

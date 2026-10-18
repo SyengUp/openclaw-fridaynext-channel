@@ -60,6 +60,7 @@ import {
   handleCronChannels,
 } from "./handlers/cron.js";
 import { handleTalk } from "./handlers/talk.js";
+import { handleTts } from "./handlers/tts.js";
 import { handleHealthQueryResult } from "./handlers/health-query-result.js";
 import { handleCalendarResult } from "./handlers/calendar-result.js";
 import { handleLocationQueryResult } from "./handlers/location-query-result.js";
@@ -524,6 +525,13 @@ export function registerFridayNextHttpRoutes(api: {
     match: "exact",
   });
 
+  // 消息朗读只使用核心 TTS 配置，保持默认 operator 权限。
+  api.registerHttpRoute({
+    path: "/friday-next-admin/tts",
+    handler: handleTts,
+    auth: "gateway",
+    match: "prefix",
+  });
   // Native Talk (catalog / config / speak / mode) plus realtime session
   // (create / audio / cancel / close). Never request includeSecrets — credentials stay on Gateway.
   api.registerHttpRoute({

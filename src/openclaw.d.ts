@@ -230,4 +230,6 @@ declare module "openclaw/plugin-sdk/status-helpers" {
   export const createDefaultChannelRuntimeState: (...args: any[]) => any;
 }
 
-
+declare module "openclaw/plugin-sdk/tts-runtime" {
+  export function resolveTtsConfig(config: unknown): { maxTextLength: number };
+}

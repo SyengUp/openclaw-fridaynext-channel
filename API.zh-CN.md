@@ -309,6 +309,14 @@ curl -sS -D - "http://127.0.0.1:18789/friday-next/events?deviceId=test" \
 成功时应为 `Content-Type: text/event-stream`。
 
 
+## 助手消息朗读（插件 2026.10.3）
+
+`GET /friday-next-admin/tts/config` 返回 `{ok:true,maxTextLength}`，仅用于按核心 TTS 上限拆分长消息，不返回模型凭据。
+
+`POST /friday-next-admin/tts/speak` 接受 `{text}`，调用核心 `tts.speak`，返回 `{ok:true,audioBase64,provider,outputFormat?,mimeType?}`。客户端传入的模型、音色、提供方及凭据字段不会转发；合成遵循网关 TTS 配置与核心降级规则。此接口与使用独立 Talk 配置的 `talk.speak` 不同，要求宿主提供核心 `tts.speak` 和 SDK `resolveTtsConfig`。
+
+两条接口均使用 gateway bearer、默认 operator 权限，公网经过 App Attest。无效正文为 400，空音频为 502，核心 TTS 不可用为 503。响应禁用缓存，不透传服务器文件路径。
+
 ## APNs 会话通知
 
 `GET /friday-next/push/registration` 返回 `{capability:"push-v1"}`。
