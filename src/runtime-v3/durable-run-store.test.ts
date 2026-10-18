@@ -592,3 +592,21 @@ describe("DurableRunStore", () => {
     );
   });
 });
+
+describe("问题终态的异步投递", () => {
+  it("运行已结束后仍投递问题终态，并在重启后保留", () => {
+    const { root, store } = makeStore();
+    const run = store.acceptCommand(command()).run!;
+    store.appendRunEvent(run.runId, "run.started", {});
+    store.appendRunEvent(run.runId, "run.completed", {});
+    const terminal = store.appendRunEvent(run.runId, "question.cancelled", {
+      _sourceEventType: "question",
+      _sourceEventData: { questionId: "q", op: "cancelled" },
+    });
+    expect(terminal.eventType).toBe("question.cancelled");
+    expect(store.run(run.runId)?.phase).toBe("completed");
+    expect(new DurableRunStore(root).eventsForRun(run.runId).at(-1)?.eventType).toBe(
+      "question.cancelled",
+    );
+  });
+});

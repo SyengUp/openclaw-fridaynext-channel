@@ -35,6 +35,18 @@ Token resolution order:
 
 回复功能使用普通消息中的 Markdown 块引用，不新增 `replyTo` 或线程协议。App 保留引用草稿并在发送安全入队后消费。
 
+## ask_user 询问
+
+对齐 OpenClaw `v2026.10.4` 及主分支问题输入契约。频道声明 `agentPrompt.questionInputMode = "buttons"`，主动投递的完整 `ReplyPayload` 进入与消息 dispatcher 相同的 `deliver.tool` 流，保留 `channelData.askUser` 与 `presentation`，归属取自核心问题记录的 `runId/sessionKey`。问题终态可在运行结束后追加到 v3 账本，不会复活运行。
+
+| 接口 | 语义 |
+|---|---|
+| `GET /friday-next/questions?sessionKey=<完整会话 key>` | 从核心 `question.list` 返回当前会话未过期、非秘密输入的 pending 快照；成功空列表才表示没有待答，失败返回 502 |
+| `GET /friday-next/questions/:id` | 核心 `question.get` 当前状态；pending 返回 questions、expiresAtMs、runId、sessionKey 与 agentId |
+| `POST /friday-next/questions/:id` | 提交一种答案形态，或跳过整个询问 |
+
+提交体互斥：`{optionValue}`、`{text}`、`{values:[...]}`、`{answers:{innerQuestionId:[...]}}`、`{cancel:true}`，均可携带 `deviceId`。选项值为 `value ?? label`，取消走 `question.resolve({id,cancel:true})`。成功状态为 `answered` / `cancelled`；已结束返回 `already-terminal`。同一问题串行提交，只有核心接受后的成功回执会锁定答案；校验失败或核心失败后可修正重试，兼容旧版本遗留的 prepared 回执。相同成功请求重试返回 `replayed:true`，不同成功答案返回 409。
+
 ## SSE
 
 `GET /friday-next/events?deviceId=<deviceId>[&lastEventId=<n>]`

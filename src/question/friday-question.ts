@@ -13,6 +13,7 @@ import { sseEmitter } from "../sse/emitter.js";
 import { toSessionStoreKey } from "../session/session-manager.js";
 import { createFridayNextLogger } from "../logging.js";
 import { getFridayQuestionDeliveryRegistrar } from "./question-gateway-runtime-compat.js";
+import { processMap } from "../process-state.js";
 
 const logger = createFridayNextLogger("question");
 
@@ -47,8 +48,12 @@ type PendingFridayQuestion = {
   cleanupTimer: ReturnType<typeof setTimeout>;
 };
 
-const pendingBySessionKey = new Map<string, PendingFridayQuestion>();
-const sessionKeyByQuestionId = new Map<string, string>();
+const pendingBySessionKey = processMap<string, PendingFridayQuestion>(
+  Symbol.for("friday-next.pending-questions"),
+);
+const sessionKeyByQuestionId = processMap<string, string>(
+  Symbol.for("friday-next.question-sessions"),
+);
 
 function dropPending(entry: PendingFridayQuestion): void {
   clearTimeout(entry.cleanupTimer);

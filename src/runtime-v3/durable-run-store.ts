@@ -157,7 +157,12 @@ const busyPhases = new Set<DurableRunPhase>([
  * to them. `phaseAfterEvent` leaves the terminal phase untouched, and `appendRunEvent`
  * rewrites the run snapshot afterwards so the event survives journal compaction.
  */
-const postTerminalMetaEvents = new Set(["session-title"]);
+const postTerminalMetaEvents = new Set([
+  "session-title",
+  "question.resolved",
+  "question.expired",
+  "question.cancelled",
+]);
 
 function normalizedDeviceId(deviceId: string): string {
   return deviceId.trim().toUpperCase();
@@ -879,6 +884,32 @@ export class DurableRunStore {
 
   commandReceipt(kind: string, commandId: string): DurableCommandReceipt | undefined {
     return this.commandReceiptsByKey.get(this.commandReceiptKey(kind, commandId));
+  }
+
+  /** 核心已原子接受结果后才写成功回执；旧版本遗留的 prepared 不代表答案被接受。 */
+  completeAuthoritativeCommandReceipt(
+    kind: string,
+    commandId: string,
+    payload: unknown,
+    response: Record<string, unknown>,
+  ): DurableCommandReceipt {
+    const key = this.commandReceiptKey(kind, commandId);
+    const hash = canonicalPayloadHash(payload);
+    const existing = this.commandReceiptsByKey.get(key);
+    if (existing?.state === "succeeded" && existing.payloadHash !== hash) {
+      throw new Error(`conflicting accepted command for ${kind}:${commandId}`);
+    }
+    const receipt: DurableCommandReceipt = {
+      kind,
+      commandId,
+      payloadHash: hash,
+      state: "succeeded",
+      response: { ...response },
+      updatedAt: Date.now(),
+    };
+    this.persistCommandReceipt(receipt);
+    this.commandReceiptsByKey.set(key, receipt);
+    return receipt;
   }
 
   registerDeviceRequest(input: RegisterDeviceRequest): DurableDeviceRequest {

@@ -1,13 +1,14 @@
 import { Readable } from "node:stream";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { setMockRuntime } from "../../test-support/mock-runtime.js";
+import { getRuntimeV3Store } from "../../runtime-v3/runtime-store.js";
 
 const { dispatchGatewayMethod } = vi.hoisted(() => ({
   dispatchGatewayMethod: vi.fn(),
 }));
 vi.mock("openclaw/plugin-sdk/gateway-method-runtime", () => ({ dispatchGatewayMethod }));
 
-import { handleQuestionAnswer, handleQuestionLookup } from "./questions.js";
+import { handleQuestionAnswer, handleQuestionLookup, handlePendingQuestions } from "./questions.js";
 
 type IncomingMessageLike = import("node:http").IncomingMessage;
 type ServerResponseLike = import("node:http").ServerResponse;
@@ -361,5 +362,145 @@ describe("handleQuestionAnswer structured shapes", () => {
     const result = await invoke("POST", QUESTION_ID, { optionValue: "Staging" });
     expect(result.status).toBe(400);
     expect(dispatchGatewayMethod).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("ask_user 失败恢复与跳过", () => {
+  beforeEach(() => {
+    setMockRuntime();
+    dispatchGatewayMethod.mockReset();
+  });
+  it("首次网关失败后允许修改答案重试", async () => {
+    mockGet(PENDING_RECORD);
+    dispatchGatewayMethod.mockResolvedValueOnce({
+      ok: false,
+      error: { code: "UNAVAILABLE", message: "temporary failure" },
+    });
+    expect((await invoke("POST", QUESTION_ID, { optionValue: "Staging" })).status).toBe(502);
+    mockGet(PENDING_RECORD);
+    dispatchGatewayMethod.mockResolvedValueOnce({ ok: true, payload: { status: "answered" } });
+    expect((await invoke("POST", QUESTION_ID, { optionValue: "Production" })).status).toBe(200);
+  });
+  it("输入被拒绝后可以提交修正答案", async () => {
+    mockGet(PENDING_RECORD);
+    expect((await invoke("POST", QUESTION_ID, { optionValue: "Canary" })).status).toBe(400);
+    mockGet(PENDING_RECORD);
+    dispatchGatewayMethod.mockResolvedValueOnce({ ok: true, payload: { status: "answered" } });
+    expect((await invoke("POST", QUESTION_ID, { optionValue: "Staging" })).status).toBe(200);
+  });
+  it("接受独立于 label 的 canonical value", async () => {
+    mockGet({
+      ...PENDING_RECORD,
+      questions: [
+        {
+          questionId: "target",
+          header: "目标",
+          question: "选择？",
+          options: [{ label: "生产", value: "prod-id" }],
+          isOther: true,
+        },
+      ],
+    });
+    dispatchGatewayMethod.mockResolvedValueOnce({ ok: true, payload: { status: "answered" } });
+    expect((await invoke("POST", QUESTION_ID, { optionValue: "prod-id" })).status).toBe(200);
+    expect(dispatchGatewayMethod).toHaveBeenLastCalledWith("question.resolve", {
+      id: QUESTION_ID,
+      answers: { answers: { target: ["prod-id"] } },
+    });
+  });
+  it("跳过询问使用 question.resolve cancel，且可幂等重试", async () => {
+    mockGet(PENDING_RECORD);
+    dispatchGatewayMethod.mockResolvedValueOnce({ ok: true, payload: { status: "cancelled" } });
+    const first = await invoke("POST", QUESTION_ID, { cancel: true, deviceId: "dev1" });
+    expect(first.status).toBe(200);
+    expect(first.json?.status).toBe("cancelled");
+    expect(dispatchGatewayMethod).toHaveBeenLastCalledWith("question.resolve", {
+      id: QUESTION_ID,
+      cancel: true,
+      resolvedBy: "DEV1",
+    });
+    expect(
+      (await invoke("POST", QUESTION_ID, { cancel: true, deviceId: "dev1" })).json?.replayed,
+    ).toBe(true);
+  });
+  it("取消与答案不能混发", async () => {
+    expect((await invoke("POST", QUESTION_ID, { cancel: true, text: "不要执行" })).status).toBe(
+      400,
+    );
+    expect(dispatchGatewayMethod).not.toHaveBeenCalled();
+  });
+});
+
+describe("待答恢复快照与并发回执", () => {
+  beforeEach(() => {
+    setMockRuntime();
+    dispatchGatewayMethod.mockReset();
+  });
+  it("待答列表按完整会话过滤并排除终态、过期和秘密输入", async () => {
+    const row = {
+      ...PENDING_RECORD,
+      expiresAtMs: Date.now() + 60_000,
+      runId: "music-run",
+      sessionKey: "agent:main:fridaynext:music",
+    };
+    dispatchGatewayMethod.mockResolvedValueOnce({
+      ok: true,
+      payload: {
+        questions: [
+          row,
+          { ...row, id: "other", sessionKey: "agent:main:fridaynext:other" },
+          { ...row, id: "done", status: "answered" },
+          { ...row, id: "old", expiresAtMs: 1 },
+          { ...row, id: "secret", questions: [{ questionId: "key", isSecret: true }] },
+        ],
+      },
+    });
+    const req = makeGetReq(QUESTION_ID);
+    req.url = "/friday-next/questions?sessionKey=Agent%3AMain%3AFridayNext%3AMusic";
+    const { res, captured } = makeRes();
+    await handlePendingQuestions(req, res);
+    expect(captured.statusCode).toBe(200);
+    const body = JSON.parse(captured.body);
+    expect(body.questions).toHaveLength(1);
+    expect(body.questions[0]).toMatchObject({ questionId: QUESTION_ID, runId: "music-run" });
+  });
+  it("列表查询失败不能伪装成没有待答问题", async () => {
+    dispatchGatewayMethod.mockResolvedValueOnce({ ok: false, error: { message: "offline" } });
+    const req = makeGetReq(QUESTION_ID);
+    req.url = "/friday-next/questions?sessionKey=agent:main:music";
+    const { res, captured } = makeRes();
+    await handlePendingQuestions(req, res);
+    expect(captured.statusCode).toBe(502);
+  });
+  it("兼容旧版本失败遗留的 prepared 回执", async () => {
+    getRuntimeV3Store().prepareCommandReceipt("question", QUESTION_ID, {
+      optionValue: "bad",
+      deviceId: "",
+    });
+    mockGet(PENDING_RECORD);
+    dispatchGatewayMethod.mockResolvedValueOnce({ ok: true, payload: { status: "answered" } });
+    expect((await invoke("POST", QUESTION_ID, { optionValue: "Staging" })).status).toBe(200);
+    expect(getRuntimeV3Store().commandReceipt("question", QUESTION_ID)?.state).toBe("succeeded");
+  });
+  it("同一答案并发重试只调用一次核心 resolve", async () => {
+    mockGet(PENDING_RECORD);
+    dispatchGatewayMethod.mockResolvedValueOnce({ ok: true, payload: { status: "answered" } });
+    const results = await Promise.all([
+      invoke("POST", QUESTION_ID, { optionValue: "Staging" }),
+      invoke("POST", QUESTION_ID, { optionValue: "Staging" }),
+    ]);
+    expect(results.map((r) => r.status)).toEqual([200, 200]);
+    expect(results[1].json?.replayed).toBe(true);
+    expect(dispatchGatewayMethod).toHaveBeenCalledTimes(2);
+  });
+  it("并发冲突答案不能覆盖已经接受的结果", async () => {
+    mockGet(PENDING_RECORD);
+    dispatchGatewayMethod.mockResolvedValueOnce({ ok: true, payload: { status: "answered" } });
+    const results = await Promise.all([
+      invoke("POST", QUESTION_ID, { optionValue: "Staging" }),
+      invoke("POST", QUESTION_ID, { optionValue: "Production" }),
+    ]);
+    expect(results.map((r) => r.status)).toEqual([200, 409]);
+    expect(dispatchGatewayMethod).toHaveBeenCalledTimes(2);
   });
 });

@@ -36,6 +36,7 @@ import { deviceOnlineForToolRequests } from "./tools/device-tool-route.js";
 import { isOperatorToolResultEnvelope } from "./operator-tool-result.js";
 import { getLastFridayInboundAt } from "./friday-inbound-stats.js";
 import { fridayApprovalCapability } from "./approval/friday-approval-capability.js";
+import { deliverFridayQuestionPayload } from "./question/friday-question-delivery.js";
 
 const logger = createFridayNextLogger("channel");
 const CHANNEL_ID = "friday-next" as const;
@@ -215,6 +216,7 @@ export const fridayNextChannelPlugin = createChatChannelPlugin({
       handleAction: handleMessageAction,
     },
     capabilities: fridayCapabilities,
+    agentPrompt: { questionInputMode: "buttons" },
     defaults: {
       queue: { debounceMs: 300 },
     },
@@ -265,6 +267,34 @@ export const fridayNextChannelPlugin = createChatChannelPlugin({
   },
   outbound: {
     deliveryMode: "direct" as const,
+    resolvePresentationCapabilities: () => ({ supported: true, buttons: true }),
+    sendPayload: async (ctx: any) => {
+      const payload = ctx.payload as Record<string, unknown>;
+      const deviceId = resolveFridayDeviceIdForOutbound(ctx.to, ctx as Record<string, unknown>);
+      if (await deliverFridayQuestionPayload(payload, deviceId)) {
+        return { channel: CHANNEL_ID, messageId: crypto.randomUUID(), timestamp: Date.now() };
+      }
+      // 普通消息继续复用原有文本/附件发送，避免为问题适配改变原有媒体语义。
+      const rawUrls: unknown[] = [
+        ...(Array.isArray(payload.mediaUrls) ? payload.mediaUrls : []),
+        payload.mediaUrl,
+      ];
+      const urls = [
+        ...new Set(rawUrls.filter((url): url is string => typeof url === "string" && !!url.trim())),
+      ];
+      if (urls.length > 0) {
+        let result;
+        for (const mediaUrl of urls) {
+          result = await fridayNextChannelPlugin.outbound!.sendMedia!({
+            ...ctx,
+            ...payload,
+            mediaUrl,
+          });
+        }
+        return result;
+      }
+      return fridayNextChannelPlugin.outbound!.sendText!({ ...ctx, ...payload });
+    },
     sendText: async (ctx: any) => {
       const text = ctx.text ?? "";
       const rawCtx = ctx as unknown as Record<string, unknown>;

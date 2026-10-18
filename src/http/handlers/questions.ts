@@ -24,6 +24,8 @@ import { extractBearerToken } from "../middleware/auth.js";
 import { getRuntimeV3Store } from "../../runtime-v3/runtime-store.js";
 import { ensureGatewayRequestScopes } from "../../agent/operator-scope.js";
 import { createFridayNextLogger } from "../../logging.js";
+import { processMap } from "../../process-state.js";
+import { toSessionStoreKey } from "../../session/session-manager.js";
 
 const QUESTION_SCOPES = ["operator.questions"] as const;
 
@@ -50,6 +52,10 @@ type QuestionRecordQuestion = {
 };
 
 type QuestionRecordView = {
+  id?: unknown;
+  sessionKey?: unknown;
+  runId?: unknown;
+  agentId?: unknown;
   status?: unknown;
   questions?: unknown;
   answers?: unknown;
@@ -100,6 +106,9 @@ export async function handleQuestionLookup(
     ok: true,
     questionId,
     status: found.record.status,
+    sessionKey: found.record.sessionKey,
+    runId: found.record.runId,
+    agentId: found.record.agentId,
     ...(found.record.status === "pending"
       ? { questions: found.record.questions, expiresAtMs }
       : {}),
@@ -107,7 +116,70 @@ export async function handleQuestionLookup(
   });
 }
 
+/** 重连和冷启动按当前会话重建待答快照；不用旧 SSE 是否仍可重放推测问题状态。 */
+export async function handlePendingQuestions(
+  req: IncomingMessage,
+  res: ServerResponse,
+): Promise<boolean> {
+  const reply = (status: number, body: Record<string, unknown>) => {
+    res.statusCode = status;
+    res.setHeader("Content-Type", "application/json");
+    res.end(JSON.stringify(body));
+    return true;
+  };
+  if (!extractBearerToken(req)) return reply(401, { error: "Unauthorized: bearer token mismatch" });
+  const rawSession = new URL(req.url ?? "", "http://localhost").searchParams
+    .get("sessionKey")
+    ?.trim();
+  if (!rawSession) return reply(400, { error: "Missing sessionKey" });
+  const sessionKey = toSessionStoreKey(rawSession).toLowerCase();
+  ensureGatewayRequestScopes(QUESTION_SCOPES);
+  const result = await dispatchGatewayMethod("question.list", {});
+  if (!result.ok)
+    return reply(502, { error: "Question list failed", detail: result.error?.message });
+  const rows = (result.payload as { questions?: unknown })?.questions;
+  if (!Array.isArray(rows)) return reply(502, { error: "Question list is missing records" });
+  const questions = rows
+    .filter(
+      (row: QuestionRecordView) =>
+        row.status === "pending" &&
+        typeof row.sessionKey === "string" &&
+        toSessionStoreKey(row.sessionKey).toLowerCase() === sessionKey &&
+        (typeof row.expiresAtMs !== "number" || row.expiresAtMs > Date.now()) &&
+        Array.isArray(row.questions) &&
+        !row.questions.some((question: { isSecret?: boolean }) => question.isSecret),
+    )
+    .map((row: QuestionRecordView) => ({ ...row, questionId: row.id }));
+  return reply(200, { ok: true, questions });
+}
+
 export async function handleQuestionAnswer(
+  req: IncomingMessage,
+  res: ServerResponse,
+  questionIdRaw: string,
+): Promise<boolean> {
+  // 同一问题的答案与取消串行提交；不同问题互不阻塞，双模块加载也共享这个锁。
+  const key = questionIdRaw.trim();
+  const previous = questionSubmissions.get(key) ?? Promise.resolve();
+  let release!: () => void;
+  const pending = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  questionSubmissions.set(key, pending);
+  await previous.catch(() => undefined);
+  try {
+    return await handleQuestionAnswerSerial(req, res, questionIdRaw);
+  } finally {
+    release();
+    if (questionSubmissions.get(key) === pending) questionSubmissions.delete(key);
+  }
+}
+
+const questionSubmissions = processMap<string, Promise<void>>(
+  Symbol.for("friday-next.question-submissions"),
+);
+
+async function handleQuestionAnswerSerial(
   req: IncomingMessage,
   res: ServerResponse,
   questionIdRaw: string,
@@ -127,6 +199,10 @@ export async function handleQuestionAnswer(
 
   const body = await readJsonBody(req);
   if (!body) return json(400, { error: "Invalid JSON body" });
+  if (body.cancel !== undefined && body.cancel !== true) {
+    return json(400, { error: "cancel must be true" });
+  }
+  const cancel = body.cancel === true;
 
   const optionValue = typeof body.optionValue === "string" ? body.optionValue.trim() : "";
   const freeText = typeof body.text === "string" ? body.text.trim() : "";
@@ -137,18 +213,23 @@ export async function handleQuestionAnswer(
     body.answers && typeof body.answers === "object" && !Array.isArray(body.answers)
       ? (body.answers as Record<string, unknown>)
       : undefined;
-  const shaped = [optionValue, freeText, values.length > 0 ? true : false, answersMap].filter(
-    (v) => v !== undefined && v !== false && v !== "",
-  ).length;
+  const shaped = [
+    optionValue,
+    freeText,
+    values.length > 0 ? true : false,
+    answersMap,
+    cancel,
+  ].filter((v) => v !== undefined && v !== false && v !== "").length;
   if (shaped === 0) {
-    return json(400, { error: "Missing answer: optionValue, text, values, or answers" });
+    return json(400, { error: "Missing answer: optionValue, text, values, answers, or cancel" });
   }
   if (shaped > 1) {
-    return json(400, { error: "Send exactly one of optionValue, text, values, answers" });
+    return json(400, { error: "Send exactly one of optionValue, text, values, answers, cancel" });
   }
   const deviceId = typeof body.deviceId === "string" ? body.deviceId.trim().toUpperCase() : "";
 
   const receiptPayload = {
+    ...(cancel ? { cancel: true } : {}),
     ...(optionValue ? { optionValue } : {}),
     ...(freeText ? { text: freeText } : {}),
     ...(values.length > 0 ? { values } : {}),
@@ -156,7 +237,10 @@ export async function handleQuestionAnswer(
     deviceId,
   };
   const store = getRuntimeV3Store();
-  const receiptStatus = store.commandReceiptStatus("question", questionId, receiptPayload);
+  const receiptStatus =
+    store.commandReceipt("question", questionId)?.state === "succeeded"
+      ? store.commandReceiptStatus("question", questionId, receiptPayload)
+      : "missing";
   if (receiptStatus === "conflict") {
     return json(409, { error: "Question answer conflicts with the accepted answer" });
   }
@@ -165,9 +249,6 @@ export async function handleQuestionAnswer(
       ...(store.commandReceipt("question", questionId)?.response ?? {}),
       replayed: true,
     });
-  }
-  if (receiptStatus === "missing") {
-    store.prepareCommandReceipt("question", questionId, receiptPayload);
   }
 
   ensureGatewayRequestScopes(QUESTION_SCOPES);
@@ -207,62 +288,64 @@ export async function handleQuestionAnswer(
       ...(record.answers ? { answers: record.answers } : {}),
     });
   }
-  if (questions.length === 0) return fail(502, "Question record carries no questions");
+  let answers: Record<string, string[]> = {};
+  if (!cancel) {
+    if (questions.length === 0) return fail(502, "Question record carries no questions");
 
-  const innerIds = questions.map((q) => (typeof q.questionId === "string" ? q.questionId : ""));
-  if (innerIds.some((id) => !id))
-    return fail(502, "Question record is missing an inner question id");
+    const innerIds = questions.map((q) => (typeof q.questionId === "string" ? q.questionId : ""));
+    if (innerIds.some((id) => !id))
+      return fail(502, "Question record is missing an inner question id");
 
-  let answers: Record<string, string[]>;
-  if (answersMap) {
-    // Multi-question / explicit mapping: every key must be a declared inner question id.
-    const invalid = Object.keys(answersMap).filter((key) => !innerIds.includes(key));
-    if (invalid.length > 0) {
-      return fail(400, `answers reference undeclared question ids: ${invalid.join(", ")}`);
-    }
-    answers = Object.fromEntries(
-      Object.entries(answersMap).map(([id, raw]) => [
-        id,
-        Array.isArray(raw)
-          ? raw.filter((v): v is string => typeof v === "string" && v.trim().length > 0)
-          : [],
-      ]),
-    );
-    if (Object.keys(answers).length === 0) {
-      return json(400, { error: "answers must contain at least one non-empty value" });
-    }
-  } else {
-    if (questions.length !== 1) {
-      return fail(400, "Multi-question records require the answers map");
-    }
-    const innerId = innerIds[0];
-    const question = questions[0];
-    let answerValues: string[];
-    if (values.length > 0) {
-      answerValues = values;
-    } else if (optionValue) {
-      const declared = Array.isArray(question.options)
-        ? question.options
-            .map((o) =>
-              o && typeof o === "object" && !Array.isArray(o)
-                ? (o as { label?: unknown }).label
-                : undefined,
-            )
-            .filter((l): l is string => typeof l === "string")
-        : [];
-      if (declared.length > 0 && !declared.includes(optionValue)) {
-        return fail(400, `optionValue is not a declared option`, optionValue);
+    if (answersMap) {
+      // Multi-question / explicit mapping: every key must be a declared inner question id.
+      const invalid = Object.keys(answersMap).filter((key) => !innerIds.includes(key));
+      if (invalid.length > 0) {
+        return fail(400, `answers reference undeclared question ids: ${invalid.join(", ")}`);
       }
-      answerValues = [optionValue];
+      answers = Object.fromEntries(
+        Object.entries(answersMap).map(([id, raw]) => [
+          id,
+          Array.isArray(raw)
+            ? raw.filter((v): v is string => typeof v === "string" && v.trim().length > 0)
+            : [],
+        ]),
+      );
+      if (Object.keys(answers).length === 0) {
+        return json(400, { error: "answers must contain at least one non-empty value" });
+      }
     } else {
-      answerValues = [freeText];
+      if (questions.length !== 1) {
+        return fail(400, "Multi-question records require the answers map");
+      }
+      const innerId = innerIds[0];
+      const question = questions[0];
+      let answerValues: string[];
+      if (values.length > 0) {
+        answerValues = values;
+      } else if (optionValue) {
+        const declared = Array.isArray(question.options)
+          ? question.options
+              .map((o) =>
+                o && typeof o === "object" && !Array.isArray(o)
+                  ? ((o as { value?: unknown }).value ?? (o as { label?: unknown }).label)
+                  : undefined,
+              )
+              .filter((l): l is string => typeof l === "string")
+          : [];
+        if (declared.length > 0 && !declared.includes(optionValue)) {
+          return fail(400, `optionValue is not a declared option`, optionValue);
+        }
+        answerValues = [optionValue];
+      } else {
+        answerValues = [freeText];
+      }
+      answers = { [innerId]: answerValues };
     }
-    answers = { [innerId]: answerValues };
   }
 
   const resolveResult = await dispatchGatewayMethod("question.resolve", {
     id: questionId,
-    answers: { answers },
+    ...(cancel ? { cancel: true } : { answers: { answers } }),
     ...(deviceId ? { resolvedBy: deviceId } : {}),
   });
   if (!resolveResult.ok) {
@@ -275,13 +358,15 @@ export async function handleQuestionAnswer(
     return fail(502, "Question resolution failed", resolveResult.error?.message);
   }
 
-  log.info(`question ${questionId} answered by=${deviceId || "(none)"}`);
+  log.info(
+    `question ${questionId} ${cancel ? "cancelled" : "answered"} by=${deviceId || "(none)"}`,
+  );
   const response = {
     ok: true,
     questionId,
-    status: "answered",
+    status: cancel ? "cancelled" : "answered",
     ...(resolveResult.payload ? { result: resolveResult.payload } : {}),
   };
-  store.completeCommandReceipt("question", questionId, receiptPayload, response);
+  store.completeAuthoritativeCommandReceipt("question", questionId, receiptPayload, response);
   return json(200, response);
 }
