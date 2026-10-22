@@ -8,6 +8,8 @@ Guidance for working in this repository (OpenClaw `friday-next` channel plugin).
 
 ```bash
 pnpm build           # Compile TS to dist/ (required before gateway restart)
+pnpm package:pack    # 从固定 npm 依赖生成完整离线部署包
+pnpm package:registry --pack-destination /tmp/friday-registry # 只携带插件，由 npm 安装依赖
 ./install.js        # One-click: install deps, build, and configure OpenClaw
 pnpm test:unit       # Vitest unit tests (excludes *.e2e.test.ts)
 pnpm test:e2e        # Vitest e2e (vitest.e2e.config.ts)
@@ -26,28 +28,28 @@ pnpm vitest run --config vitest.e2e.config.ts src/e2e/send-text.e2e.test.ts
 
 Both vitest configs auto-detect the OpenClaw dist directory from standard install paths (`/opt/homebrew`, `/usr/local`, nvm). If your OpenClaw is installed elsewhere, set the `OPENCLAW_DIST` env var or update the candidates in both configs.
 
-### Local dev against a running gateway
+### 本地验证与安装来源
 
-The gateway loads the plugin from `~/.openclaw/npm/node_modules/@syengup/friday-channel-next`, which `openclaw plugins install` populates as a **copy** by default — so edits to this repo do NOT take effect even after `pnpm build` + restart (requests to new routes fall through to the gateway's SPA catch-all and return Control UI HTML instead of JSON). Link the repo once so the gateway loads this working tree directly:
+网关使用单一 npm 安装来源，禁止叠加 `load.paths`／开发链接。工作区构建不会自动更新网关的安装副本。使用完整 tgz 和下述事务脚本部署；安装位置从 SDK 的 `plugins.installedIndex` 权威记录读取，不按目录通配取第一项，也不假定存在旧版平铺 `npm/node_modules` 路径。
 
-```bash
-openclaw plugins install . --link    # symlink dev dir (cannot combine with --force; replaces any existing copy)
-```
+`scripts/verify-isolated-v3.mjs` 可用现有官方 SDK 和完整包启动独立 loopback 测试状态；测试加载路径只存在于该临时配置，不写生产配置。
 
-After that, the iterate loop is just: `pnpm build` → `openclaw gateway restart`. Verify a route returns JSON (not HTML), e.g. `curl -s -H "Authorization: Bearer <token>" http://127.0.0.1:<port>/friday-next/agents`. Port + token come from `~/.openclaw/openclaw.json` (`gateway.port`, `gateway.auth.token`).
-
-### 一键部署到网关（开发机 → 192.168.1.133 Mac mini）
+### 一键部署到网关（开发机 → 192.144.160.181:5023 Mac mini SSH）
 
 ```bash
-./scripts/deploy-gateway.sh                # 本地 tsc 构建 → rsync → 备份+覆盖安装目录 → 重启 → 健康检查
-./scripts/deploy-gateway.sh --no-build     # dist 已最新时跳过构建
-./scripts/deploy-gateway.sh --no-restart   # 只同步不重启（需手动重启）
-./scripts/deploy-gateway.sh --skip-verify  # 跳过健康检查
+./scripts/deploy-gateway.sh --inspect                 # 只读检查 SDK、安装路径和当前健康
+./scripts/deploy-gateway.sh --inspect --host HOST --ssh-port PORT # 覆盖 SSH 入口
+./scripts/deploy-gateway.sh --verify-only --package /path/plugin.tgz
+./scripts/deploy-gateway.sh --package /path/plugin.tgz --sha256 SHA256
+./scripts/deploy-gateway.sh --registry-version VERSION --package /path/plugin.tgz # SDK 正式 npm 更新及完整快照回退
+./scripts/deploy-gateway.sh --install-archive --package /path/plugin.tgz # SDK 正式安装未发布完整包，来源记录为 archive
+./scripts/deploy-gateway.sh --rollback BACKUP_ID      # 完整代码／依赖回滚，保留当前用户数据
+python3 scripts/test_gateway_deployment.py            # 故障台架，不连接生产
 ```
 
-拓扑：网关机 `192.168.1.133`（免密 SSH；2026-10 从 `192.168.100.133` 换网段），openclaw 装在 `/opt/homebrew/lib/node_modules/openclaw`，gateway = launchd `ai.openclaw.gateway`（端口 18789）。插件为 npm **拷贝**安装于 `~/.openclaw/npm/projects/syengup-friday-channel-next-*/node_modules/@syengup/friday-channel-next`，脚本覆盖其 `dist/`（旧版留 `dist.prev`，回滚=拷回+重启）。健康检查断言 `/friday-next/agents` 返回 JSON 而非 Control UI HTML（stale copy 信号）。
+拓扑：2026-10-21 起按用户指定，Mac mini 默认 SSH 入口为 `syengup@192.144.160.181`、端口 `5023`，部署工具支持 `--host`／`--ssh-port` 或 `GATEWAY_HOST`／`GATEWAY_SSH_PORT` 覆盖。原局域网入口为 `192.168.1.133`；新入口已与原主机密钥核对。OpenClaw 装在 `/opt/homebrew/lib/node_modules/openclaw`，gateway = launchd `ai.openclaw.gateway`（宿主 HTTP 端口 18789）。完整包内嵌 Kit、其传递依赖及 `qrcode-terminal`，不包含宿主 SDK。脚本先在同宿主 SDK 隔离验证，再停止托管服务并等待原进程退出，备份整个 npm 项目、配置、SDK 状态库和频道数据，替换完整包后启动并核对 canonical 能力和长期身份；失败自动回退代码。备份默认位于 `~/.openclaw-deploy-backups/friday-next/`，数据快照不自动覆盖当前账本。详细命令、限制与恢复说明见 [完整包部署手册](docs/operations/gateway-full-package-deployment.md)。部署与重启仍需用户明确要求，不能通过旧的跳过验证选项绕过关卡。
 
-网关版本约束（2026-10-12 更新）：**网关机已升 OpenClaw 2026.10.1（插件 2026.10.1 起适配）**。9.5+ 有两处外装插件行为必须知道：
+网关版本约束（2026-10-20 更新）：**网关机为 OpenClaw 2026.10.5、Node 26.4.0；完整包已在该官方 SDK 上隔离验证**。2026.10.5 的 HTTP 绑定早于会话数据库后台准入，测试历史时必须等待实际会话可读。9.5+ 有两处外装插件行为必须知道：
 
 1. **双模块实例**——网关注册 HTTP 路由/事件用一个实例，`tool-discovery` 冷加载（`registerFull` 不调 `setRuntime`）另起一个实例跑插件工具；两者同进程同 realm，但**模块级单例各自一份**。所以插件内跨实例必须一致的运行时状态一律走 `globalThis[Symbol.for(...)]` 共享（见 `src/process-state.ts`；`sseEmitter`、v3 store、`friday-session` 映射表、插件运行时存储 `runtime.ts` 均已改）。曾导致 `fridaynext_*` device 工具（位置/健康/日历）误报「iPhone 未连接」。
 2. **捕获闭包缺 jiti**——外装插件 tool-discovery 的旧深导入会报 `ERR_MODULE_NOT_FOUND: jiti`（staging 只镜像核心 dist 静态依赖闭包，而 `jiti-factory` 运行时 `moduleResolve("jiti")`）。工具箱目录已改走 gateway-auth 的 `GET /friday-next-admin/tool-catalog?agentId=`（App ≥1.5.2 按插件版本门控）；`/friday-next/agents/{id}/tools/catalog` 仅留给 ≤9.4 的旧 App。
@@ -56,7 +58,19 @@ After that, the iterate loop is just: `pnpm build` → `openclaw gateway restart
 
 2026.10.1 另一处**行为破坏**（实测复现）：plain `abortAgentHarnessRun` 不再把 reply operation 标成 `aborted_by_user`，被停的 run 会触发核心 no-visible-reply fallback——App 停止后多出一条「⚠️ OpenClaw couldn't produce or deliver a reply」。修法：`POST /cancel` 走 `abortSessionRunTargetWithOutcome`（core `/stop` 同链路，深导入见 `src/agent/session-abort-bridge.ts`）。回归验证：live 停止（早停/流中停）后无任何 deliver/lifecycle error 帧。
 
+2026.10.5 的标准停止已改为 `prepareSessionRunTargetAbort(params)` 返回提交函数；旧 `abortSessionRunTargetWithOutcome` 不再存在。停止桥须兼容两种形状，并由 `verify-isolated-v3.mjs` 在真实 SDK 上检查可定位、可调用及空闲无副作用，不能把普通 abort 的回退当作该宿主版本的兼容通过。
+
 升级任何 OpenClaw 前仍须备份 `~/.openclaw` 的 DB/state（9.5+ 前向迁移到 schema 21，9.4 拒绝运行）；2026.9.6 备份在网关机 `~/openclaw-backup-pre96-20260924`。
+
+## 公共服务与打包边界
+
+生产标准链路统一使用 `src/adapters/openclaw/channel-service.ts` 创建的 Kit `ChannelService`。原生执行器只提供 SDK 行为；不要把队列、恢复或公共设施周期器重新放回插件。宿主账号持有公共服务租约，旧 App 门面共用同一次公共准入。
+
+Kit 已发布到 npm，生产依赖必须使用精确 registry 版本，禁止恢复 `file:vendor`、link、workspace 或兄弟源码依赖。`pnpm package:registry --pack-destination <目录>` 生成 npm 发布包，包管理器负责安装 Kit。`pnpm package:pack [目录]` 在独立 npm 安装树内嵌全部生产依赖，生成完整离线部署包；pnpm 隔离布局不得直接打包内嵌依赖。npm 发布使用验证过的 registry tgz，部署脚本只接受完整部署 tgz；发布仍需用户明确要求。
+
+已发布版本使用 `--registry-version` 可通过 SDK 官方安装事务维护 npm 来源和版本。该模式的隔离关卡也运行原生 npm 安装，不向 SDK 管理的安装目录手工注入 peer。回滚用 SDK 安装实际代码与提升依赖组成的完整 archive，允许 SDK 代际路径变化，不恢复旧用户数据或手写安装索引。
+
+未发布候选包使用 `--install-archive`：隔离关卡与生产都走 SDK 官方 archive 安装，安装记录如实保存来源与版本；备份和回退共用上述托管事务，不需要先发布 npm。不能与 `--registry-version` 同时使用。
 
 ## Architecture
 

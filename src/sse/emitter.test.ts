@@ -197,7 +197,7 @@ describe("sseEmitter", () => {
       type: "agent",
       data: { runId: run.runId, seq: 9999, stream: "lifecycle", data: { phase: "end" } },
     });
-    const events = store.eventsForRun(run.runId);
+    const events = store.eventsForRun(run.runId).map(event => store.legacyEvent(event));
     expect(events.length).toBeLessThanOrEqual(3);
     expect(events.at(-1)?.eventType).toBe("run.completed");
     const replay = events
@@ -247,11 +247,11 @@ describe("sseEmitter", () => {
     sseEmitter.broadcastToRun(runs[1].runId, source(runs[1].runId, 1));
     sseEmitter.broadcastToRun(runs[0].runId, source(runs[0].runId, 2));
     sseEmitter.broadcastToRun(runs[0].runId, source(runs[0].runId, 2));
-    expect(store.eventsForRun(runs[0].runId)).toHaveLength(0);
+    expect(store.eventsForRun(runs[0].runId).map(event => store.legacyEvent(event))).toHaveLength(0);
     await vi.advanceTimersByTimeAsync(16);
-    expect(store.eventsForRun(runs[0].runId)).toHaveLength(1);
-    expect(store.eventsForRun(runs[1].runId)).toHaveLength(1);
-    expect(store.eventsForRun(runs[0].runId)[0].payload._sourceEventBatch).toEqual([
+    expect(store.eventsForRun(runs[0].runId).map(event => store.legacyEvent(event))).toHaveLength(1);
+    expect(store.eventsForRun(runs[1].runId).map(event => store.legacyEvent(event))).toHaveLength(1);
+    expect(store.eventsForRun(runs[0].runId).map(event => store.legacyEvent(event))[0].payload._sourceEventBatch).toEqual([
       source(runs[0].runId, 1),
       source(runs[0].runId, 2),
     ]);
@@ -310,7 +310,7 @@ describe("sseEmitter", () => {
       });
     }
     sseEmitter.flushRuntimeV3Run(run.runId);
-    const batches = store.eventsForRun(run.runId);
+    const batches = store.eventsForRun(run.runId).map(event => store.legacyEvent(event));
     expect(batches.every((event) => Buffer.byteLength(JSON.stringify(event)) < 300_000)).toBe(true);
     expect(
       batches.flatMap(({ payload }) =>
@@ -347,7 +347,7 @@ describe("sseEmitter", () => {
     });
     sseEmitter.flushRuntimeV3Run(run.runId);
 
-    const [event] = store.eventsForRun(run.runId);
+    const [event] = store.eventsForRun(run.runId).map(event => store.legacyEvent(event));
     const source = event.payload._sourceEventData as {
       data: { text?: string; delta?: string; reasoningPrefixChars?: number };
     };
@@ -385,9 +385,9 @@ describe("sseEmitter", () => {
     }
     // 16ms 是 assistant 正文的快窗口；thinking 不应被它拆批。
     await vi.advanceTimersByTimeAsync(16);
-    expect(store.eventsForRun(run.runId)).toHaveLength(0);
+    expect(store.eventsForRun(run.runId).map(event => store.legacyEvent(event))).toHaveLength(0);
     await vi.advanceTimersByTimeAsync(500);
-    const events = store.eventsForRun(run.runId);
+    const events = store.eventsForRun(run.runId).map(event => store.legacyEvent(event));
     expect(events).toHaveLength(1);
     expect(events[0].payload._sourceEventBatch).toHaveLength(6);
   });
@@ -418,7 +418,7 @@ describe("sseEmitter", () => {
     }
     // 仍在 thinking 慢窗口内：不得提前落账。
     await vi.advanceTimersByTimeAsync(300);
-    expect(store.eventsForRun(run.runId)).toHaveLength(0);
+    expect(store.eventsForRun(run.runId).map(event => store.legacyEvent(event))).toHaveLength(0);
     // 正文增量到达：批次整体收紧到 16ms 快窗口，打字机延迟不被 thinking 批次拖慢。
     sseEmitter.broadcastToRun(run.runId, {
       type: "agent",
@@ -431,7 +431,7 @@ describe("sseEmitter", () => {
       },
     });
     await vi.advanceTimersByTimeAsync(16);
-    const events = store.eventsForRun(run.runId);
+    const events = store.eventsForRun(run.runId).map(event => store.legacyEvent(event));
     expect(events).toHaveLength(1);
     expect(events[0].payload._sourceEventBatch).toHaveLength(4);
   });
@@ -458,7 +458,7 @@ describe("sseEmitter", () => {
     });
     sseEmitter.flushRuntimeV3Run(run.runId);
 
-    const [event] = store.eventsForRun(run.runId);
+    const [event] = store.eventsForRun(run.runId).map(event => store.legacyEvent(event));
     const source = event.payload._sourceEventData as { data: { text?: string; delta?: string } };
     expect(source.data.text).toBe("cumulative only");
     expect(source.data.delta).toBeUndefined();
@@ -505,7 +505,7 @@ describe("sseEmitter", () => {
     sseEmitter.broadcastToRun(run.runId, source);
     sseEmitter.broadcastToRun(run.runId, source);
 
-    expect(store.eventsForRun(run.runId)).toHaveLength(1);
+    expect(store.eventsForRun(run.runId).map(event => store.legacyEvent(event))).toHaveLength(1);
     expect(store.run(run.runId)?.lastRunSeq).toBe(1);
   });
 
@@ -536,7 +536,7 @@ describe("sseEmitter", () => {
       phase: "completed",
       origin: "observed",
     });
-    expect(store.eventsAfter(deviceId, 0).map((event) => event.eventType)).toEqual([
+    expect(store.eventsAfter(deviceId, 0).map(event => store.legacyEvent(event)).map((event) => event.eventType)).toEqual([
       "run.started",
       "agent.assistant.delta",
       "run.completed",
@@ -546,7 +546,7 @@ describe("sseEmitter", () => {
     setRuntimeV3RootForTest(path.join(tmp, "runtime-v3-external"));
     const reconstructed = getRuntimeV3Store();
     expect(reconstructed.run(runId)?.origin).toBe("observed");
-    expect(reconstructed.eventsAfter(deviceId, 0)).toHaveLength(3);
+    expect(reconstructed.eventsAfter(deviceId, 0).map(event => reconstructed.legacyEvent(event))).toHaveLength(3);
   });
 
   it("backfills an existing run when a second bound device starts watching", () => {
@@ -601,11 +601,11 @@ describe("sseEmitter", () => {
     // audience and backfill the whole run without minting a duplicate semantic event.
     sseEmitter.broadcast(end, watcher);
 
-    expect(store.eventsAfter(owner, 0).map((event) => event.runSeq)).toEqual([1, 2, 3]);
-    expect(store.eventsAfter(watcher, 0).map((event) => event.runSeq)).toEqual([1, 2, 3]);
+    expect(store.eventsAfter(owner, 0).map(event => store.legacyEvent(event)).map((event) => event.runSeq)).toEqual([1, 2, 3]);
+    expect(store.eventsAfter(watcher, 0).map(event => store.legacyEvent(event)).map((event) => event.runSeq)).toEqual([1, 2, 3]);
     expect(store.run(run.runId)?.deliveryDeviceIds).toEqual([owner, watcher]);
     store.acknowledge(owner, 3);
-    expect(store.eventsAfter(owner, 0)).toEqual([]);
-    expect(store.eventsAfter(watcher, 0).map((event) => event.runSeq)).toEqual([1, 2, 3]);
+    expect(store.eventsAfter(owner, 0).map(event => store.legacyEvent(event))).toEqual([]);
+    expect(store.eventsAfter(watcher, 0).map(event => store.legacyEvent(event)).map((event) => event.runSeq)).toEqual([1, 2, 3]);
   });
 });

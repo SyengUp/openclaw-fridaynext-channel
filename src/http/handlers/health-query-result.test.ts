@@ -175,7 +175,7 @@ describe("handleHealthQueryResult", () => {
       sessionKey: "agent:main:s1",
       runId: run.runId,
       eventType: "device.health.result",
-      payload: { requestId: "r-after-restart", ok: true },
+      payload: { format:"canonical-v1", updates:[{kind:"device",id:"r-after-restart",phase:"result",data:{requestId:"r-after-restart",ok:true}}] },
     });
   });
 });

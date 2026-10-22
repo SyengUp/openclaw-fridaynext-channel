@@ -9,6 +9,9 @@ import {
   FRIDAY_NEXT_PROTOCOL_VERSIONS,
   FRIDAY_NEXT_RUNTIME_CAPABILITIES,
 } from "../../runtime-v3/capabilities.js";
+import { runtimeV3StoreIfInitialized } from "../../runtime-v3/runtime-store.js";
+import { openClawDescriptor } from "../../adapters/openclaw/descriptor.js";
+import type { BackendDescriptor } from "@syengup/fridaynext-channel-kit";
 
 const REQUIRED_NODE_CAPS = ["location", "canvas"];
 const REQUIRED_NODE_COMMANDS = [
@@ -37,6 +40,7 @@ interface RepairAction {
 }
 
 export interface HealthCheckResult {
+  serverInstanceId?: string;
   ok: boolean;
   timestamp: number;
   deviceId: string;
@@ -44,6 +48,7 @@ export interface HealthCheckResult {
   pluginVersion: string;
   protocolVersions: readonly number[];
   capabilities: readonly string[];
+  backend?: BackendDescriptor;
   /**
    * Stable identity of **this gateway**, so a client can tell "same gateway, new address"
    * (DHCP moved the LAN IP, a tunnel domain was added) apart from "an entirely different
@@ -79,38 +84,9 @@ export async function handleHealth(req: IncomingMessage, res: ServerResponse): P
     return true;
   }
 
-  const url = new URL(req.url ?? "/", "http://localhost");
-  const deviceId = (url.searchParams.get("deviceId") ?? "").trim();
-  const nodeDeviceId = (url.searchParams.get("nodeDeviceId") ?? "").trim();
-  const selfHeal = (url.searchParams.get("selfHeal") ?? "").toLowerCase() === "true";
-
-  const result: HealthCheckResult = {
-    ok: true,
-    timestamp: Date.now(),
-    deviceId,
-    nodeDeviceId,
-    pluginVersion: PLUGIN_VERSION,
-    protocolVersions: FRIDAY_NEXT_PROTOCOL_VERSIONS,
-    capabilities: FRIDAY_NEXT_RUNTIME_CAPABILITIES,
-  };
-
-  const log = createFridayNextLogger("health");
-
-  // Best-effort: health must stay answerable even if the capsule store is unreadable.
-  try {
-    result.gatewayFingerprint = readOrInitCapsules().storeId;
-  } catch (err) {
-    log.warn(`gatewayFingerprint unavailable: ${err instanceof Error ? err.message : String(err)}`);
-  }
-
-  if (nodeDeviceId) {
-    result.nodePairing = await checkNodePairing(nodeDeviceId, selfHeal, result, log);
-  }
-
-  result.ok =
-    !result.nodePairing ||
-    result.nodePairing.status === "ok" ||
-    result.nodePairing.status === "pending";
+  const result = await readOpenClawHealth(
+    Object.fromEntries(new URL(req.url ?? "/", "http://localhost").searchParams),
+  );
 
   res.statusCode = 200;
   res.setHeader("Content-Type", "application/json");
@@ -321,4 +297,44 @@ async function checkNodePairingViaDeviceStore(
   }
 
   return { status: "degraded", detail: "Node pending but auto-approve failed", nodePaired: false };
+}
+
+export async function readOpenClawHealth(
+  query: Record<string, string>,
+): Promise<HealthCheckResult> {
+  const deviceId = (query.deviceId ?? "").trim();
+  const nodeDeviceId = (query.nodeDeviceId ?? "").trim();
+  const selfHeal = (query.selfHeal ?? "").toLowerCase() === "true";
+
+  const result: HealthCheckResult = {
+    ok: true,
+    timestamp: Date.now(),
+    deviceId,
+    nodeDeviceId,
+    pluginVersion: PLUGIN_VERSION,
+    protocolVersions: FRIDAY_NEXT_PROTOCOL_VERSIONS,
+    capabilities: FRIDAY_NEXT_RUNTIME_CAPABILITIES,
+    backend: openClawDescriptor(),
+    serverInstanceId: runtimeV3StoreIfInitialized()?.serverInstanceId,
+  };
+
+  const log = createFridayNextLogger("health");
+
+  // Best-effort: health must stay answerable even if the capsule store is unreadable.
+  try {
+    result.gatewayFingerprint = readOrInitCapsules().storeId;
+  } catch (err) {
+    log.warn(`gatewayFingerprint unavailable: ${err instanceof Error ? err.message : String(err)}`);
+  }
+
+  if (nodeDeviceId) {
+    result.nodePairing = await checkNodePairing(nodeDeviceId, selfHeal, result, log);
+  }
+
+  result.ok =
+    !result.nodePairing ||
+    result.nodePairing.status === "ok" ||
+    result.nodePairing.status === "pending";
+
+  return result;
 }

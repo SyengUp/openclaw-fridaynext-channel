@@ -1,3 +1,4 @@
+// 历史通知行为的测试夹具，不供生产导入或打包。
 /**
  * Classify an agent-initiated outbound send as cron or an exact heartbeat run.
  *

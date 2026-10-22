@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   shouldHideNotification,
   type CronNotificationMetadata,
-} from "./notification-visibility.js";
+} from "../test-support/legacy-notifications/notification-visibility.js";
 
 const cronMetadata = new Map<string, CronNotificationMetadata>([
   ["heartbeat-job", { name: "heartbeat-main", isSystemHeartbeat: true }],

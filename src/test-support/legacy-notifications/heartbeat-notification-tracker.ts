@@ -1,3 +1,4 @@
+// 历史通知行为的测试夹具，不供生产导入或打包。
 /**
  * Short-lived records of STARTED heartbeat runs, fed by the gateway's
  * `before_agent_run` hook (gated on `ctx.trigger === "heartbeat"`). The channel's outbound

@@ -11,3 +11,7 @@ dist/
 
 # ClawHub plugin inspector output (clawhub package validate)
 /reports/
+
+# 部署验证日志和 Python 本地产物不进入发布包或版本库。
+.artifacts/
+__pycache__/

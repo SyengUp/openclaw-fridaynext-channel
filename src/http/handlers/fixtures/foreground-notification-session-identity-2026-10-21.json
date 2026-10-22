@@ -1,0 +1,15 @@
+{
+  "logicalSessionKey": "5B7C03E6-C13E-43F7-950D-657C73E6EA0A",
+  "nativeSessionKey": "agent:operator:fridaynext:070b5a93-fa90-42e4-91d6-ff8d570b76cc",
+  "otherVisibleSessionKey": "189E295E-1639-4EBC-9DF2-0C62FD4100A4",
+  "runId": "25613eb7-7537-4a4e-9b48-89450316f4f5",
+  "hostState": {
+    "key": "agent:operator:fridaynext:070b5a93-fa90-42e4-91d6-ff8d570b76cc",
+    "agentId": "operator",
+    "sessionId": "fridaynext-070b5a93-fa90-42e4-91d6-ff8d570b76cc",
+    "updatedAt": 1792583220390,
+    "unread": false,
+    "hasActiveRun": false
+  },
+  "source": "2026-10-21 真机前台跨会话通知；complete 状态清单的原生身份与通知逻辑身份不同"
+}

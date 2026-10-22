@@ -4,7 +4,7 @@ import {
   noteHeartbeatActivity,
   recentHeartbeatForRun,
   resetHeartbeatNotificationTrackerForTest,
-} from "./heartbeat-notification-tracker.js";
+} from "../test-support/legacy-notifications/heartbeat-notification-tracker.js";
 
 describe("heartbeat-notification-tracker", () => {
   afterEach(() => resetHeartbeatNotificationTrackerForTest());

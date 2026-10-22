@@ -1,9 +1,10 @@
+// 历史通知行为的测试夹具，不供生产导入或打包。
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { resolveFridayNextConfig } from "../config.js";
-import { getHostOpenClawConfigSnapshot } from "../host-config.js";
-import { getFridayNextRuntime } from "../runtime.js";
+import { resolveFridayNextConfig } from "../../config.js";
+import { getHostOpenClawConfigSnapshot } from "../../host-config.js";
+import { getFridayNextRuntime } from "../../runtime.js";
 
 /**
  * Durable, per-device log of agent-INITIATED background pushes (cron / scheduled tasks).

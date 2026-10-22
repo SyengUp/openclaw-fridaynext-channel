@@ -1,3 +1,4 @@
+// 历史通知行为的测试夹具，不供生产导入或打包。
 /**
  * Short-lived record of the scheduled tasks (cron jobs) that are active right now, fed by the
  * gateway's `cron_changed` hook. The channel's outbound capture (`channel.ts` sendText / sendMedia
@@ -20,7 +21,7 @@
  * shows the generic label) instead of confidently naming the wrong task.
  */
 
-import { UNKNOWN_CRON_DELIVERY, type CronDeliveryTarget } from "./cron-delivery-target.js";
+import { UNKNOWN_CRON_DELIVERY, type CronDeliveryTarget } from "../../notifications/cron-delivery-target.js";
 
 type CronRunRecord = {
   jobId: string;

@@ -338,7 +338,8 @@ class SseEmitterRegistry {
           occurredAt: typeof mirror.data.ts === "number" ? mirror.data.ts : undefined,
           rootRunId: typeof mirror.data.rootRunId === "string" ? mirror.data.rootRunId : undefined,
           parentRunId:
-            typeof mirror.data.parentRunId === "string" ? mirror.data.parentRunId : undefined,
+            typeof mirror.data.parentRunId === "string" ? mirror.data.parentRunId :
+              typeof (mirror.data.subagent as {parentRunId?:unknown}|undefined)?.parentRunId === "string" ? (mirror.data.subagent as {parentRunId:string}).parentRunId:undefined,
           sourceKind: structuredRunSource(runId),
         });
       }
@@ -356,6 +357,11 @@ class SseEmitterRegistry {
       if (seen.has(sourceKey)) return;
       seen.add(sourceKey);
     }
+    const annotation=mirror.data.subagent as {parentRunId?:unknown;rootRunId?:unknown}|undefined;
+    const parent=typeof mirror.data.parentRunId === "string" ? mirror.data.parentRunId:typeof annotation?.parentRunId === "string" ? annotation.parentRunId:undefined;
+    if(parent && run && !run.parentRunId) {
+      store.bindRunHierarchy(runId,parent,typeof mirror.data.rootRunId === "string" ? mirror.data.rootRunId:typeof annotation?.rootRunId === "string" ? annotation.rootRunId:undefined);
+    }
     const phase = typeof mirror.data.phase === "string" ? mirror.data.phase.toLowerCase() : "";
     const stream = typeof mirror.data.stream === "string" ? mirror.data.stream.toLowerCase() : "";
     const dataRecord =
@@ -367,7 +373,7 @@ class SseEmitterRegistry {
     let eventType: string = mirror.type;
     if (mirror.type === "agent") {
       if (stream === "lifecycle" && nestedPhase === "start") eventType = "run.started";
-      else if (stream === "lifecycle" && nestedPhase === "end") eventType = "run.completed";
+      else if (stream === "lifecycle" && nestedPhase === "end") eventType = store.run(runId)?.phase === "cancelPending" ? "run.cancelled":"run.completed";
       else if (stream === "lifecycle" && nestedPhase === "error") eventType = "run.failed";
       else eventType = `agent.${stream || "event"}.${nestedPhase || "update"}`;
     } else if (mirror.type === "deliver") {

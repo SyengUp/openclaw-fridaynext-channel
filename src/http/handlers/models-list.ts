@@ -12,6 +12,7 @@ import { attestGateDecision, ATTEST_REJECTION_BODY } from "../../attest/attest-g
 import { resolveFridayNextConfig } from "../../config.js";
 import { getHostOpenClawConfigSnapshot } from "../../host-config.js";
 import { getFridayNextRuntime } from "../../runtime.js";
+import {ensureGatewayRequestScopes} from "../../agent/operator-scope.js";
 import { extractBearerToken } from "../middleware/auth.js";
 
 export interface FridayModelEntry {
@@ -84,7 +85,7 @@ function addConfiguredModelEntry(
   });
 }
 
-function resolveConfiguredModels(agentId?: string): ResolvedModels {
+export function resolveConfiguredModels(agentId?: string): ResolvedModels {
   const rt = getFridayAgentForwardRuntime();
   if (!rt) return { models: [], defaultModel: "" };
   const cfg = rt.getConfig() as Record<string, unknown>;
@@ -330,7 +331,7 @@ function sendJson(res: ServerResponse, status: number, body: Record<string, unkn
  * semantics as `agents.list[agent].model.primary`); otherwise the global
  * `agents.defaults.model` applies. Single value only — no list synthesis.
  */
-function resolveConfiguredDefaultModel(agentId?: string): string {
+export function resolveConfiguredDefaultModel(agentId?: string): string {
   const rt = getFridayAgentForwardRuntime();
   if (!rt) return "";
   const cfg = rt.getConfig() as Record<string, unknown>;
@@ -429,6 +430,10 @@ export async function handleModelsList(
     return true;
   }
 
+  if(req.headers["x-fridaynext-event-format"] === "canonical-v1") {
+    ensureGatewayRequestScopes(["operator.read"]);
+    return await handleAdminModelsList(req,res);
+  }
   // `?agentId=` scopes per-model runtime resolution to that agent's `models` overrides; without it
   // resolution falls back to `agents.defaults` + the model catalog.
   const rawAgentId = new URL(req.url ?? "", "http://localhost").searchParams.get("agentId");

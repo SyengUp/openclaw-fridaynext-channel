@@ -144,8 +144,18 @@ declare module "openclaw/plugin-sdk/approval-gateway-runtime" {
     channel?: string;
     accountId?: string;
     allowPluginFallback?: boolean;
+    approvalKind?: "exec" | "plugin" | "system-agent";
     clientDisplayName?: string;
   }) => Promise<unknown>;
+}
+
+declare module "openclaw/plugin-sdk/gateway-runtime" {
+  export function callGatewayFromCli(
+    method: string,
+    opts: { port: string; timeout: string; json: boolean },
+    params: unknown,
+    extra: { progress: boolean; scopes: string[]; sharedStateMode: "read-only" },
+  ): Promise<unknown>;
 }
 
 declare module "openclaw/plugin-sdk/question-gateway-runtime" {

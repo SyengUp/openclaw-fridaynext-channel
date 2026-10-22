@@ -76,7 +76,7 @@ describe("createLocationQueryTool", () => {
     const unsubscribe = store.subscribe("PHONE-1", (event) => {
       received.push({
         eventType: event.eventType,
-        payload: event.payload as Record<string, unknown>,
+        payload: store.legacyEvent(event).payload as Record<string, unknown>,
       });
     });
 

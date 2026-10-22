@@ -1,0 +1,78 @@
+{
+  "source": "2026-10-20 真机 P5-CANONICAL-1020；只保留该测试回合的原生记录",
+  "runId": "c7ee7e9f-f51a-4067-92b5-3d2402a2bc28",
+  "clientRequestId": "3132AE3E-EBB2-4472-B7EE-4A1157D23D4E",
+  "records": [
+    {
+      "type": "message",
+      "id": "3cfbc0bb-68e3-4fb9-bf70-cfdcc846304b",
+      "parentId": null,
+      "timestamp": "2026-10-20T13:25:19.007Z",
+      "message": {
+        "role": "user",
+        "content": "仅回复 P5-CANONICAL-1020",
+        "timestamp": 1792502718734,
+        "idempotencyKey": "660de137-2277-424a-80cf-bb208d2db61c:user",
+        "__openclaw": {
+          "senderIsOwner": false,
+          "transport": {
+            "channel": "friday-next",
+            "conversationRef": "conv_429155d962a0182773f75000d024b284"
+          }
+        }
+      }
+    },
+    {
+      "type": "message",
+      "id": "646f0cfe-fad0-46f9-8aa2-e683a18f24d9",
+      "parentId": "a69acb3d-68aa-4eac-89af-38dac5a0f222",
+      "timestamp": "2026-10-20T13:25:20.699Z",
+      "message": {
+        "role": "assistant",
+        "content": [
+          {
+            "type": "thinking",
+            "thinking": "The user asks: only reply P5-CANONICAL-1020. So just respond with that string.",
+            "thinkingSignature": "reasoning_content"
+          },
+          {
+            "type": "text",
+            "text": "P5-CANONICAL-1020"
+          }
+        ],
+        "api": "openai-completions",
+        "provider": "deepseek",
+        "model": "deepseek-flash",
+        "usage": {
+          "input": 519,
+          "output": 33,
+          "cacheRead": 24576,
+          "cacheWrite": 0,
+          "reasoningTokens": 23,
+          "contextUsage": {
+            "state": "available",
+            "promptTokens": 25095,
+            "totalTokens": 25128
+          },
+          "totalTokens": 25128,
+          "cost": {
+            "input": 0.00022836000000000002,
+            "output": 4.356e-05,
+            "cacheRead": 0.00034406400000000005,
+            "cacheWrite": 0,
+            "total": 0.0006159840000000001
+          }
+        },
+        "stopReason": "stop",
+        "timestamp": 1792502719187,
+        "responseId": "63fca0d9-8dbd-4f79-811f-008e86e883f8",
+        "openclawDelivery": {
+          "textPhaseRequiresTerminal": true
+        },
+        "__openclaw": {
+          "runId": "c7ee7e9f-f51a-4067-92b5-3d2402a2bc28"
+        }
+      }
+    }
+  ]
+}

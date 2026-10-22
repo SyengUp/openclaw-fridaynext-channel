@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { FridayNotificationsStore, classifyNotificationKind } from "./notifications-store.js";
+import { FridayNotificationsStore, classifyNotificationKind } from "../test-support/legacy-notifications/notifications-store.js";
 
 let tmpDir = "";
 let store: FridayNotificationsStore;

@@ -7,12 +7,12 @@ import { fridayNextChannelPlugin } from "./channel.js";
 import {
   noteCronActivity,
   resetCronNotificationTrackerForTest,
-} from "./notifications/cron-notification-tracker.js";
+} from "./test-support/legacy-notifications/cron-notification-tracker.js";
 import {
   noteHeartbeatActivity,
   resetHeartbeatNotificationTrackerForTest,
-} from "./notifications/heartbeat-notification-tracker.js";
-import { setNotificationsBaseDirForTest } from "./notifications/notifications-store.js";
+} from "./test-support/legacy-notifications/heartbeat-notification-tracker.js";
+import { setNotificationsBaseDirForTest } from "./test-support/legacy-notifications/notifications-store.js";
 import { sseEmitter } from "./sse/emitter.js";
 
 class MockRes extends EventEmitter {

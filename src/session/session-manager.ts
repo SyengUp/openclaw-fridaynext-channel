@@ -5,6 +5,7 @@ import { getFridayAgentForwardRuntime } from "../agent-forward-runtime.js";
 import { findAgentRosterConfig } from "../agent-roster.js";
 import { resolveOpenClawVersion } from "../skills-discovery.js";
 import { createFridayNextLogger } from "../logging.js";
+import { mappedNativeSessionKey } from "../adapters/openclaw/session-metadata.js";
 
 const log = createFridayNextLogger("session");
 
@@ -31,6 +32,8 @@ export function splitModelRef(modelRef: string): { provider?: string; modelId: s
 
 export function toSessionStoreKey(rawSessionKey: string): string {
   const raw = rawSessionKey.trim();
+  const mapped = mappedNativeSessionKey(raw);
+  if (mapped) return mapped;
   const lowered = raw.trim().toLowerCase();
   if (!raw || lowered === "main") {
     return `agent:${FRIDAY_AGENT_ID}:main`;

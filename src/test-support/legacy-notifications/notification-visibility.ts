@@ -1,3 +1,4 @@
+// 历史通知行为的测试夹具，不供生产导入或打包。
 import type { FridayNotification } from "./notifications-store.js";
 import { cronJobIdFromSessionKey } from "./cron-session-key.js";
 

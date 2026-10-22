@@ -1,6 +1,6 @@
 {
   "name": "@syengup/friday-channel-next",
-  "version": "2026.10.3",
+  "version": "2026.10.4-beta.8",
   "description": "FridayNext is an independent iOS app for OpenClaw. It streams every answer live, shows you the thinking behind it, and keeps your agent one tap away — anywhere you go.",
   "keywords": [
     "openclaw",
@@ -39,14 +39,16 @@
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "package:check": "node scripts/check-package.mjs",
-    "prepack": "pnpm build && pnpm package:check",
+    "prepack": "pnpm build && pnpm package:check --for-pack",
     "prepublishOnly": "pnpm test:unit",
     "test": "npm run test:unit && npm run test:e2e",
     "test:unit": "vitest run",
     "test:e2e": "vitest run --config vitest.e2e.config.ts",
     "preview:install-ui": "node scripts/preview-install-ui.mjs",
     "test:smoke": "node scripts/e2e-smoke.mjs",
-    "test:msg-live": "node scripts/message-roundtrip-live.mjs"
+    "test:msg-live": "node scripts/message-roundtrip-live.mjs",
+    "package:pack": "node scripts/pack-plugin.mjs",
+    "package:registry": "node scripts/pack-plugin.mjs --registry"
   },
   "bin": {
     "friday-channel-next": "install.js"
@@ -95,7 +97,7 @@
     }
   },
   "dependencies": {
-    "node-app-attest": "^1.0.1",
+    "@syengup/fridaynext-channel-kit": "0.1.3",
     "qrcode-terminal": "^0.12.0"
   },
   "devDependencies": {

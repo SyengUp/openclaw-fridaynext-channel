@@ -1,6 +1,10 @@
 import { defineConfig } from "vitest/config";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
+
 import { existsSync, realpathSync, readdirSync } from "node:fs";
+
+const projectDir = path.dirname(fileURLToPath(import.meta.url));
 
 function resolveOpenClawDistFromPath(): string | null {
   const binName = process.platform === "win32" ? "openclaw.cmd" : "openclaw";
@@ -40,23 +44,23 @@ export default defineConfig({
   resolve: {
     alias: {
       "openclaw/plugin-sdk/device-bootstrap": path.resolve(
-        __dirname,
+        projectDir,
         "src/test-support/mock-device-bootstrap.ts",
       ),
       "openclaw/plugin-sdk/gateway-method-runtime": path.resolve(
-        __dirname,
+        projectDir,
         "src/test-support/mock-gateway-method-runtime.ts",
       ),
       "openclaw/plugin-sdk/plugin-runtime": path.resolve(
-        __dirname,
+        projectDir,
         "src/test-support/mock-plugin-runtime.ts",
       ),
       "openclaw/plugin-sdk/question-gateway-runtime": path.resolve(
-        __dirname,
+        projectDir,
         "src/test-support/mock-question-gateway-runtime.ts",
       ),
       "openclaw/plugin-sdk/webhook-request-guards": path.resolve(
-        __dirname,
+        projectDir,
         "src/test-support/mock-webhook-request-guards.ts",
       ),
       openclaw: openclawDist,

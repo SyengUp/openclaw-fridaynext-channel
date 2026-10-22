@@ -1,18 +1,22 @@
 import { Readable } from "node:stream";
+import { readFileSync } from "node:fs";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { handleSessionFork, handleSessionRewind } from "./session-message-actions.js";
 
-const { dispatch, gate, runs, bindConversation } = vi.hoisted(() => ({
+const { dispatch, gate, runs, bindConversation, nativeKey, resolveConversation } = vi.hoisted(() => ({
   dispatch: vi.fn(),
   gate: vi.fn(),
   runs: vi.fn(),
   bindConversation: vi.fn(),
+  nativeKey: vi.fn(),
+  resolveConversation: vi.fn(),
 }));
 vi.mock("../../runtime-v3/runtime-store.js", () => ({
   getRuntimeV3Store: () => ({ runs, bindRunConversation: bindConversation }),
 }));
-vi.mock("../../history/read-transcript.js", () => ({ resolveSessionId: () => "before" }));
+vi.mock("../../history/read-transcript.js", () => ({ resolveSessionId: resolveConversation }));
+vi.mock("../../adapters/openclaw/session-metadata.js", () => ({ mappedNativeSessionKey: nativeKey }));
 vi.mock("openclaw/plugin-sdk/gateway-method-runtime", () => ({ dispatchGatewayMethod: dispatch }));
 vi.mock("../../attest/attest-gate.js", () => ({
   attestGateDecision: gate,
@@ -47,9 +51,34 @@ describe("消息回退与分叉", () => {
     dispatch.mockReset();
     runs.mockReset().mockReturnValue([]);
     bindConversation.mockReset();
+    nativeKey.mockReset().mockReturnValue(undefined);
+    resolveConversation.mockReset().mockReturnValue("before");
     gate.mockReset().mockReturnValue("allow");
   });
   const params = { sessionKey: "agent:main:chat", entryId: "user-entry", agentId: "main" };
+  const recorded = JSON.parse(readFileSync(new URL("./fixtures/fork-opaque-session-2026-10-21.json", import.meta.url), "utf8")) as {
+    logicalSessionKey: string; nativeSessionKey: string; agentId: string; entryId: string; runId: string; editorText: string;
+  };
+  it.each(["fork", "rewind"] as const)("%s 将真实 UUID 会话映射后再交给宿主", async (action) => {
+    nativeKey.mockImplementation((key: string) => key === recorded.logicalSessionKey ? recorded.nativeSessionKey : undefined);
+    runs.mockReturnValue([{ sessionKey: recorded.nativeSessionKey, runId: recorded.runId, phase: "completed" }]);
+    dispatch.mockImplementation(async (_method: string, body: Record<string, unknown>) =>
+      body.sessionKey === recorded.nativeSessionKey
+        ? { ok: true, payload: { editorText: recorded.editorText } }
+        : { ok: false, error: { code: "INVALID_REQUEST", message: "session not found" } });
+    const response = await invoke(action, { sessionKey: recorded.logicalSessionKey, entryId: recorded.entryId, agentId: recorded.agentId });
+    expect(response.status).toBe(200);
+    expect(dispatch).toHaveBeenCalledWith(`sessions.${action}`, { sessionKey: recorded.nativeSessionKey, entryId: recorded.entryId, agentId: recorded.agentId });
+    expect(resolveConversation).toHaveBeenCalledWith(recorded.nativeSessionKey);
+    expect(bindConversation).toHaveBeenCalledWith(recorded.runId, "before");
+  });
+  it.each(["fork", "rewind"] as const)("%s 用映射后的原生会话检查待发队列", async (action) => {
+    nativeKey.mockReturnValue(recorded.nativeSessionKey);
+    runs.mockReturnValue([{ sessionKey: recorded.nativeSessionKey, runId: recorded.runId, phase: "queued" }]);
+    dispatch.mockResolvedValue({ ok: true, payload: {} });
+    expect((await invoke(action, { sessionKey: recorded.logicalSessionKey, entryId: recorded.entryId })).status).toBe(503);
+    expect(dispatch).not.toHaveBeenCalled();
+  });
   it("服务器待发队列同样阻止切点，避免跨设备排队消息进入新路径", async () => {
     runs.mockReturnValue([{ sessionKey: params.sessionKey, runId: "queued", phase: "queued" }]);
     expect((await invoke("rewind", params)).status).toBe(503);

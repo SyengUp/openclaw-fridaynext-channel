@@ -1,13 +1,20 @@
 import { Readable } from "node:stream";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { handleSessionReadState } from "./session-read-state.js";
+import identityFixture from "./fixtures/foreground-notification-session-identity-2026-10-21.json";
 
-const { dispatchGatewayMethod } = vi.hoisted(() => ({
+const { dispatchGatewayMethod, nativeByLogical } = vi.hoisted(() => ({
   dispatchGatewayMethod: vi.fn(),
+  nativeByLogical: new Map<string, string>(),
 }));
 
 vi.mock("openclaw/plugin-sdk/gateway-method-runtime", () => ({
   dispatchGatewayMethod,
+}));
+vi.mock("../../adapters/openclaw/session-metadata.js", () => ({
+  mappedNativeSessionKey: (key: string) => nativeByLogical.get(key),
+  logicalSessionKey: (key: string) =>
+    [...nativeByLogical].find(([, native]) => native === key)?.[0] ?? key,
 }));
 
 type IncomingMessageLike = import("node:http").IncomingMessage;
@@ -22,7 +29,7 @@ function makeReq(method: string, body?: Record<string, unknown>): IncomingMessag
   return req;
 }
 
-async function invoke(method: string, body?: Record<string, unknown>) {
+async function invoke(method: string, body?: Record<string, unknown>, canonical = false) {
   const captured = { statusCode: 200, headers: {} as Record<string, unknown>, body: "" };
   const res = {
     get statusCode() {
@@ -38,7 +45,9 @@ async function invoke(method: string, body?: Record<string, unknown>) {
       captured.body = Buffer.isBuffer(chunk) ? chunk.toString("utf8") : (chunk ?? "");
     },
   } as unknown as ServerResponseLike;
-  await handleSessionReadState(makeReq(method, body), res);
+  const req = makeReq(method, body);
+  if (canonical) req.headers["x-fridaynext-event-format"] = "canonical-v1";
+  await handleSessionReadState(req, res);
   return {
     ...captured,
     json: captured.body ? (JSON.parse(captured.body) as Record<string, unknown>) : undefined,
@@ -48,6 +57,98 @@ async function invoke(method: string, body?: Record<string, unknown>) {
 describe("handleSessionReadState", () => {
   beforeEach(() => {
     dispatchGatewayMethod.mockReset();
+    nativeByLogical.clear();
+  });
+
+  it("规范清单保留真实通知的逻辑会话身份，避免目录对账误撤销横幅", async () => {
+    nativeByLogical.set(identityFixture.logicalSessionKey, identityFixture.nativeSessionKey);
+    dispatchGatewayMethod.mockResolvedValue({
+      ok: true,
+      payload: {
+        totalCount: 1,
+        hasMore: false,
+        sessions: [identityFixture.hostState],
+      },
+    });
+
+    const result = await invoke("GET", undefined, true);
+
+    expect(result.json).toMatchObject({
+      ok: true,
+      complete: true,
+      states: [
+        {
+          sessionKey: identityFixture.logicalSessionKey,
+          sessionId: identityFixture.hostState.sessionId,
+        },
+      ],
+    });
+  });
+
+  it("规范清单不把仅大小写不同的逻辑身份归并", async () => {
+    nativeByLogical.set("Opaque/AbC", "agent:main:first");
+    nativeByLogical.set("Opaque/abc", "agent:main:second");
+    dispatchGatewayMethod.mockResolvedValue({
+      ok: true,
+      payload: {
+        totalCount: 2,
+        hasMore: false,
+        sessions: [{ key: "agent:main:first" }, { key: "agent:main:second" }],
+      },
+    });
+
+    const result = await invoke("GET", undefined, true);
+
+    expect(result.json).toEqual({
+      ok: true,
+      complete: true,
+      states: [{ sessionKey: "Opaque/AbC" }, { sessionKey: "Opaque/abc" }],
+    });
+  });
+
+  it("旧客户端继续取得原生清单身份", async () => {
+    nativeByLogical.set(identityFixture.logicalSessionKey, identityFixture.nativeSessionKey);
+    dispatchGatewayMethod.mockResolvedValue({
+      ok: true,
+      payload: {
+        totalCount: 1,
+        hasMore: false,
+        sessions: [identityFixture.hostState],
+      },
+    });
+
+    const result = await invoke("GET");
+
+    expect(result.json).toMatchObject({
+      complete: true,
+      states: [{ sessionKey: identityFixture.nativeSessionKey }],
+    });
+  });
+
+  it("逻辑身份的已读确认交给宿主前映射，保留 session 与未读代际护栏", async () => {
+    nativeByLogical.set(identityFixture.logicalSessionKey, identityFixture.nativeSessionKey);
+    dispatchGatewayMethod.mockResolvedValue({ ok: true, payload: { ok: true } });
+
+    const result = await invoke(
+      "PATCH",
+      {
+        sessionKey: identityFixture.logicalSessionKey,
+        agentId: "operator",
+        unread: false,
+        expectedSessionId: identityFixture.hostState.sessionId,
+        expectedMarkedUnreadAt: 42,
+      },
+      true,
+    );
+
+    expect(dispatchGatewayMethod).toHaveBeenCalledWith("sessions.patch", {
+      key: identityFixture.nativeSessionKey,
+      agentId: "operator",
+      unread: false,
+      expectedSessionId: identityFixture.hostState.sessionId,
+      expectedMarkedUnreadAt: 42,
+    });
+    expect(result.json).toEqual({ ok: true, sessionKey: identityFixture.logicalSessionKey });
   });
 
   it("pages sessions.list and projects only canonical read-state fields", async () => {

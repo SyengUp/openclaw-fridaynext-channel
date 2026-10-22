@@ -480,7 +480,7 @@ describe("runtime protocol v3", () => {
     expect(getRuntimeV3Store().run(accepted.runId)?.phase).toBe("completed");
   });
 
-  it("writes an explicit terminal event for an interrupted run that cannot resume", async () => {
+  it("keeps an interrupted execution unknown until the host can reconcile it", async () => {
     const root = configure();
     const store = getRuntimeV3Store();
     const accepted = store.acceptCommand({
@@ -500,8 +500,8 @@ describe("runtime protocol v3", () => {
     });
 
     const recovered = getRuntimeV3Store();
-    expect(recovered.run(accepted.runId)?.phase).toBe("failed");
-    expect(recovered.eventsAfter("PHONE-1", 0).at(-1)?.eventType).toBe("run.failed");
+    expect(recovered.run(accepted.runId)?.phase).toBe("reconciling");
+    expect(recovered.eventsAfter("PHONE-1", 0).at(-1)?.eventType).toBe("run.reconciling");
   });
 
   it("uses transcript evidence to close an interrupted run as completed", async () => {
@@ -812,12 +812,12 @@ describe("runtime protocol v3", () => {
       data: { runId: run.runId, phase: "spawned", label: "research" },
     });
 
-    expect(store.eventsAfter(run.deviceId, 0).map((event) => event.eventType)).toEqual([
+    expect(store.eventsAfter(run.deviceId, 0).map(event => store.legacyEvent(event)).map((event) => event.eventType)).toEqual([
       "agent.thinking.delta",
       "tool.start",
       "subagent.spawned",
     ]);
-    expect(store.eventsAfter(run.deviceId, 0)[0]?.payload).toMatchObject({
+    expect(store.eventsAfter(run.deviceId, 0).map(event => store.legacyEvent(event))[0]?.payload).toMatchObject({
       _sourceEventType: "agent",
       _sourceEventData: { runId: run.runId, sessionKey: run.sessionKey },
     });
@@ -853,7 +853,7 @@ describe("runtime protocol v3", () => {
       data: { runId: run.runId, phase: "start", toolName: "exec" },
     });
 
-    const events = store.eventsAfter(run.deviceId, 0);
+    const events = store.eventsAfter(run.deviceId, 0).map(event => store.legacyEvent(event));
     expect(events.map((event) => event.eventType)).toEqual(["agent.assistant.delta", "tool.start"]);
     expect(events[0]?.payload).toMatchObject({
       _sourceEventBatch: [

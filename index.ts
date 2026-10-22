@@ -1,4 +1,3 @@
-import { startPushRuntime } from "./src/push/push-runtime.js";
 import { defineChannelPluginEntry } from "openclaw/plugin-sdk/core";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import type {
@@ -26,7 +25,6 @@ import { getOpenClawAgentRunContext } from "./src/agent-run-context-bridge.js";
 import { accumulateRunUsage } from "./src/agent/run-usage-accumulator.js";
 import { createFridayNextLogger } from "./src/logging.js";
 import { ensureCodexReasoningSummary } from "./src/codex-reasoning-config.js";
-import { startPublicAccess } from "./src/public-access/frpc-manager.js";
 import { setTalkRuntime } from "./src/talk/talk-runtime.js";
 import { createHealthQueryTool } from "./src/tools/health-query-tool.js";
 import { createHealthLogTool } from "./src/tools/health-log-tool.js";
@@ -34,7 +32,7 @@ import { createCalendarQueryTool } from "./src/tools/calendar-query-tool.js";
 import { createCalendarLogTool } from "./src/tools/calendar-log-tool.js";
 import { createLocationQueryTool } from "./src/tools/location-query-tool.js";
 import { createSendFileTool } from "./src/tools/send-file-tool.js";
-import { restoreDurableRuntimeV3 } from "./src/runtime-v3/runtime-recovery.js";
+import { getOpenClawChannelService } from "./src/adapters/openclaw/channel-service.js";
 import { noteStructuredRunSource } from "./src/runtime-v3/run-source.js";
 import { runtimeV3StoreIfInitialized } from "./src/runtime-v3/runtime-store.js";
 
@@ -181,42 +179,13 @@ export default defineChannelPluginEntry({
       lastApiRoutesRegistered = new WeakRef(api);
       registerFridayNextHttpRoutes(api);
       registerFridayNextPluginTools(api);
-      startPushRuntime();
-      void restoreDurableRuntimeV3().catch((error: unknown) => {
-        hookLogger.error(
-          `[RUNTIME_V3_RECOVERY_FAILED] error=${error instanceof Error ? error.message : String(error)}`,
-        );
-      });
-
-      // FridayTunnel: enter control-plane standby by default. frpc is spawned only after an
-      // entitled desired set arrives; explicit operator hard-disable keeps this fully inert.
-      try {
-        const paCfg = resolveFridayNextConfig(
-          getHostOpenClawConfigSnapshot(getFridayNextRuntime().config),
-        );
-        const paLog = createFridayNextLogger("public-access");
-        void startPublicAccess(
-          {
-            enabled: paCfg.publicAccess.enabled,
-            relayAddr: paCfg.publicAccess.relayAddr,
-            relayToken: paCfg.publicAccess.relayToken,
-            subDomainHost: paCfg.publicAccess.subDomainHost,
-            subdomain: paCfg.publicAccess.subdomain || undefined,
-            allocatorUrl: paCfg.publicAccess.allocatorUrl,
-            certSignUrl: paCfg.publicAccess.certSignUrl,
-            controlPlaneUrl: paCfg.publicAccess.controlPlaneUrl,
-            corePort: paCfg.publicAccess.corePort,
-            authToken: paCfg.authToken,
-          },
-          (m) => paLog.info(m),
-        ).catch((e: unknown) =>
-          paLog.warn(`startPublicAccess failed: ${e instanceof Error ? e.message : String(e)}`),
-        );
-      } catch (e) {
-        createFridayNextLogger("public-access").warn(
-          `startPublicAccess failed: ${e instanceof Error ? e.message : String(e)}`,
-        );
-      }
+      void getOpenClawChannelService()
+        .start()
+        .catch((error: unknown) => {
+          hookLogger.error(
+            `[CHANNEL_SERVICE_START_FAILED] error=${error instanceof Error ? error.message : String(error)}`,
+          );
+        });
     } else {
       const cfg = resolveFridayNextConfig(
         getHostOpenClawConfigSnapshot(getFridayNextRuntime().config),

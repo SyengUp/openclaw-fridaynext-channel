@@ -227,6 +227,8 @@ function messageRecordsWithGlobalEnvelope(records: unknown[]): unknown[] {
     raw.push({
       ...(rec.message as Record<string, unknown>),
       __openclaw: {
+        // 宿主将运行身份和入站 transport 放在消息元数据中；分页信封不能覆盖这些事实。
+        ...asRecord((rec.message as Record<string, unknown>).__openclaw),
         ...(typeof rec.id === "string" ? { id: rec.id } : {}),
         seq,
         ...(Number.isFinite(ts) ? { recordTimestampMs: ts } : {}),

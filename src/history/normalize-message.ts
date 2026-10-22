@@ -8,7 +8,8 @@
  * / ToolResultMessage) with an `__openclaw` metadata envelope attached by the
  * gateway carrying the stable transcript entry `id`, a positional `seq`, and the
  * record timestamp. That `id` is the durable, channel-agnostic identity the app
- * uses as its sync/dedup key — runId is NOT persisted upstream.
+ * uses as its sync/dedup key. Assistant metadata can also carry the host runId;
+ * the OpenClaw adapter scopes it to its own ledger before exposing correlation.
  */
 
 export interface FridayHistoryImage {
@@ -46,6 +47,8 @@ export interface FridayHistoryUsage {
 export type FridayHistoryRole = "user" | "assistant" | "toolResult" | "system";
 
 export interface FridayHistoryMessage {
+  clientRequestId?: string;
+  format?: "canonical-v1";
   /** Stable transcript entry id (sync key). Synthetic when upstream omitted it. */
   id: string;
   seq: number;
@@ -62,7 +65,7 @@ export interface FridayHistoryMessage {
   model?: string;
   usage?: FridayHistoryUsage;
   /** Non-message records surfaced for context (e.g. compaction dividers). */
-  kind?: "compaction";
+  kind?: "compaction" | "turnBoundary" | "hidden";
   /** Compaction boundary facts (core persists `tokensBefore` on the entry;
    *  `tokensAfter` only exists when the host projects it). Clients render
    *  "saved N tokens" only when both are present — same rule as Control UI. */
@@ -192,6 +195,27 @@ function stripMediaMarkers(text: string): string {
     .replace(MEDIA_MARKER_RE, "")
     .replace(/\n{3,}/g, "\n\n")
     .trim();
+}
+
+// 宿主把附件提取结果追加到模型输入尾部；只有与原生媒体事实相符的完整块才可移除。
+function stripExtractedFileContext(text: string, media: unknown): string {
+  if (!Array.isArray(media)) return text;
+  const files = media.map(asRecord).filter((fact): fact is RawRecord =>
+    Boolean(fact && readString(fact.fileName) && fact.kind === "document"));
+  if (files.length === 0) return text;
+  const entities: Record<string, string> = { amp: "&", quot: '"', apos: "'", lt: "<", gt: ">" };
+  const decodeAttribute = (value: string) => value.replace(/&(amp|quot|apos|lt|gt);/g,
+    (_match, entity: string) => entities[entity]);
+  const blocks = [...text.matchAll(/(?:^|\r?\n)<file name="([^"]+)"(?: mime="([^"]+)")?>[\s\S]*?<\/file>/g)];
+  let end = text.length;
+  for (const block of blocks.reverse()) {
+    if (text.slice(block.index + block[0].length, end).trim()) break;
+    const name = decodeAttribute(block[1]);
+    const mime = block[2] ? decodeAttribute(block[2]) : undefined;
+    if (!files.some(fact => fact.fileName === name && (!mime || fact.contentType === mime))) break;
+    end = block.index;
+  }
+  return text.slice(0, end).trimEnd();
 }
 
 interface ParsedContent {
@@ -386,8 +410,14 @@ export function normalizeHistoryMessage(
   const synthetic = metaId === undefined;
   const ts = readFiniteNumber(meta?.recordTimestampMs) ?? readFiniteNumber(record.timestamp);
   const kind = readString(meta?.kind) === "compaction" ? "compaction" : undefined;
+  const transport = asRecord(meta?.transport);
+  const clientRequestId =
+    (transport?.channel === "friday-next" ? readString(transport.messageId) : undefined) ??
+    readString(record.clientRequestId) ?? readString(record.idempotencyKey);
 
   const message: FridayHistoryMessage = {
+    ...(clientRequestId ? { clientRequestId } : {}),
+    ...(readString(meta?.runId) ? {runId:readString(meta?.runId)}:{}),
     id,
     seq,
     role,
@@ -445,7 +475,9 @@ export function normalizeHistoryMessage(
     return message;
   }
 
-  const visibleText = role === "user" ? stripMediaMarkers(parsed.text) : parsed.text;
+  const visibleText = role === "user"
+    ? stripMediaMarkers(stripExtractedFileContext(parsed.text, meta?.media))
+    : parsed.text;
   const split = splitMediaLines(visibleText);
   const clampedText = fullText ? { text: split.text, truncated: false } : clampText(split.text);
   const clampedThinking = fullText

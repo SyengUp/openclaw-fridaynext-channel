@@ -9,6 +9,7 @@ import { getHostOpenClawConfigSnapshot } from "../../host-config.js";
 import { getFridayNextRuntime } from "../../runtime.js";
 import { resolveSessionId } from "../../history/read-transcript.js";
 import { getRuntimeV3Store } from "../../runtime-v3/runtime-store.js";
+import { mappedNativeSessionKey } from "../../adapters/openclaw/session-metadata.js";
 
 function json(res: ServerResponse, status: number, body: Record<string, unknown>): true {
   res.statusCode = status;
@@ -63,10 +64,12 @@ async function handleAction(
     });
   }
   try {
+    // 先精确解析逻辑身份；原生 key 的兼容及大小写规则仅留在 OpenClaw 边界。
+    const nativeSessionKey = mappedNativeSessionKey(sessionKey) ?? sessionKey;
     const store = getRuntimeV3Store();
     const runs = store
       .runs()
-      .filter((run) => run.sessionKey.toLowerCase() === sessionKey.toLowerCase());
+      .filter((run) => run.sessionKey.toLowerCase() === nativeSessionKey.toLowerCase());
     if (runs.some((run) => !["completed", "failed", "cancelled"].includes(run.phase))) {
       return json(res, 503, {
         ok: false,
@@ -74,12 +77,12 @@ async function handleAction(
         error: "Session has running or queued messages",
       });
     }
-    const conversationId = resolveSessionId(sessionKey);
+    const conversationId = resolveSessionId(nativeSessionKey);
     if (conversationId) {
       for (const run of runs) store.bindRunConversation(run.runId, conversationId);
     }
     const response = await dispatchGatewayMethod(`sessions.${action}`, {
-      sessionKey,
+      sessionKey: nativeSessionKey,
       entryId,
       ...(agentId ? { agentId } : {}),
     });

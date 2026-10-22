@@ -1,4 +1,14 @@
-# Friday Next HTTP/SSE API (v2 — transparent proxy)
+# FridayNext OpenClaw 适配器 API
+
+v3 公共契约由独立 npm 包 `@syengup/fridaynext-channel-kit@0.1.3` 的 `API.md` 维护，工作区入口为 [公共契约](../fridaynext-channel-kit/API.md)。插件使用精确 npm 版本依赖；registry 发布包由 npm 安装公共库，离线部署包包含从该版本安装的完整依赖。不引用兄弟仓库源码。
+
+新客户端通过 `X-FridayNext-Event-Format: canonical-v1` 协商，按 health 的后端描述与能力集合准入。标准路由、准入、执行编排、恢复、账本及公共云设施由 Kit 的 `ChannelService` 统一提供；`OpenClawBackendAdapter` 提供完整宿主端口。Kit 已成为生产适配器与参考后端的同一服务入口。
+
+`src/adapters/openclaw/` 负责宿主语义、SDK 操作、旧协议转换和专属路由。审批、询问及设备结果直接调用原生业务操作，不再制造内部 HTTP 请求。旧 App 输入转换与新格式共用一次公共准入、执行和账本。账号 start/abort 通过公共租约管理服务生命周期；保留原数据根、凭证、TLS 与公网身份。收口范围和验证记录见 [实施计划](../Friday/docs/plans/openclaw-decoupling-plan.md)。
+
+以下 v2 透明输出和宿主管理接口继续作为兼容入口。新规范运行不把 `_sourceEventType` / `_sourceEventData` 交给客户端 reducer。
+
+## 旧版 v2 兼容
 
 The plugin forwards OpenClaw-native streams over SSE and persists outbound events per `deviceId` for offline replay.
 
@@ -13,6 +23,12 @@ Token resolution order:
 1. `gateway.auth.token`
 2. `channels["friday-next"].authToken`
 3. `FRIDAY_NEXT_AUTH_TOKEN`
+
+## 会话阅读状态的身份（2026.10.4-beta.7）
+
+`GET /friday-next-admin/sessions/state` 返回 `{ok, complete, states}`。请求携带 `X-FridayNext-Event-Format: canonical-v1` 时，`states[].sessionKey` 使用与规范事件、历史目录及快照相同的逻辑身份，按精确字符串比较；未协商的旧客户端继续取得 OpenClaw 原生 key。`complete=true` 可用于已删除会话通知的对账，因此不能混用这两类身份。
+
+`PATCH /friday-next-admin/sessions/state` 接受 `{sessionKey, unread, agentId?, expectedSessionId?, expectedMarkedUnreadAt?}`。适配器将逻辑 ID 映射为宿主 key，原样保留会话及未读代际护栏；响应 `{ok:true, sessionKey}` 回显请求身份。`expectedMarkedUnreadAt:null` 表示确认没有显式未读标记，与省略字段不同。两条路由使用 Gateway Bearer 鉴权及现有公网 App Attest 门。
 
 ## 消息回退与分叉（2026.10.2）
 

@@ -1,3 +1,4 @@
+import { setMockRuntime } from "./test-support/mock-runtime.js";
 import { describe, expect, it } from "vitest";
 import { fridayNextChannelPlugin } from "./channel.js";
 
@@ -10,6 +11,7 @@ import { fridayNextChannelPlugin } from "./channel.js";
  */
 describe("friday-next channel gateway lifecycle", () => {
   it("exposes a startAccount keep-alive that stays pending until abort", async () => {
+    setMockRuntime({ publicAccessEnabled: false });
     const gateway = (fridayNextChannelPlugin as { gateway?: { startAccount?: unknown } }).gateway;
     expect(gateway?.startAccount).toBeTypeOf("function");
 

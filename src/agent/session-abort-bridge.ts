@@ -1,5 +1,5 @@
 /**
- * 会话级标准停止桥 —— core `abortSessionRunTargetWithOutcome` 的 resilient 深导入。
+ * 会话级标准停止桥 —— 兼容旧直接停止入口与 2026.10.5 的两阶段停止入口。
  *
  * 这是 core 自己的停止链路（`/stop` 命令、reset 等走的就是它）：先对会话的 reply
  * operation 调 `abortByUser()`（把派发终点标记为 `aborted_by_user` → SILENT reply），
@@ -9,6 +9,7 @@
  * reply…」）。该函数不在公开 plugin-sdk，按 tool-catalog 的既有模式深导入：扫核心
  * dist 找定义 chunk（函数名未混淆），按 `function.name` 取导出并缓存。
  *
+ * 2026.10.5 改为 prepareSessionRunTargetAbort(params) 返回提交函数，需要准备并提交一次。
  * 找不到（旧核心 / 无法定位安装目录）时返回 null，调用方回退旧的 plain abort，
  * 行为与 2026.10.1 之前一致。
  */
@@ -26,11 +27,16 @@ interface AbortSessionRunTargetOutcome {
   retirement?: Promise<unknown>;
 }
 
-type AbortSessionRunTargetFn = (params: {
+type SessionAbortTarget = {
   agentId?: string;
   key?: string;
   sessionId?: string;
-}) => AbortSessionRunTargetOutcome;
+};
+
+type AbortSessionRunTargetFn = (params: SessionAbortTarget) => AbortSessionRunTargetOutcome;
+type PrepareSessionRunTargetAbortFn = (
+  params: SessionAbortTarget,
+) => () => AbortSessionRunTargetOutcome;
 
 export interface SessionAbortOutcome {
   active: boolean;
@@ -44,6 +50,13 @@ function findExport(module: Record<string, unknown>): AbortSessionRunTargetFn | 
   for (const value of Object.values(module)) {
     if (typeof value === "function" && value.name === "abortSessionRunTargetWithOutcome") {
       return value as AbortSessionRunTargetFn;
+    }
+  }
+  // 新版 SDK 将捕获目标与执行停止拆开；仍在适配桥内归一为一次标准停止。
+  for (const value of Object.values(module)) {
+    if (typeof value === "function" && value.name === "prepareSessionRunTargetAbort") {
+      const prepare = value as PrepareSessionRunTargetAbortFn;
+      return (params) => prepare(params)();
     }
   }
   return null;
@@ -69,7 +82,11 @@ export async function locateAbortSessionRunTargetInDist(
     } catch {
       continue;
     }
-    if (!content.includes("function abortSessionRunTargetWithOutcome")) continue;
+    if (
+      !content.includes("function abortSessionRunTargetWithOutcome") &&
+      !content.includes("function prepareSessionRunTargetAbort")
+    )
+      continue;
     try {
       const module = (await importAbsoluteModule(path.join(distDir, file))) as Record<
         string,

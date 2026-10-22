@@ -1,8 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-
-vi.mock("node:dns/promises", () => ({
-  default: { lookup: vi.fn() },
-}));
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import dns from "node:dns/promises";
 import {
@@ -14,7 +10,8 @@ import {
   parseHttpUrl,
 } from "./ssrf-guard.js";
 
-const lookupMock = vi.mocked(dns.lookup);
+const lookupMock = vi.spyOn(dns, "lookup");
+afterAll(() => lookupMock.mockRestore());
 
 function mockPublicDns(): void {
   lookupMock.mockResolvedValue([{ address: "93.184.216.34", family: 4 }] as never);

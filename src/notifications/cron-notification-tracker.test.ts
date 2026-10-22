@@ -7,7 +7,7 @@ import {
   recentCronAgentId,
   resetCronNotificationTrackerForTest,
   updateCronDeliveryTarget,
-} from "./cron-notification-tracker.js";
+} from "../test-support/legacy-notifications/cron-notification-tracker.js";
 
 const TO_FRIDAY = { deliversToFridayNext: true as const, to: null };
 const ELSEWHERE = { deliversToFridayNext: false as const, to: null };

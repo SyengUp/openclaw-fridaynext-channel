@@ -1,0 +1,96 @@
+{
+  "event": {
+    "protocolVersion": 3,
+    "clientRequestId": "46B82F00-7B96-4FCD-9156-5D426284F641",
+    "serverInstanceId": "e4debcb6-5e6c-44d4-8782-0a501b1da8b2",
+    "eventId": 167523,
+    "sessionKey": "agent:operator:fridaynext:5828a74e-0a57-4c6c-9af1-ed7089df1fa6",
+    "agentId": "operator",
+    "runId": "1edc159a-399f-4d6a-9acc-1122a0a6ed63",
+    "conversationId": "fridaynext-5828a74e-0a57-4c6c-9af1-ed7089df1fa6",
+    "sourceKind": "session",
+    "runSeq": 12,
+    "eventType": "approval.request",
+    "occurredAt": 1792559238896,
+    "payload": {
+      "format": "canonical-v1",
+      "updates": [
+        {
+          "kind": "control",
+          "id": "4d288462-6b45-4c15-88ab-c14da586e8ee",
+          "phase": "request",
+          "data": {
+            "toolName": null,
+            "kind": "approval",
+            "title": "Exec Approval Required",
+            "approvalId": "4d288462-6b45-4c15-88ab-c14da586e8ee",
+            "expiresAtMs": 1792561038868,
+            "commandPreview": null,
+            "description": "A command needs your approval.",
+            "actions": [
+              {
+                "decision": "allow-once",
+                "label": "Allow Once",
+                "style": "success"
+              },
+              {
+                "decision": "allow-always",
+                "label": "Allow Always",
+                "style": "primary"
+              },
+              {
+                "decision": "deny",
+                "label": "Deny",
+                "style": "danger"
+              }
+            ],
+            "metadata": [
+              {
+                "label": "Agent",
+                "value": "operator"
+              },
+              {
+                "label": "CWD",
+                "value": "/tmp/friday-approval-device/workspace"
+              },
+              {
+                "label": "Host",
+                "value": "gateway"
+              }
+            ],
+            "commandText": "/usr/bin/touch /tmp/fridaynext-p5-approval-fix-1021-5828a74e.txt",
+            "cwd": "/tmp/friday-approval-device/workspace",
+            "host": "gateway",
+            "severity": null,
+            "decision": null,
+            "resolvedBy": null,
+            "runId": "1edc159a-399f-4d6a-9acc-1122a0a6ed63",
+            "sessionKey": "58C14A1C-03A8-46EC-8057-BAA2FB066B14",
+            "generation": "1edc159a-399f-4d6a-9acc-1122a0a6ed63:4d288462-6b45-4c15-88ab-c14da586e8ee"
+          }
+        }
+      ]
+    }
+  },
+  "approval": {
+    "id": "4d288462-6b45-4c15-88ab-c14da586e8ee",
+    "status": "pending",
+    "presentation": {
+      "kind": "exec",
+      "commandText": "/usr/bin/touch /tmp/fridaynext-p5-approval-fix-1021-5828a74e.txt",
+      "commandPreview": null,
+      "warningText": null,
+      "host": "gateway",
+      "nodeId": null,
+      "agentId": "operator",
+      "allowedDecisions": [
+        "allow-once",
+        "allow-always",
+        "deny"
+      ]
+    },
+    "urlPath": "/approve/4d288462-6b45-4c15-88ab-c14da586e8ee",
+    "createdAtMs": 1792559238868,
+    "expiresAtMs": 1792561038868
+  }
+}

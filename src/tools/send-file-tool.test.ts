@@ -61,6 +61,7 @@ describe("createSendFileTool", () => {
     expect(parsed).toMatchObject({ ok: true, filename: "Frame 33.png" });
     const outbound = store
       .eventsForRun(accepted.run!.runId)
+      .map(event => store.legacyEvent(event))
       .find((event) => event.eventType === "outbound.media");
     expect(outbound).toBeDefined();
     expect(outbound?.payload._sourceEventType).toBe("outbound");

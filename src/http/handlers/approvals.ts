@@ -1,3 +1,8 @@
+import {
+  operationResult,
+  writeOperation,
+  type OpenClawOperationResult,
+} from "../../adapters/openclaw/operation-result.js";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { resolveApprovalOverGateway } from "openclaw/plugin-sdk/approval-gateway-runtime";
 import { readJsonBody } from "../middleware/body.js";
@@ -21,19 +26,25 @@ export async function handleApprovalDecision(
   res: ServerResponse,
   approvalId: string,
 ): Promise<boolean> {
+  if (req.method !== "POST")
+    return writeOperation(res, operationResult(405, { error: "Method Not Allowed" }));
+  if (!extractBearerToken(req))
+    return writeOperation(
+      res,
+      operationResult(401, { error: "Unauthorized: bearer token mismatch" }),
+    );
+  return writeOperation(res, await submitOpenClawApproval(approvalId, await readJsonBody(req)));
+}
+
+export async function submitOpenClawApproval(
+  approvalId: string,
+  body: Record<string, unknown> | null,
+  approvalKind?: "exec" | "plugin" | "system-agent",
+): Promise<OpenClawOperationResult> {
   const log = createFridayNextLogger("approvals");
-  const json = (status: number, body: Record<string, unknown>) => {
-    res.statusCode = status;
-    res.setHeader("Content-Type", "application/json");
-    res.end(JSON.stringify(body));
-    return true;
-  };
+  const json = operationResult;
 
-  if (req.method !== "POST") return json(405, { error: "Method Not Allowed" });
-  if (!extractBearerToken(req)) return json(401, { error: "Unauthorized: bearer token mismatch" });
   if (!approvalId.trim()) return json(400, { error: "Missing approvalId" });
-
-  const body = await readJsonBody(req);
   if (!body) return json(400, { error: "Invalid JSON body" });
 
   const decision = typeof body.decision === "string" ? body.decision.trim() : "";
@@ -68,7 +79,7 @@ export async function handleApprovalDecision(
       cfg,
       approvalId: approvalId.trim(),
       decision: decision as "allow-once" | "allow-always" | "deny",
-      allowPluginFallback: true,
+      ...(approvalKind ? { approvalKind } : { allowPluginFallback: true }),
       clientDisplayName: deviceId ? `Friday Next (${deviceId})` : "Friday Next",
     });
   } catch (err) {

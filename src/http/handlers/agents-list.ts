@@ -227,6 +227,9 @@ export async function handleAgentsList(
       defaultAgentId,
       ...(defaultPermissionMode ? { defaultPermissionMode } : {}),
       ...(permissionModes ? { permissionModes } : {}),
+      ...(req.headers?.["x-fridaynext-event-format"] === "canonical-v1" && permissionModes ? {
+        permissionOptions:permissionModes.map(id=>({id,label:({"read-only":"Read only",guarded:"Approval required",workspace:"Automatic approval",full:"Full access"} as Record<string,string>)[id] ?? id,...(id === "full" ? {scope:"unrestricted"}:{})}))
+      }:{}),
     }),
   );
   return true;

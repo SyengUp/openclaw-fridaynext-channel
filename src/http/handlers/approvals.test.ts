@@ -9,7 +9,7 @@ vi.mock("openclaw/plugin-sdk/approval-gateway-runtime", () => ({
   resolveApprovalOverGateway,
 }));
 
-import { handleApprovalDecision } from "./approvals.js";
+import { handleApprovalDecision, submitOpenClawApproval } from "./approvals.js";
 
 type IncomingMessageLike = import("node:http").IncomingMessage;
 type ServerResponseLike = import("node:http").ServerResponse;
@@ -66,6 +66,24 @@ describe("handleApprovalDecision", () => {
     expect(result.status).toBe(401);
     expect(resolveApprovalOverGateway).not.toHaveBeenCalled();
   });
+
+  it.each(["exec", "plugin", "system-agent"] as const)(
+    "规范控制响应按权威 %s 归属提交，旧入口仍保留兼容方式",
+    async (approvalKind) => {
+      const result = await submitOpenClawApproval(
+        `canonical-${approvalKind}`,
+        { decision: "allow-once" },
+        approvalKind,
+      );
+      expect(result.status).toBe(200);
+      expect(resolveApprovalOverGateway).toHaveBeenCalledWith(
+        expect.objectContaining({ approvalKind, decision: "allow-once" }),
+      );
+      expect(resolveApprovalOverGateway.mock.calls[0]?.[0]).not.toHaveProperty(
+        "allowPluginFallback",
+      );
+    },
+  );
 
   it("rejects unknown decisions", async () => {
     const result = await invoke("POST", "exec-1", { decision: "approve" });

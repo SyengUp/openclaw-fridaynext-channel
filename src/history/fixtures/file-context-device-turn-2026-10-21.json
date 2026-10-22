@@ -1,0 +1,29 @@
+{
+  "clientRequestId": "5155287C-DC7D-4A1D-B9B4-40985A04A20E",
+  "runId": "f2b9c5a5-4870-456e-aa59-0a177823d902",
+  "prompt": "请确认收到两个附件，仅回复 P5-ATTACH-1021",
+  "userMessage": {
+    "role": "user",
+    "content": "请确认收到两个附件，仅回复 P5-ATTACH-1021\n\n[media attached: file:///Users/syengup/.openclaw/media/inbound/photo-37FDC23F---c85181f2-c158-4731-8592-6e116b755714.jpg]\n[media attached: file:///Users/syengup/.openclaw/media/inbound/FR154_TOOL_DISCOVERY_QUERY_LIMIT---65e8637b-17b9-42f2-a652-2a04d6f78dbe.md]\n\n<file name=\"FR154_TOOL_DISCOVERY_QUERY_LIMIT.md\" mime=\"text/markdown\">\n\n<<<EXTERNAL_UNTRUSTED_CONTENT id=\"dc9c25e8f71cc72d\">>>\nSource: External\n---\n# FR-154：电话查询因工具发现参数过长而失败\n\n2026-09-24。用户在 Friday App 提问「大众中国的IT电话是多少」后看到“运行失败”。本记录说明这次运行发生了什么、80 字符限制在何处、为何修成 400 字符，以及修复仍未覆盖的边界。任务状态与验收以 [FR-154 任务卡](../tasks/FR-154.md)为准。\n\n## 现场与因果链\n\n生产会话 `8fbccbf7-2e2c-4dd2-ae1c-a3facb4f5b2d`，run `57f46c9a-9c45-4a23-bd11-469e8a487155`。以下时间均为 UTC。\n\n| 时间 | 已核实的事实 |\n| --- | --- |\n| 09:00:57 | 模型 `gpt-6-luna` 收到本轮请求；首轮只暴露了 `tools_discover`。 |\n| 09:01:04 | 模型返回 `tools_discover` 调用，参数 `query` 是 `web search current public information China Volkswagen customer service IT phone number`，共 87 字符。 |\n| 随后 | 当时 `tools_discover` 的参数 Schema 将 `query.maxLength` 设为 80，handler 也拒绝超过 80 字符。Pi 先按 Schema 校验，在进入 handler 和实际工具执行前拒绝了该调用；持久记录为 `not_executed`。 |\n| 09:01:04 | Friday 将这次工具错误映射为致命 `TOOL_ERROR`，run 失败，记录的 `toolExecutions=0`。 |\n\n所以这次并非网页搜索没有找到电话，也不是模型服务调用失败。模型已经决定查找工具，但发现工具本身没有执行，`web_search` 更没有被调用。原运行无法证明该电话号码是否公开。附近出现的匿名 HTTP 401 记录与这个已接收并执行模型请求的 run 没有关联，不能用来解释这次失败。\n\n## 限制的作用与问题\n\n80 字符限制施加在 **工具发现的 `query` 参数**上，不是用户输入长度，也不是网页搜索结果数量。给参数设有限上界可以避免模型把无界长文传给工具发现和后续上下文；但仓库没有说明最初为什么选定 **80** 这个数值，不能把它描述成经过验证的性能或安全阈值。此次 87 字符的正常描述说明它对实际模型输出过窄。\n\n这次故障还暴露了第二层问题：Pi 的参数校验发生在工具执行前，Friday 当时把该校验失败作为整轮致命工具错误处理。一个可通过缩短参数恢复的调用，直接变成了 App 上的“运行失败”。本轮修复针对已出现的自然语言查询，未修改通用工具错误策略。\n\n## 本轮修复\n\n- 将 `tools_discover.query` 的 Schema 上限和 handler 上限统一提高到 **400 字符**，与当前 `web_search.query` 上限一致。400 是本轮采用的有界取值，不能保证任意模型生成的查询都不会超限。\n- 为已注册的 `web_search` 增加英文发现词 `web search`。原 87 字符参数包含这个短语；通过发现后，`web_search` 会在**下一次模型请求**中出现，发现工具不会代替网页搜索执行查询。\n- 保留发现工具的其他查询次数和目录范围约束，没有改变用户输入、其他工具参数或通用错误处理。\n\n实现位于 [tool-discovery.ts](../../FRIDAY_Agent/src/app/tooling/tool-discovery.ts) 和 [search/tools.ts](../../FRIDAY_Agent/src/capabilities/search/tools.ts)，修复提交 `2421cb5`。\n\n## 验证与发布\n\n固定流使用原问题和原 87 字符参数。新增的[单元用例](../../FRIDAY_Agent/tests/unit/tool-discovery-query.test.ts)在旧 80 字符边界下未得到预期的 `selected_pending`；[集成用例](../../FRIDAY_Agent/tests/integration/prompt-composer.test.ts)在旧代码下以 `TOOL_ERROR` 失败。修复后同一用例通过，下一轮可见工具包含 `web_search`。\n\nFR-153 在制代码先导致一次全量回归 703/704。待其提交后，对同一修复重新执行：固定 Node 24.21.0 的 `npm run check` 通过，离线 108 文件 **704/704**；真实模型套件 12 文件 **24/24**；两份报告的代码/测试指纹均为 `9d28c1ac…`。用户随后要求部署；`friday restart` 将生产 PID `89425` 切至 `99170`，`friday status` 确认本机、公网和隧道 ready，日志丢弃数为 0。没有修改 App，失败的旧 run 不会自动重试。\n\n上述固定流验证了此次参数会通过发现阶段，真实模型套件验证了既有模型链路；**用户在 App 对同一句话的新运行结果仍待反馈**，因此不能据此宣称电话号码已查到或本卡已经完成真机验收。\n\n## 仍存在的边界\n\n`query` 超过新的 400 字符上限时，Pi 仍可能在工具执行前拒绝参数，而 Friday 的通用错误处理仍可能把整轮标为 `TOOL_ERROR`。更完整的修法是把“参数无效且未执行”作为可恢复结果交给模型，让它缩短查询再继续，同时保留调用未执行的持久事实。本轮没有实施或验证这项通用改动。\n<<<END_EXTERNAL_UNTRUSTED_CONTENT id=\"dc9c25e8f71cc72d\">>>\n</file>",
+    "__openclaw": {
+      "id": "cb39da36-acb3-484d-8205-62744e4c5eca",
+      "seq": 1,
+      "transport": {
+        "channel": "friday-next",
+        "messageId": "5155287C-DC7D-4A1D-B9B4-40985A04A20E"
+      },
+      "media": [
+        {
+          "contentType": "image/jpeg",
+          "kind": "image",
+          "fileName": "photo-37FDC23F.jpg"
+        },
+        {
+          "contentType": "text/markdown",
+          "kind": "document",
+          "fileName": "FR154_TOOL_DISCOVERY_QUERY_LIMIT.md"
+        }
+      ]
+    }
+  }
+}

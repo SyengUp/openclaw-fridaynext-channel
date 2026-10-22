@@ -1,13 +1,9 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { EventEmitter } from "node:events";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import type { IncomingMessage, ServerResponse } from "node:http";
-
-vi.mock("node:dns/promises", () => ({
-  default: { lookup: vi.fn() },
-}));
 
 import dns from "node:dns/promises";
 import { handleLinkPreview } from "./link-preview.js";
@@ -18,7 +14,8 @@ import {
 import { setAttachmentsDirForTest } from "./files.js";
 import { clearFridayNextRuntime, setFridayNextRuntime } from "../../runtime.js";
 
-const lookupMock = vi.mocked(dns.lookup);
+const lookupMock = vi.spyOn(dns, "lookup");
+afterAll(() => lookupMock.mockRestore());
 
 class MockRes extends EventEmitter {
   statusCode = 0;

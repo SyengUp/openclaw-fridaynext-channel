@@ -1,3 +1,4 @@
+import { getOpenClawChannelService } from "./adapters/openclaw/channel-service.js";
 /**
  * Friday Next Channel Plugin Definition.
  *
@@ -171,7 +172,8 @@ const fridayGateway = {
     const runPassiveAccountLifecycle = await loadRunPassiveAccountLifecycle();
     await runPassiveAccountLifecycle({
       abortSignal: ctx.abortSignal,
-      start: async () => undefined,
+      start: async () => await getOpenClawChannelService().acquire(),
+      stop: async (handle) => await (handle as { release(): Promise<void> }).release(),
     });
   },
 };

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { cronJobIdFromSessionKey } from "./cron-session-key.js";
+import { cronJobIdFromSessionKey } from "../test-support/legacy-notifications/cron-session-key.js";
 
 describe("cronJobIdFromSessionKey", () => {
   it("extracts jobId from a per-run cron session key", () => {

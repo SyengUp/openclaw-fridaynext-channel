@@ -1,3 +1,4 @@
+import { describeSession } from "../../adapters/openclaw/session-metadata.js";
 /**
  * GET /friday-next/history/sessions
  *
@@ -338,20 +339,19 @@ export async function handleHistorySessions(
     return true;
   }
 
-  const rt = getFridayAgentForwardRuntime();
-  const config = rt?.getConfig() as Record<string, unknown> | undefined;
-  const agentIds = resolveConfiguredAgentIds(config);
-
-  const sessions: FridayHistorySessionSummary[] = [];
-  for (const agentId of agentIds) {
-    sessions.push(...readAgentSessions(agentId));
-  }
-  const deduped = dedupeCronSessionsByTitle(sessions);
-  deduped.sort((a, b) => (b.updatedAt ?? 0) - (a.updatedAt ?? 0));
+  const deduped = listOpenClawSessions();
 
   res.statusCode = 200;
   res.setHeader("Content-Type", "application/json");
-  res.end(JSON.stringify({ ok: true, sessions: deduped }));
+  const canonical = req.headers["x-fridaynext-event-format"] === "canonical-v1";
+  res.end(
+    JSON.stringify({
+      ok: true,
+      sessions: canonical
+        ? deduped.map((row) => ({ ...row, ...describeSession(row.sessionKey, row.sessionId) }))
+        : deduped,
+    }),
+  );
   return true;
 }
 
@@ -381,4 +381,19 @@ function dedupeCronSessionsByTitle(
   }
   out.push(...latestCronByJob.values());
   return out;
+}
+
+export function listOpenClawSessions(): FridayHistorySessionSummary[] {
+  const rt = getFridayAgentForwardRuntime();
+  const config = rt?.getConfig() as Record<string, unknown> | undefined;
+  const agentIds = resolveConfiguredAgentIds(config);
+
+  const sessions: FridayHistorySessionSummary[] = [];
+  for (const agentId of agentIds) {
+    sessions.push(...readAgentSessions(agentId));
+  }
+  const deduped = dedupeCronSessionsByTitle(sessions);
+  deduped.sort((a, b) => (b.updatedAt ?? 0) - (a.updatedAt ?? 0));
+
+  return deduped;
 }

@@ -1,3 +1,4 @@
+import { ChannelError } from "@syengup/fridaynext-channel-kit";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import {
   setSessionSettings,
@@ -72,6 +73,37 @@ export async function handleSessionsSettings(
     return true;
   }
 
+  try {
+    const result = await updateOpenClawSessionSettings(sessionKey, body);
+    res.statusCode = 200;
+    res.setHeader("Content-Type", "application/json");
+    res.end(JSON.stringify({ ok: true, sessionKey, ...result }));
+  } catch (error) {
+    if (!(error instanceof ChannelError)) throw error;
+    res.statusCode = error.status;
+    res.setHeader("Content-Type", "application/json");
+    res.end(JSON.stringify({ error: error.message }));
+  }
+  return true;
+}
+
+function parsePermissionModeField(body: Record<string, unknown> | null): {
+  value?: SessionPermissionMode | null;
+  error?: string;
+} {
+  if (!body || !Object.hasOwn(body, "permissionMode")) return {};
+  const value = body.permissionMode;
+  if (value === null) return { value: null };
+  if (isSessionPermissionMode(value)) return { value };
+  return {
+    error: `permissionMode must be one of: ${SESSION_PERMISSION_MODES.join(", ")}`,
+  };
+}
+
+export async function updateOpenClawSessionSettings(
+  sessionKey: string,
+  body: Record<string, unknown> | null,
+) {
   const reasoningLevel = typeof body?.reasoningLevel === "string" ? body.reasoningLevel : undefined;
   const thinkingLevel = typeof body?.thinkingLevel === "string" ? body.thinkingLevel : undefined;
   const modelRef = typeof body?.modelRef === "string" ? body.modelRef.trim() : undefined;
@@ -112,10 +144,7 @@ export async function handleSessionsSettings(
   }
 
   if (errors.length > 0) {
-    res.statusCode = 400;
-    res.setHeader("Content-Type", "application/json");
-    res.end(JSON.stringify({ error: errors.join("; ") }));
-    return true;
+    throw new ChannelError(400, "INVALID_REQUEST", errors.join("; "));
   }
 
   const settings: FridaySessionSettingsUpdate = {};
@@ -140,21 +169,5 @@ export async function handleSessionsSettings(
 
   const result = await setSessionSettings(sessionKey, settings, pluginHistoryDir());
 
-  res.statusCode = 200;
-  res.setHeader("Content-Type", "application/json");
-  res.end(JSON.stringify({ ok: true, sessionKey, ...result }));
-  return true;
-}
-
-function parsePermissionModeField(body: Record<string, unknown> | null): {
-  value?: SessionPermissionMode | null;
-  error?: string;
-} {
-  if (!body || !Object.hasOwn(body, "permissionMode")) return {};
-  const value = body.permissionMode;
-  if (value === null) return { value: null };
-  if (isSessionPermissionMode(value)) return { value };
-  return {
-    error: `permissionMode must be one of: ${SESSION_PERMISSION_MODES.join(", ")}`,
-  };
+  return result;
 }

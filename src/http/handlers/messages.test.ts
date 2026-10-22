@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { EventEmitter } from "node:events";
 import { PassThrough } from "node:stream";
 import type { IncomingMessage, ServerResponse } from "node:http";
@@ -17,7 +17,8 @@ import { runDetachedWebhookWork } from "openclaw/plugin-sdk/webhook-request-guar
 import { __setDetachedWebhookWorkImporterForTests } from "../../agent/detached-webhook-work.js";
 import { setMockRuntime } from "../../test-support/mock-runtime.js";
 import { observeAgentEventForActiveRuns, resetActiveRunsForTest } from "../../agent/active-runs.js";
-import { getRuntimeV3Store } from "../../runtime-v3/runtime-store.js";
+import { getRuntimeV3Store, setRuntimeV3RootForTest } from "../../runtime-v3/runtime-store.js";
+import { getOpenClawChannelService } from "../../adapters/openclaw/channel-service.js";
 import {
   __resetFridayQuestionsForTest,
   noteFridayQuestionPrompt,
@@ -32,6 +33,20 @@ const saveMediaBufferMock = vi.hoisted(() => vi.fn());
 vi.mock("openclaw/plugin-sdk/media-store", () => ({
   saveMediaBuffer: (...args: unknown[]) => saveMediaBufferMock(...args),
 }));
+
+let isolatedRoot = "";
+let isolatedService: ReturnType<typeof getOpenClawChannelService>;
+beforeEach(() => {
+  // 每例使用新账本；历史默认目录里的 queued 命令不能参与本次测试的 FIFO。
+  isolatedRoot = fs.mkdtempSync(path.join(os.tmpdir(), "friday-message-contract-"));
+  setMockRuntime({ historyDir: isolatedRoot, authToken: "tok", publicAccessEnabled: false });
+  isolatedService = getOpenClawChannelService();
+});
+afterEach(async () => {
+  await isolatedService.stop();
+  setRuntimeV3RootForTest(null);
+  fs.rmSync(isolatedRoot, { recursive: true, force: true });
+});
 
 class MockRes extends EventEmitter {
   statusCode = 0;
@@ -99,6 +114,7 @@ describe("handleMessages dispatch context", () => {
         deviceId: "aa11bb22-cc33-dd44-ee55-ff6677889900",
         text: "hello",
         sessionKey: "default",
+        clientRequestId: "CaseSensitive/Request-A",
       }),
     );
 
@@ -117,6 +133,7 @@ describe("handleMessages dispatch context", () => {
     expect(capturedCtx!.Provider).toBe("friday-next");
     expect(capturedCtx!.Surface).toBe("friday-next");
     expect(capturedCtx!.AccountId).toBe("default");
+    expect(capturedCtx!.MessageSid).toBe("CaseSensitive/Request-A");
     expect(capturedCtx!.SessionKey).toBe("agent:main:default");
     expect(capturedCtx!.CommandSource).toBeUndefined();
     expect(runDetachedWebhookWork).toHaveBeenCalledTimes(1);

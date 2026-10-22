@@ -8,9 +8,9 @@ importers:
 
   .:
     dependencies:
-      node-app-attest:
-        specifier: ^1.0.1
-        version: 1.0.1
+      '@syengup/fridaynext-channel-kit':
+        specifier: 0.1.3
+        version: 0.1.3
       qrcode-terminal:
         specifier: ^0.12.0
         version: 0.12.0
@@ -241,6 +241,10 @@ packages:
 
   '@standard-schema/spec@1.1.0':
     resolution: {integrity: sha512-l2aFy5jALhniG5HgqrD6jXLi/rUWrKvqN/qJx6yoJsgKhblVd+iqqU4RCXavm/jPityDo5TCvKMnpjKnOriy0w==}
+
+  '@syengup/fridaynext-channel-kit@0.1.3':
+    resolution: {integrity: sha512-Q8RslJOE65+Jc3c6SLAvTYELIzPHb0aUUt1k6UkrpGW778XAOxndownGZeqn4LoN2qtdWrJOjLUvBTa9DVdf2w==}
+    engines: {node: '>=22'}
 
   '@tybys/wasm-util@0.10.1':
     resolution: {integrity: sha512-9tTaPJLSiejZKx+Bmog4uSubteqTvFrVrURwkmHixBo0G4seD0zUxp98E1DzUBJxLQ3NPwXrGKDiVjwx/DpPsg==}
@@ -1058,6 +1062,10 @@ snapshots:
   '@rolldown/pluginutils@1.0.0-rc.16': {}
 
   '@standard-schema/spec@1.1.0': {}
+
+  '@syengup/fridaynext-channel-kit@0.1.3':
+    dependencies:
+      node-app-attest: 1.0.1
 
   '@tybys/wasm-util@0.10.1':
     dependencies:

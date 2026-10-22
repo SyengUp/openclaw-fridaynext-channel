@@ -47,6 +47,20 @@ describe("locateAbortSessionRunTargetInDist", () => {
     });
   });
 
+  it("兼容 2026.10.5 的两阶段 prepareSessionRunTargetAbort，并且只提交一次", async () => {
+    const dist = makeDist({
+      "abort-operation-modern.mjs": [
+        "let commits = 0;",
+        "function prepareSessionRunTargetAbort(params) { return () => ({ active: true, aborted: true, params, commits: ++commits }); }",
+        "export { prepareSessionRunTargetAbort as n };",
+      ].join("\n"),
+    });
+    const fn = await locateAbortSessionRunTargetInDist(dist);
+    expect(fn, "新版 SDK 已移除旧直接停止入口，不能静默回退普通 abort").not.toBeNull();
+    const params = { agentId: "operator", key: "agent:operator:test" };
+    expect(fn?.(params)).toMatchObject({ active: true, aborted: true, params, commits: 1 });
+  });
+
   it("找不到定义 chunk 时返回 null", async () => {
     const dist = makeDist({ "unrelated.mjs": "export const x = 1;\n" });
     expect(await locateAbortSessionRunTargetInDist(dist)).toBeNull();

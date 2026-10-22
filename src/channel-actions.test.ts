@@ -9,7 +9,7 @@ import { registerRunRoute } from "./run-metadata.js";
 import {
   fridayNotificationsStore,
   setNotificationsBaseDirForTest,
-} from "./notifications/notifications-store.js";
+} from "./test-support/legacy-notifications/notifications-store.js";
 import {
   createTempHistoryDir,
   removeTempHistoryDir,
@@ -18,8 +18,8 @@ import {
 import {
   noteCronActivity,
   resetCronNotificationTrackerForTest,
-} from "./notifications/cron-notification-tracker.js";
-import { resetHeartbeatNotificationTrackerForTest } from "./notifications/heartbeat-notification-tracker.js";
+} from "./test-support/legacy-notifications/cron-notification-tracker.js";
+import { resetHeartbeatNotificationTrackerForTest } from "./test-support/legacy-notifications/heartbeat-notification-tracker.js";
 import { encryptOutboundBufferToFnoss } from "./public-access/outbound-media-oss.js";
 import { getRuntimeV3Store } from "./runtime-v3/runtime-store.js";
 
@@ -153,7 +153,7 @@ describe("channel-actions handleSend sessionKey routing", () => {
 
     const received: Array<{ eventType: string; payload: Record<string, unknown> }> = [];
     const unsubscribe = store.subscribe(deviceId, (event) => {
-      received.push({ eventType: event.eventType, payload: event.payload });
+      received.push({ eventType: event.eventType, payload: store.legacyEvent(event).payload });
     });
 
     const result = await handleMessageAction({

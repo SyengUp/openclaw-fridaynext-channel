@@ -1,3 +1,8 @@
+import {
+  operationResult,
+  writeOperation,
+  type OpenClawOperationResult,
+} from "../../adapters/openclaw/operation-result.js";
 // POST /friday-next/questions/{questionId} — submit the app user's answer to a pending
 // ask_user question.
 //
@@ -158,6 +163,20 @@ export async function handleQuestionAnswer(
   res: ServerResponse,
   questionIdRaw: string,
 ): Promise<boolean> {
+  if (req.method !== "POST")
+    return writeOperation(res, operationResult(405, { error: "Method Not Allowed" }));
+  if (!extractBearerToken(req))
+    return writeOperation(
+      res,
+      operationResult(401, { error: "Unauthorized: bearer token mismatch" }),
+    );
+  return writeOperation(res, await submitOpenClawQuestion(questionIdRaw, await readJsonBody(req)));
+}
+
+export async function submitOpenClawQuestion(
+  questionIdRaw: string,
+  body: Record<string, unknown> | null,
+): Promise<OpenClawOperationResult> {
   // 同一问题的答案与取消串行提交；不同问题互不阻塞，双模块加载也共享这个锁。
   const key = questionIdRaw.trim();
   const previous = questionSubmissions.get(key) ?? Promise.resolve();
@@ -168,7 +187,7 @@ export async function handleQuestionAnswer(
   questionSubmissions.set(key, pending);
   await previous.catch(() => undefined);
   try {
-    return await handleQuestionAnswerSerial(req, res, questionIdRaw);
+    return await handleQuestionAnswerSerial(body, questionIdRaw);
   } finally {
     release();
     if (questionSubmissions.get(key) === pending) questionSubmissions.delete(key);
@@ -180,24 +199,14 @@ const questionSubmissions = processMap<string, Promise<void>>(
 );
 
 async function handleQuestionAnswerSerial(
-  req: IncomingMessage,
-  res: ServerResponse,
+  body: Record<string, unknown> | null,
   questionIdRaw: string,
-): Promise<boolean> {
+): Promise<OpenClawOperationResult> {
   const log = createFridayNextLogger("questions");
-  const json = (status: number, body: Record<string, unknown>) => {
-    res.statusCode = status;
-    res.setHeader("Content-Type", "application/json");
-    res.end(JSON.stringify(body));
-    return true;
-  };
-
-  if (req.method !== "POST") return json(405, { error: "Method Not Allowed" });
-  if (!extractBearerToken(req)) return json(401, { error: "Unauthorized: bearer token mismatch" });
+  const json = operationResult;
   const questionId = questionIdRaw.trim();
   if (!questionId) return json(400, { error: "Missing questionId" });
 
-  const body = await readJsonBody(req);
   if (!body) return json(400, { error: "Invalid JSON body" });
   if (body.cancel !== undefined && body.cancel !== true) {
     return json(400, { error: "cancel must be true" });

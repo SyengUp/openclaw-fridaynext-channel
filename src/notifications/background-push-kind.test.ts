@@ -1,13 +1,13 @@
 import { afterEach, describe, expect, it } from "vitest";
-import { resolveBackgroundPushKind } from "./background-push-kind.js";
+import { resolveBackgroundPushKind } from "../test-support/legacy-notifications/background-push-kind.js";
 import {
   noteCronActivity,
   resetCronNotificationTrackerForTest,
-} from "./cron-notification-tracker.js";
+} from "../test-support/legacy-notifications/cron-notification-tracker.js";
 import {
   noteHeartbeatActivity,
   resetHeartbeatNotificationTrackerForTest,
-} from "./heartbeat-notification-tracker.js";
+} from "../test-support/legacy-notifications/heartbeat-notification-tracker.js";
 
 describe("resolveBackgroundPushKind", () => {
   afterEach(() => {

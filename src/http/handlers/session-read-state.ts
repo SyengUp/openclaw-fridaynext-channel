@@ -15,6 +15,10 @@ import { getHostOpenClawConfigSnapshot } from "../../host-config.js";
 import { getFridayNextRuntime } from "../../runtime.js";
 import { readJsonBody } from "../middleware/body.js";
 import { isPublicRequest } from "../middleware/public-surface.js";
+import {
+  logicalSessionKey,
+  mappedNativeSessionKey,
+} from "../../adapters/openclaw/session-metadata.js";
 
 const PAGE_SIZE = 250;
 const MAX_RECONCILIATION_PASSES = 4;
@@ -91,11 +95,13 @@ function nonEmptyString(value: unknown): string | undefined {
 }
 
 /** 只输出 App 展示/确认已读所需字段，避免把完整会话行和潜在扩展数据外泄。 */
-function projectReadState(value: unknown): Record<string, unknown> | null {
+function projectReadState(value: unknown, canonical: boolean): Record<string, unknown> | null {
   if (!value || typeof value !== "object" || Array.isArray(value)) return null;
   const row = value as Record<string, unknown>;
-  const sessionKey = nonEmptyString(row.key);
-  if (!sessionKey) return null;
+  const nativeSessionKey = nonEmptyString(row.key);
+  if (!nativeSessionKey) return null;
+  // 与规范事件和历史目录使用同一逻辑身份；旧客户端仍读取宿主原生 key。
+  const sessionKey = canonical ? logicalSessionKey(nativeSessionKey) : nativeSessionKey;
 
   const state: Record<string, unknown> = { sessionKey };
   const strings = ["agentId", "sessionId", "status", "lastRunError"] as const;
@@ -122,6 +128,7 @@ function projectReadState(value: unknown): Record<string, unknown> | null {
 
 async function listReadStates(
   res: ServerResponse,
+  canonical: boolean,
 ): Promise<{ states: Record<string, unknown>[]; complete: boolean } | true> {
   const statesByKey = new Map<string, Record<string, unknown>>();
   let expectedTotal: number | undefined;
@@ -157,8 +164,12 @@ async function listReadStates(
         expectedTotal = Math.max(expectedTotal ?? 0, payload.totalCount);
       }
       for (const row of rows) {
-        const state = projectReadState(row);
-        if (state) statesByKey.set(String(state.sessionKey).toLowerCase(), state);
+        const state = projectReadState(row, canonical);
+        if (state) {
+          const key = String(state.sessionKey);
+          // 逻辑 ID 精确比较；宿主原生大小写兼容只保留在旧协议输出。
+          statesByKey.set(canonical ? key : key.toLowerCase(), state);
+        }
       }
 
       const hasMore =
@@ -206,7 +217,7 @@ async function patchReadState(req: IncomingMessage, res: ServerResponse): Promis
   let response: GatewayResponse;
   try {
     response = await dispatchGatewayMethod("sessions.patch", {
-      key: sessionKey,
+      key: mappedNativeSessionKey(sessionKey) ?? sessionKey,
       ...(agentId ? { agentId } : {}),
       ...(expectedSessionId ? { expectedSessionId } : {}),
       unread: body.unread,
@@ -232,7 +243,10 @@ export async function handleSessionReadState(
   if (applyPublicAttestGate(req, res)) return true;
   if (req.method === "PATCH") return await patchReadState(req, res);
 
-  const result = await listReadStates(res);
+  const result = await listReadStates(
+    res,
+    req.headers["x-fridaynext-event-format"] === "canonical-v1",
+  );
   if (result === true) return true;
   return json(res, 200, { ok: true, complete: result.complete, states: result.states });
 }

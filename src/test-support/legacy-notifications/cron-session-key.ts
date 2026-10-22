@@ -1,3 +1,4 @@
+// 历史通知行为的测试夹具，不供生产导入或打包。
 /**
  * Pure helper (no SDK / SQLite imports, so it's unit-testable in isolation) for
  * pulling the cron jobId out of a notification's source session key.
