@@ -65,7 +65,7 @@ export interface FridayHistoryMessage {
   model?: string;
   usage?: FridayHistoryUsage;
   /** Non-message records surfaced for context (e.g. compaction dividers). */
-  kind?: "compaction" | "turnBoundary" | "hidden";
+  kind?: "compaction" | "turnBoundary" | "hidden" | "standalone";
   /** Compaction boundary facts (core persists `tokensBefore` on the entry;
    *  `tokensAfter` only exists when the host projects it). Clients render
    *  "saved N tokens" only when both are present — same rule as Control UI. */
@@ -409,15 +409,20 @@ export function normalizeHistoryMessage(
   const id = metaId ?? `seq:${seq}`;
   const synthetic = metaId === undefined;
   const ts = readFiniteNumber(meta?.recordTimestampMs) ?? readFiniteNumber(record.timestamp);
-  const kind = readString(meta?.kind) === "compaction" ? "compaction" : undefined;
+  // 后台技能复盘有独立的宿主幂等身份，不是模型对原回答的修订；正文措辞不参与识别。
+  const standalone = role === "assistant"
+    && record.api === "openclaw-transcript"
+    && record.model === "delivery-mirror"
+    && readString(record.idempotencyKey)?.startsWith("skill-workshop-notice:") === true;
+  const kind = readString(meta?.kind) === "compaction" ? "compaction" : standalone ? "standalone" : undefined;
   const transport = asRecord(meta?.transport);
   const clientRequestId =
     (transport?.channel === "friday-next" ? readString(transport.messageId) : undefined) ??
     readString(record.clientRequestId) ?? readString(record.idempotencyKey);
 
   const message: FridayHistoryMessage = {
-    ...(clientRequestId ? { clientRequestId } : {}),
-    ...(readString(meta?.runId) ? {runId:readString(meta?.runId)}:{}),
+    ...(!standalone && clientRequestId ? { clientRequestId } : {}),
+    ...(!standalone && readString(meta?.runId) ? {runId:readString(meta?.runId)}:{}),
     id,
     seq,
     role,
@@ -494,9 +499,9 @@ export function normalizeHistoryMessage(
   }
 
   const model = readString(record.model) ?? readString(record.responseModel);
-  if (model) message.model = model;
+  if (model && !standalone) message.model = model;
   const usage = parseUsage(record.usage);
-  if (usage) message.usage = usage;
+  if (usage && !standalone) message.usage = usage;
 
   return message;
 }

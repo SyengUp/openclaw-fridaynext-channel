@@ -115,6 +115,20 @@ try {
   const idleStop=stopTarget({agentId:'main',key:'agent:main:friday-stop-compat-'+randomUUID()});
   assert.equal(idleStop.active,false);assert.equal(idleStop.aborted,false);
   await idleStop.retirement;
+  // 用官方 transcript 写入器保存真实后台回执的元数据形状，核对完整插件的所有读取入口。
+  const noticeSessionKey='agent:main:fridaynext:notice-'+randomUUID(),noticeSessionId=randomUUID();
+  const noticeRequestId=randomUUID(),originalText='独立消息之前的完整回答',noticeText='后台更新回执';
+  await sessions.upsertSessionEntry({agentId:'main',sessionKey:noticeSessionKey,env,entry:{sessionId:noticeSessionId,updatedAt:Date.now(),channel:'friday-next',lastChannel:'friday-next',lastTo:'CONTRACT'}});
+  const noticeRun=getRuntimeV3Store().acceptCommand({deviceId:'CONTRACT',sessionKey:noticeSessionKey,agentId:'main',clientRequestId:noticeRequestId,text:'/help',attachments:[]}).run;
+  getRuntimeV3Store().transition(noticeRun.runId,'completed');
+  for(const [index,message] of [
+    {role:'user',content:'测试请求',idempotencyKey:noticeRequestId},
+    {role:'assistant',content:originalText,__openclaw:{runId:noticeRun.runId}},
+    {role:'assistant',content:noticeText,api:'openclaw-transcript',provider:'openclaw',model:'delivery-mirror',idempotencyKey:'skill-workshop-notice:skill-workshop-review:'+randomUUID()},
+  ].entries()) {
+    const written=await transcript.appendSessionTranscriptMessageByIdentityStrict({agentId:'main',sessionKey:noticeSessionKey,sessionId:noticeSessionId,env,config,eventId:randomUUID(),message:{...message,timestamp:Date.now()+index}});
+    assert.equal(written.kind,'result');
+  }
   const recoveryCommand={deviceId:'RECOVERY',sessionKey:randomUUID(),agentId:'main',clientRequestId:randomUUID(),text:'/help',attachments:[]};
   const recovery=await new ChannelRunner(getRuntimeV3Store(),new OpenClawBackendAdapter()).admit(recoveryCommand);
   assert.equal(recovery.run.phase,'queued');
@@ -133,6 +147,25 @@ try {
   const probeHead=await fetch(probeHealthUrl,{method:'HEAD',signal:AbortSignal.timeout(10000)});
   assert.equal(probeHead.status,405);await probeHead.arrayBuffer();
   fs.writeFileSync(path.join(root,'public-health-probe-contract.json'),JSON.stringify({unauthenticatedGet:probeGet.status,unsupportedHead:probeHead.status},null,2));
+  let noticePage;
+  for(let attempt=0;attempt<100;attempt++) {
+    noticePage=(await request('/friday-next/history/messages?sessionKey='+encodeURIComponent(noticeSessionKey))).body;
+    if(noticePage.messages?.length===3) break;
+    await new Promise(resolve=>setTimeout(resolve,100));
+  }
+  assert.equal(noticePage.messages?.length,3,'原生后台回执历史未就绪');
+  const notice=noticePage.messages.find(message=>message.text===noticeText);
+  const original=noticePage.messages.find(message=>message.text===originalText);
+  assert.ok(original);assert.equal(original.runId,noticeRun.runId);
+  const noticeSnapshot=(await request('/friday-next/v3/sessions/'+encodeURIComponent(noticeSessionKey)+'/snapshot')).body;
+  const noticeDetail=(await request('/friday-next/history/message-detail?sessionKey='+encodeURIComponent(noticeSessionKey)+'&id='+encodeURIComponent(notice.id))).body.message;
+  for(const message of [notice,noticeSnapshot.transcript.find(message=>message.id===notice.id),noticeDetail]) {
+    assert.equal(message.kind,'standalone');assert.equal(message.runId,undefined);assert.equal(message.clientRequestId,undefined);
+  }
+  const legacyNotices=(await request('/friday-next/history/messages?sessionKey='+encodeURIComponent(noticeSessionKey),{canonical:false})).body.messages;
+  const noticeIndex=legacyNotices.findIndex(message=>message.id===notice.id);
+  assert.equal(legacyNotices[noticeIndex-1].kind,'turnBoundary');assert.equal(legacyNotices[noticeIndex+1].kind,'turnBoundary');
+  fs.writeFileSync(path.join(root,'standalone-history-contract.json'),JSON.stringify({originalEntryId:original.id,noticeEntryId:notice.id,canonicalMessages:noticePage.messages.length,legacyMessages:legacyNotices.length,originalRun:original.runId,noticeRun:notice.runId ?? null,detail:true,snapshot:true},null,2));
   // 审批仅由真实宿主登记，不执行命令；公共查询必须通过其读取身份校验。
   const gatewayRuntime=await import(pathToFileURL(path.join(sdk,'dist/plugin-sdk/gateway-runtime.js')).href);
   const callApproval=(method,params)=>gatewayRuntime.callGatewayFromCli(method,{port:String(port),timeout:'10000',json:true},params,{progress:false,scopes:['operator.admin'],sharedStateMode:'read-only'});

@@ -19,7 +19,7 @@ import { createSessionHandlers } from "@syengup/fridaynext-channel-kit/transport
 
 import { getRuntimeV3Store } from "../../runtime-v3/runtime-store.js";
 import { toSessionStoreKey } from "../../session/session-manager.js";
-import { canonicalHistory } from "../../adapters/openclaw/history-projection.js";
+import { canonicalHistory, legacyHistory } from "../../adapters/openclaw/history-projection.js";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { isAbsolute } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -320,7 +320,7 @@ export async function readOpenClawHistory(
         historyRunRequests(sessionKey),
         { userTextByRequest: historyUserTexts(sessionKey) },
       )
-    : normalized;
+    : legacyHistory(normalized);
 
   // Resolve `MEDIA:<server-path>` references into downloadable attachment URLs
   // (copies the file into the plugin's attachments/ dir — the same mechanism the

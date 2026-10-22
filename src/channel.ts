@@ -38,6 +38,7 @@ import { isOperatorToolResultEnvelope } from "./operator-tool-result.js";
 import { getLastFridayInboundAt } from "./friday-inbound-stats.js";
 import { fridayApprovalCapability } from "./approval/friday-approval-capability.js";
 import { deliverFridayQuestionPayload } from "./question/friday-question-delivery.js";
+import { runtimeV3StoreIfInitialized } from "./runtime-v3/runtime-store.js";
 
 const logger = createFridayNextLogger("channel");
 const CHANNEL_ID = "friday-next" as const;
@@ -63,10 +64,12 @@ function resolveOutboundSessionKey(
   deviceId: string,
   runId: string | undefined,
   rawCtx: Record<string, unknown>,
+  fallbackRunId?: string,
 ): string | undefined {
   return (
     (runId ? getRunRoute(runId)?.sessionKey : undefined) ??
     pickFirstString(rawCtx, ["requesterSessionKey", "sessionKey"]) ??
+    (fallbackRunId ? getRunRoute(fallbackRunId)?.sessionKey : undefined) ??
     resolveHistorySessionKeyForFridayDevice(deviceId)
   );
 }
@@ -325,8 +328,14 @@ export const fridayNextChannelPlugin = createChatChannelPlugin({
         "originRunId",
         "runId",
       ]);
-      const runId = runIdFromCtx ?? sseEmitter.getLastRunIdForDevice(deviceId) ?? undefined;
-      const sessionKey = resolveOutboundSessionKey(deviceId, runId, rawCtx);
+      const lastRunId = sseEmitter.getLastRunIdForDevice(deviceId) ?? undefined;
+      const lastPhase = lastRunId ? runtimeV3StoreIfInitialized()?.run(lastRunId)?.phase : undefined;
+      // 设备最后一次运行只提供推断线索；终态后的后台通知没有该任务的所有权。
+      // 显式运行身份继续由宿主负责，旧协议没有账本时也保留原有推断行为。
+      const inferredRunId = lastPhase && ["completed", "failed", "cancelled"].includes(lastPhase)
+        ? undefined : lastRunId;
+      const runId = runIdFromCtx ?? inferredRunId;
+      const sessionKey = resolveOutboundSessionKey(deviceId, runId, rawCtx, lastRunId);
 
       // 在线判定必须同时接受 v1/v3 两种 SSE 面：1.5 App 只连 v3（handler 仅注册
       // store listener，不进 emitter 连接表），旧口径只查 v2 连接会把在线的 v3 设备

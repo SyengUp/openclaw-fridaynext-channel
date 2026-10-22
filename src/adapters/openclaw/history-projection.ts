@@ -2,6 +2,22 @@ import type {FridayHistoryMessage} from "../../history/normalize-message.js";
 import {HISTORY_TEXT_MAX_CHARS} from "../../history/normalize-message.js";
 const wake=new Set(["[openclaw heartbeat poll]","[openclaw exec completion]","[openclaw cron wake]","[openclaw session event]"]);
 type HistoryDisplayOptions = { userTextByRequest?: ReadonlyMap<string, string>; fullText?: boolean };
+
+// 旧 App 只认识回合边界。原生 id/seq 保持不变，仅在兼容输出包围独立消息，
+// 避免旧版 last-wins 聚合把它与前后回答合并；canonical 不产生这些合成行。
+export function legacyHistory(messages: FridayHistoryMessage[]): FridayHistoryMessage[] {
+  return messages.flatMap(message => {
+    if (message.kind !== "standalone") return [message];
+    const boundary = (side: "before" | "after"): FridayHistoryMessage => ({
+      id: `standalone-boundary:${side}:${message.id}`,
+      seq: message.seq,
+      ...(message.ts !== undefined ? { ts: message.ts } : {}),
+      role: "system", kind: "turnBoundary", text: "",
+    });
+    return [boundary("before"), message, boundary("after")];
+  });
+}
+
 // 宿主控制文本和自动副本在适配边界归一化，客户端只读取声明的展示事实。
 export function canonicalHistory(messages:FridayHistoryMessage[], ownedRequests:ReadonlySet<string>, requestByRun:ReadonlyMap<string,string> = new Map(), options:HistoryDisplayOptions = {}):FridayHistoryMessage[] {
   const runsByRequest = new Map<string, string[]>();
@@ -10,6 +26,11 @@ export function canonicalHistory(messages:FridayHistoryMessage[], ownedRequests:
   }
   const scoped = messages.map(message => {
     const row = {...message};
+    if (row.kind === "standalone") {
+      delete row.clientRequestId;
+      delete row.runId;
+      return row;
+    }
     if (row.clientRequestId && !ownedRequests.has(row.clientRequestId)) delete row.clientRequestId;
     if (row.kind !== "compaction") {
       if (row.runId && !requestByRun.has(row.runId)) delete row.runId;
@@ -33,6 +54,8 @@ export function canonicalHistory(messages:FridayHistoryMessage[], ownedRequests:
   let lastUser:string|undefined,lastRequest:string|undefined,visibleAssistant=false;
   return scoped.map(message=>{
     const row={...message,format:"canonical-v1" as const};
+    // 独立消息不消耗或继承当前用户回合；后续前台答案仍可保留原归属。
+    if (row.kind === "standalone") return row;
     // 分叉前缀可保留原请求的宿主元数据，只有当前会话的命令才允许关联本地乐观消息。
     if(row.clientRequestId && !ownedRequests.has(row.clientRequestId)) delete row.clientRequestId;
     if (row.role === "user" && row.clientRequestId) {

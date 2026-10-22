@@ -30,6 +30,12 @@ Token resolution order:
 
 `PATCH /friday-next-admin/sessions/state` 接受 `{sessionKey, unread, agentId?, expectedSessionId?, expectedMarkedUnreadAt?}`。适配器将逻辑 ID 映射为宿主 key，原样保留会话及未读代际护栏；响应 `{ok:true, sessionKey}` 回显请求身份。`expectedMarkedUnreadAt:null` 表示确认没有显式未读标记，与省略字段不同。两条路由使用 Gateway Bearer 鉴权及现有公网 App Attest 门。
 
+## 后台回执的历史归属（2026.10.4-beta.9）
+
+OpenClaw 原生助手记录同时具有 `api: openclaw-transcript`、`model: delivery-mirror` 和 `idempotencyKey` 的 `skill-workshop-notice:` 前缀时，适配器将其归一化为通用 `kind: standalone`，保留原生消息 ID、顺序、正文与媒体，清除前台请求、运行和模型用量归属。列表、全文详情及 v3 快照使用相同识别规则，不匹配 `Learned` 正文。原生前台回答不受影响。
+
+未协商 canonical 的历史列表在独立消息前后添加旧 App 已认识的 `turnBoundary` 合成行；原生 ID、seq 和原始分页游标保持不变。canonical 不输出这些兼容行。没有显式运行身份的出站文本不再借用设备上已结束的运行；会话仍从显式上下文、原路由或设备映射恢复。显式运行和媒体投递保持原有规则。
+
 ## 消息回退与分叉（2026.10.2）
 
 | 接口 | 核心方法 | Gateway scope |

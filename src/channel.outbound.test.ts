@@ -160,7 +160,38 @@ describe("friday-next channel outbound sessionKey routing", () => {
     expect(received).toContain("outbound.text");
   });
 
+  it("后台文本不继承设备上已经结束的运行，并优先采用消息自己的会话", async () => {
+    const deviceId = "DEV-LATE-NOTICE";
+    const runId = "ended-run";
+    registerRunRoute({ runId, deviceId, sessionKey: "agent:main:other-session" });
+    sseEmitter.trackDeviceForRun(deviceId, runId);
+    setRuntimeV3RootForTest(path.join(historyDir, "runtime-ended-text"));
+    const store = getRuntimeV3Store();
+    store.observeRun({ runId, sessionKey: "agent:main:other-session", agentId: "main", deviceIds: [deviceId] });
+    store.appendRunEvent(runId, "run.completed", { format: "canonical-v1", updates: [{ kind: "run", phase: "completed" }] });
+    expect(store.run(runId)?.phase).toBe("completed");
+    const res = connect(deviceId);
+    await outbound.sendText({ to: deviceId, text: "独立通知", requesterSessionKey: "agent:main:notice-session" });
+    const evt = parseOutboundFrames(res).find(frame => frame.type === "outbound" && frame.data.op === "text");
+    expect(evt?.data.runId).toBeUndefined();
+    expect(evt?.data.sessionKey).toBe("agent:main:notice-session");
+    expect(store.run(runId)?.phase).toBe("completed");
+  });
 
+  it("宿主显式声明的运行身份不被设备级推断规则改写", async () => {
+    const deviceId = "DEV-EXPLICIT-LATE";
+    const runId = "explicit-run";
+    registerRunRoute({ runId, deviceId, sessionKey: "agent:main:explicit-session" });
+    sseEmitter.trackDeviceForRun(deviceId, runId);
+    setRuntimeV3RootForTest(path.join(historyDir, "runtime-explicit-text"));
+    const store = getRuntimeV3Store();
+    store.observeRun({ runId, sessionKey: "agent:main:explicit-session", agentId: "main", deviceIds: [deviceId] });
+    store.appendRunEvent(runId, "run.completed", { format: "canonical-v1", updates: [{ kind: "run", phase: "completed" }] });
+    const res = connect(deviceId);
+    await outbound.sendText({ to: deviceId, text: "显式投递", runId });
+    const evt = parseOutboundFrames(res).find(frame => frame.type === "outbound" && frame.data.op === "text");
+    expect(evt?.data.runId).toBe(runId);
+  });
 
   it("sendMedia reaches a v3-only online device (no v2 connection)", async () => {
     const deviceId = "DEV-V3-ONLY-MEDIA";

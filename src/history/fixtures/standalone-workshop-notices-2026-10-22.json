@@ -1,0 +1,250 @@
+[
+  {
+    "runId": "3754ab55-2664-4b50-8d5f-9e71b2702301",
+    "clientRequestId": "865C2D24-24A6-4E24-990F-98160AB2D11E",
+    "rawMessages": [
+      {
+        "role": "user",
+        "content": [
+          {
+            "type": "text",
+            "text": "User request 1"
+          }
+        ],
+        "timestamp": 1792589674092,
+        "idempotencyKey": "channel-user:v1:872c930e6d3c78696d82d97167824b45c2aa86e7ec7e6034ccda2de480e61f73",
+        "__openclaw": {
+          "id": "01457e79-9074-4584-aef5-598e4d400449",
+          "seq": 18,
+          "recordTimestampMs": 1792589674092
+        }
+      },
+      {
+        "role": "assistant",
+        "content": [
+          {
+            "type": "text",
+            "text": "Original answer 1"
+          }
+        ],
+        "api": "openai-completions",
+        "provider": "deepseek",
+        "model": "deepseek-flash",
+        "timestamp": 1792590108803,
+        "__openclaw": {
+          "runId": "3754ab55-2664-4b50-8d5f-9e71b2702301",
+          "id": "d29cfe80-53b0-483a-8c0b-a384f2db300b",
+          "seq": 126,
+          "recordTimestampMs": 1792590108803
+        }
+      },
+      {
+        "role": "assistant",
+        "content": [
+          {
+            "type": "text",
+            "text": "Background update 1"
+          }
+        ],
+        "api": "openclaw-transcript",
+        "provider": "openclaw",
+        "model": "delivery-mirror",
+        "timestamp": 1792590185354,
+        "idempotencyKey": "skill-workshop-notice:skill-workshop-review:8faf0aac-cef5-45de-848f-78007087b830",
+        "__openclaw": {
+          "id": "f970538a-fcbc-4f65-bee2-8c493c1b7545",
+          "seq": 127,
+          "recordTimestampMs": 1792590185354
+        }
+      }
+    ],
+    "originalId": "d29cfe80-53b0-483a-8c0b-a384f2db300b",
+    "noticeId": "f970538a-fcbc-4f65-bee2-8c493c1b7545"
+  },
+  {
+    "runId": "08e92155-7b57-4fe1-9b37-ce3cf24ee7ef",
+    "clientRequestId": "D8799D28-EAB5-4360-9332-A0C696D2E690",
+    "rawMessages": [
+      {
+        "role": "user",
+        "content": [
+          {
+            "type": "text",
+            "text": "User request 2"
+          }
+        ],
+        "timestamp": 1792590306760,
+        "idempotencyKey": "channel-user:v1:73888b50749235ecd71fd76b1875d88bd553c830f663f32b621a7304be5a3c3c",
+        "__openclaw": {
+          "id": "ec12069e-0538-4fea-9a55-9fcc3f35495d",
+          "seq": 128,
+          "recordTimestampMs": 1792590306760
+        }
+      },
+      {
+        "role": "assistant",
+        "content": [
+          {
+            "type": "text",
+            "text": "Original answer 2"
+          }
+        ],
+        "api": "openai-completions",
+        "provider": "deepseek",
+        "model": "deepseek-flash",
+        "timestamp": 1792590431821,
+        "__openclaw": {
+          "runId": "08e92155-7b57-4fe1-9b37-ce3cf24ee7ef",
+          "id": "aac56a60-850d-4f0f-bdb9-67a43aedc707",
+          "seq": 168,
+          "recordTimestampMs": 1792590431821
+        }
+      },
+      {
+        "role": "assistant",
+        "content": [
+          {
+            "type": "text",
+            "text": "Background update 2"
+          }
+        ],
+        "api": "openclaw-transcript",
+        "provider": "openclaw",
+        "model": "delivery-mirror",
+        "timestamp": 1792590515508,
+        "idempotencyKey": "skill-workshop-notice:skill-workshop-review:85490516-9f1d-4df1-b5e4-53e4ea638c98",
+        "__openclaw": {
+          "id": "05702d15-410d-4a29-b5fb-531a6a4ebd6b",
+          "seq": 169,
+          "recordTimestampMs": 1792590515508
+        }
+      }
+    ],
+    "originalId": "aac56a60-850d-4f0f-bdb9-67a43aedc707",
+    "noticeId": "05702d15-410d-4a29-b5fb-531a6a4ebd6b"
+  },
+  {
+    "runId": "d9c88592-cd34-40d3-a3a5-2105848c3428",
+    "clientRequestId": "C5089CB4-5700-44A5-A2B5-A1068237CECC",
+    "rawMessages": [
+      {
+        "role": "user",
+        "content": [
+          {
+            "type": "text",
+            "text": "User request 3"
+          }
+        ],
+        "timestamp": 1792635850991,
+        "idempotencyKey": "channel-user:v1:e60701b71b64b85498fb5fc1704eb71d52ba85617b4afa72e9039d370015d9ba",
+        "__openclaw": {
+          "id": "bf690697-4133-43cb-9b08-2c5ef524546d",
+          "seq": 1,
+          "recordTimestampMs": 1792635850991
+        }
+      },
+      {
+        "role": "assistant",
+        "content": [
+          {
+            "type": "text",
+            "text": "Original answer 3"
+          }
+        ],
+        "api": "openai-completions",
+        "provider": "deepseek",
+        "model": "deepseek-flash",
+        "timestamp": 1792635976272,
+        "__openclaw": {
+          "runId": "d9c88592-cd34-40d3-a3a5-2105848c3428",
+          "id": "aa879d20-c021-4878-b3c2-a8ec787e7ad6",
+          "seq": 51,
+          "recordTimestampMs": 1792635976272
+        }
+      },
+      {
+        "role": "assistant",
+        "content": [
+          {
+            "type": "text",
+            "text": "Background update 3"
+          }
+        ],
+        "api": "openclaw-transcript",
+        "provider": "openclaw",
+        "model": "delivery-mirror",
+        "timestamp": 1792636033331,
+        "idempotencyKey": "skill-workshop-notice:skill-workshop-review:57fd7c43-1903-4e10-a96d-4378d5349b4a",
+        "__openclaw": {
+          "id": "ff9150f8-9ada-42a5-9c1e-489ade7ada7d",
+          "seq": 52,
+          "recordTimestampMs": 1792636033331
+        }
+      }
+    ],
+    "originalId": "aa879d20-c021-4878-b3c2-a8ec787e7ad6",
+    "noticeId": "ff9150f8-9ada-42a5-9c1e-489ade7ada7d"
+  },
+  {
+    "runId": "6ea0f2a2-1ddc-478b-97dd-74a9aeb1064c",
+    "clientRequestId": "ED424211-F64F-48B9-92CE-4095E38F8323",
+    "rawMessages": [
+      {
+        "role": "user",
+        "content": [
+          {
+            "type": "text",
+            "text": "User request 4"
+          }
+        ],
+        "timestamp": 1792636817087,
+        "idempotencyKey": "channel-user:v1:e0905cffe9fc6ab2d1571834d121d793487f07dbdd65534dcaf219d76416e1b5",
+        "__openclaw": {
+          "id": "791632a7-49d7-48b9-9187-1db60b517643",
+          "seq": 1,
+          "recordTimestampMs": 1792636817087
+        }
+      },
+      {
+        "role": "assistant",
+        "content": [
+          {
+            "type": "text",
+            "text": "Original answer 4"
+          }
+        ],
+        "api": "openai-completions",
+        "provider": "opencode-go",
+        "model": "deepseek-v4.1-flash",
+        "timestamp": 1792637056187,
+        "__openclaw": {
+          "runId": "6ea0f2a2-1ddc-478b-97dd-74a9aeb1064c",
+          "id": "248aed94-3782-4c33-9340-fc7cb7354c8a",
+          "seq": 88,
+          "recordTimestampMs": 1792637056187
+        }
+      },
+      {
+        "role": "assistant",
+        "content": [
+          {
+            "type": "text",
+            "text": "Background update 4"
+          }
+        ],
+        "api": "openclaw-transcript",
+        "provider": "openclaw",
+        "model": "delivery-mirror",
+        "timestamp": 1792637212634,
+        "idempotencyKey": "skill-workshop-notice:skill-workshop-review:91037a02-b116-402c-b7c4-090d366a6ef4",
+        "__openclaw": {
+          "id": "3684bea5-d4b6-4424-b51b-2d0cf0c14533",
+          "seq": 89,
+          "recordTimestampMs": 1792637212634
+        }
+      }
+    ],
+    "originalId": "248aed94-3782-4c33-9340-fc7cb7354c8a",
+    "noticeId": "3684bea5-d4b6-4424-b51b-2d0cf0c14533"
+  }
+]
